@@ -105,9 +105,9 @@ Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 > claimed the opposite — that `r2d2.py` omitted it and the source had predicted
 > the failure. That was written without checking the base class.)
 >
-> The `idle` op is kept as the record of a refuted claim — and because if a
-> firmware revision ever adds the command, the gate will notice. Running it
-> costs one rejected packet:
+> The `idle` op is kept as the record of a refuted claim, and so a future
+> firmware revision can be re-probed cheaply. Running it costs one rejected
+> packet:
 >
 > ```bash
 > ./r2 send idle --params '{"enable": false}'   # -> ok:false, bad_command_id
@@ -120,53 +120,19 @@ Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 > precondition; if there is one, it cannot be disabled and the survey has to
 > tolerate it. That is now the question to settle, not the command.
 
-The op's tier depends on which way you point it: turning idle *off* belongs
-with `stop` — it makes R2 quieter — while turning it *on* starts spontaneous
-motion and needs `--allow motion`. Gating both directions behind `motion`
-permanently would have made the precondition unreachable from the LED and audio
-sessions, which are the two cheapest and run at lower ceilings.
+`idle` and `notify` both sit at **`--allow motion`**, permanently. They are the
+only ops that write to the motion device (`DID 0x17`), and the `read` ceiling's
+promise is *nothing sent here can move him*.
 
-#### The unproven-CID gate — read this before the first hardware session
-
-`idle` and `notify` are the only ops that write to the **motion device**
-(`DID 0x17`) using CIDs that **only one implementation documents**
-(`0x2C`, `0x2A`, `0x39` — see `../docs/research/r2-protocol.md`). The `read`
-ceiling's whole promise is *nothing sent here can move him*, and that promise
-cannot rest on constants no second source corroborates.
-
-So both ops require **`--allow motion` until one session confirms them**:
-
-```bash
-./r2 daemon --allow motion --idle-timeout 1800   # first time only
-./r2 send idle --params '{"enable": false}'
-```
-
-If R2 acknowledges, the daemon records it in `.bridge/verified-animatronic-cids.json`
-and both ops drop to the `read` tier from then on, automatically. If R2 answers
-`bad_command_id`, or does not answer, **the gate stays shut** — that is the
-outcome it exists to catch, and it means the CID is wrong.
-
-The daemon prints the gate's state in its startup banner. This is issue #7's
-AC5 enforced by the ladder rather than left as a checklist item; once it lifts,
-promote the three constants from INFERRED to OBSERVED in
-`../docs/research/r2-protocol.md`.
-
-`enable` must be a JSON `true` or `false`. A string like `"false"` is refused
-rather than interpreted, because it is truthy in Python and would enable motion
-— the opposite of what you typed.
-
-**`idle` failing is now the EXPECTED result, not a reason to discard data.**
-`bad_command_id` is what this firmware always answers. It is not a warning about
-your session; it is the recorded refutation. Do not treat it as a session-level
-fault.
-
-**`notify` is different — if it fails, discard the session's data.** Its CIDs
-(`0x2A`, `0x39`) are confirmed working, so a failure there means something is
-genuinely wrong, and absence of an event you never successfully enabled is not
-evidence that the event does not fire.
-
-The daemon's exit notice about leaving idle disabled is unreachable on current
-firmware and kept only against a future revision.
+There used to be a mechanism to relax that — a marker file recording which CIDs
+a real robot had acknowledged, after which both ops dropped to `read`. It is
+gone. It bought nothing (no planned session needs either op below `motion`:
+#8 runs at `leds` and #9 at `audio` without them, and #11 is inherently a motion
+session because the events it verifies are produced by animations and leg
+actions), and across three review rounds it produced the same evidence-borrowing
+bug at three different granularities. The evidence itself lives in
+`../docs/research/r2-protocol.md`, where it belongs — documentation records what
+the robot said; the ladder enforces a fixed rule.
 
 ### Events — hearing R2 speak first
 

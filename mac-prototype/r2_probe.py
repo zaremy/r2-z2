@@ -892,109 +892,36 @@ async def _op_events(r2, p):
     """Drain everything the robot said that nobody asked for."""
     return r2.drain_events()
 
-# ── The unproven-CID gate ────────────────────────────────────────────────────
-# `idle` (disable) and `notify` write to DID_ANIMATRONIC — the motion device —
-# using CIDs 0x2C / 0x2A / 0x39, which only spherov2 documents. The `read`
-# ceiling's whole contract is "nothing sent here can move him", and that
-# contract cannot rest on constants no second implementation corroborates.
+# ── Why `idle` and `notify` are pinned to `motion` ───────────────────────────
+# Both write to DID_ANIMATRONIC, the motion device. The `read` ceiling's
+# contract is "nothing sent here can move him", so they sit at `motion`. Flat,
+# permanent, no way to relax it.
 #
-# So they ride at `motion` until ONE session confirms them with a human
-# watching, and drop to `read` only afterwards. This makes issue #7's AC5 a
-# gate rather than a note: the ladder enforces the evidence rule instead of
-# asking the operator to remember it.
-VERIFIED_CIDS = BRIDGE / "verified-animatronic-cids.json"
-
-# Which CIDs each gated op can put on the wire. Defined FIRST so GATED_OPS is
-# derived from it rather than being a second literal that can drift: adding a
-# gated op without a CID list used to KeyError inside the recorder, i.e. after
-# a successful live run, discarding the very evidence the gate exists to catch.
-OP_CIDS = {
-    "idle": [CID_ANIM_ENABLE_IDLE],
-    "notify": [CID_ANIM_ENABLE_LEG_NOTIFY, CID_ANIM_ENABLE_HEAD_RESET_NOTIFY],
-}
-GATED_OPS = tuple(OP_CIDS)
-
-
-def _verified_cids(device: str | None = None) -> set[int]:
-    """CIDs this robot has acknowledged, from the marker. Fails closed.
-
-    Keyed by CID, not by op. Per-op was still too coarse: `notify` accepts a
-    partial payload, so `{"leg": true}` sends only 0x2A — and the recorder
-    credited the whole op, promoting 0x39 to verified on evidence never
-    gathered for it. 0x39 then ran at the `read` ceiling against the motion
-    device. That is the same evidence-borrowing bug the per-op change was
-    meant to fix, one level down; only per-CID actually closes it.
-
-    `device` binds the evidence to the robot that produced it. Without it, one
-    verification vouches for every other unit and firmware revision forever."""
-    try:
-        marker = json.loads(VERIFIED_CIDS.read_text())
-        out = set()
-        for entry in marker.get("verified_cids", []):
-            if device is not None and entry.get("device") != device:
-                continue
-            cid = entry.get("cid")
-            if isinstance(cid, int) and not isinstance(cid, bool):
-                out.add(cid)
-        return out
-    except Exception:
-        return set()   # unreadable, absent or malformed -> nothing is verified
-
-
-def _animatronic_cids_verified(op: str, device: str | None = None) -> bool:
-    """True only when EVERY CID this op can send has been acknowledged."""
-    needed = set(OP_CIDS.get(op, ()))
-    return bool(needed) and needed <= _verified_cids(device)
-
-
-def _record_verified_cids(cids, device: str) -> None:
-    """Record only the CIDs that actually went on the wire and were ACKed.
-
-    Rebuilds the marker from scratch rather than merging into whatever is on
-    disk, so a legacy-format file cannot leave a stale top-level `verified:
-    true` sitting next to the new records for a human to misread."""
-    known = {c for group in OP_CIDS.values() for c in group}
-    entries = {(e.get("cid"), e.get("device")): e for e in _marker_entries()}
-    for cid in sorted(set(cids) & known):
-        entries[(cid, device)] = {"cid": cid, "device": device,
-                                  "when": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-    VERIFIED_CIDS.parent.mkdir(parents=True, exist_ok=True)
-    VERIFIED_CIDS.write_text(json.dumps({
-        "verified_cids": sorted(entries.values(),
-                                key=lambda e: (e["cid"], e["device"])),
-        "note": "Each entry is one CID a named robot ACKed at --allow motion. "
-                "An op runs at the read ceiling only when EVERY CID it can "
-                "send is listed for the connected robot. Promote exactly these "
-                "to OBSERVED in docs/research/r2-protocol.md — nothing else.",
-    }, indent=2))
-
-
-def _marker_entries() -> list[dict]:
-    try:
-        rows = json.loads(VERIFIED_CIDS.read_text()).get("verified_cids", [])
-        return [r for r in rows if isinstance(r, dict)]
-    except Exception:
-        return []
-
-
-def _gated_tier(op: str, device: str | None = None) -> str:
-    return "read" if _animatronic_cids_verified(op, device) else "motion"
-
-
-def sent_cids(op: str, params: dict) -> list[int]:
-    """Exactly which CIDs THIS request puts on the wire.
-
-    The gate records these, not `OP_CIDS[op]`. `notify` takes a partial
-    payload, so crediting the whole op let `{"leg": true}` vouch for 0x39 —
-    a CID the robot never saw — which then ran at the `read` ceiling."""
-    if op == "idle":
-        return [CID_ANIM_ENABLE_IDLE]
-    if op == "notify":
-        return [cid for name, cid in
-                (("leg", CID_ANIM_ENABLE_LEG_NOTIFY),
-                 ("head_reset", CID_ANIM_ENABLE_HEAD_RESET_NOTIFY))
-                if name in params]
-    return []
+# There WAS a mechanism to relax it: a marker file recording which CIDs a real
+# robot had acknowledged, after which these ops dropped to `read`. It is gone,
+# for two reasons.
+#
+# 1. It bought nothing. Its whole justification was that idle-disable had to be
+#    reachable from the cheap sessions — but `enable_idle_animations` does not
+#    exist on this firmware (REFUTED, see docs/research/r2-capabilities.md), and
+#    no planned session needs `notify` below `motion` either: #8 runs at `leds`
+#    and #9 at `audio` without it, and #11 is inherently a motion session
+#    because the events it verifies are produced by animations and leg actions.
+#    Passive observation needs no enable at all — `events` captures whatever
+#    arrives regardless.
+#
+# 2. It kept getting the same bug. Three review rounds produced three distinct
+#    evidence-borrowing defects at three granularities: global (notify vouched
+#    for idle), per-op (a partial `notify` vouched for the CID it never sent),
+#    per-CID-per-device (still an unauthenticated file in the requester's own
+#    write domain, and a local process cannot start its own `--allow motion`
+#    daemon, so it was a real bypass rather than a moot one). When a mechanism
+#    reproduces its bug class at every level of refinement, the mechanism is
+#    the problem.
+#
+# The evidence itself is not lost — it belongs in docs, not in runtime
+# authorization state. CIDs 0x2A and 0x39 are recorded OBSERVED, and 0x2C
+# REFUTED, in docs/research/r2-protocol.md.
 
 
 def _idle_enable(p: dict) -> bool:
@@ -1006,48 +933,6 @@ def _idle_enable(p: dict) -> bool:
     test would catch it, because they all pass `enable` explicitly."""
     return _strict_bool(p.get("enable", False), "enable")
 
-
-def _idle_tier(p: dict, device: str | None = None) -> str:
-    """Tier depends on WHICH WAY you are pointing this op.
-
-    The issue filed `idle` as tier 'motion' flat. That would have made it
-    unreachable from the two cheapest survey sessions: #8 runs `--allow leds`
-    and #9 runs `--allow audio`, and both need native idle OFF for their
-    observations to mean anything. A precondition you cannot satisfy at the
-    tier you must run at is not a precondition.
-
-    Disabling belongs with `stop` — it makes R2 quieter, and CLAUDE.md's
-    posture is 'default to STOP'. Enabling starts spontaneous motion, so it
-    keeps the motion ceiling."""
-    return "motion" if _idle_enable(p) else _gated_tier("idle", device)
-
-
-def _notify_tier(p: dict, device: str | None = None) -> str:
-    """Enabling a notification moves nothing, but the CIDs that do it address
-    the motion device — so they ride at `motion` until THIS robot has
-    acknowledged each of them. 0x2A and 0x39 are OBSERVED on D2-6F6B; the gate
-    is per-robot, so a different unit still has to earn it."""
-    return _gated_tier("notify", device)
-
-
-def tier_note(op: str, device: str | None = None) -> str | None:
-    """One line for the banner when an op's tier is not a flat constant.
-
-    Evaluated at print time, never cached: the gate can clear mid-session, and
-    a banner that still says 'motion' after that is worse than no banner."""
-    if not callable(OPS[op][0]):
-        return None
-    verified = _animatronic_cids_verified(op, device)
-    # Render the op's OWN CIDs. Hardcoding all three meant idle's note claimed
-    # 0x2A/0x39 were unconfirmed long after they were OBSERVED, and the text
-    # would go stale again the moment a third gated op appeared.
-    cids = ", ".join(hex(c) for c in OP_CIDS[op])
-    if op == "idle":
-        return ("read to disable / motion to enable" if verified else
-                f"MOTION in both directions — CID {cids} is not acknowledged "
-                f"by this robot (and on current firmware never will be)")
-    return ("read" if verified else
-            f"MOTION until this robot acknowledges CID(s) {cids}")
 
 async def _op_idle(r2, p):
     """Enable or disable R2's native idle animations.
@@ -1116,8 +1001,8 @@ async def _op_notify(r2, p):
                    "play an animation and read `events` to find out if it fires")
     return out
 
-# (tier, handler). `tier` is a string, or a callable taking the request params
-# and returning one — see _idle_tier for why that is worth the indirection.
+# (tier, handler). Every tier is a plain string: an op's ceiling never depends
+# on its arguments, and never on stored state.
 OPS = {
     "status":     ("read",   _op_status),
     "battery":    ("read",   _op_battery),
@@ -1126,8 +1011,8 @@ OPS = {
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
     "events":     ("read",   _op_events),    # reading is never a hazard
-    "notify":     (_notify_tier, _op_notify),
-    "idle":       (_idle_tier, _op_idle),
+    "notify":     ("motion", _op_notify),   # writes DID_ANIMATRONIC
+    "idle":       ("motion", _op_idle),     # writes DID_ANIMATRONIC (refuted)
     "leds":       ("leds",   _op_leds),
     "sound":      ("audio",  _op_sound),
     "stop_audio": ("audio",  _op_stop_audio),
@@ -1136,34 +1021,19 @@ OPS = {
 }
 
 
-def op_tier(op: str, params: dict | None = None, device: str | None = None) -> str:
-    """Tier this specific request needs. May raise ValueError on bad params."""
-    tier = OPS[op][0]
-    return tier(params or {}, device) if callable(tier) else tier
+def op_tier(op: str, params: dict | None = None) -> str:
+    """The tier this op needs. Total: it cannot raise, and it cannot depend on
+    the request or on anything stored on disk.
+
+    It used to do both, and both were mistakes. Params-dependent tiers meant
+    the authorisation check and the handler each derived the answer separately;
+    a marker file meant authorisation state lived where the requester could
+    write it. `params` is kept only so call sites read symmetrically."""
+    return OPS[op][0]
 
 
-def min_tier(op: str, device: str | None = None) -> str:
-    """Lowest ceiling at which this op could run RIGHT NOW — for the banner.
-
-    Evaluated with EMPTY params, which is each callable tier's cheapest
-    direction — so this is a lower bound, not a promise. `idle` resolves to
-    its disable direction here and will still refuse `{"enable": true}` below
-    the motion ceiling. Advertising the floor is the honest summary; the
-    per-request answer is `op_tier`, and that is what authorises.
-
-    Anything that raises resolves to the strictest tier: an op whose
-    requirement we cannot determine is not an op to advertise as permitted."""
-    tier = OPS[op][0]
-    if isinstance(tier, str):
-        return tier
-    try:
-        return tier({}, device)
-    except Exception:
-        return TIERS[-1]
-
-
-def allowed_ops(ceiling: str, device: str | None = None) -> list[str]:
-    return sorted(o for o in OPS if _tier_ok(ceiling, min_tier(o, device)))
+def allowed_ops(ceiling: str) -> list[str]:
+    return sorted(o for o in OPS if _tier_ok(ceiling, OPS[o][0]))
 
 
 async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
@@ -1173,9 +1043,6 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
     unit-tested against a fake R2, with no radio and no file queue. The daemon
     loop below is then only queue plumbing."""
     ts = time.strftime("%H:%M:%S")
-    # Gate evidence is bound to the robot that produced it, so one unit's
-    # acknowledgement cannot vouch for another unit or another firmware.
-    device = str(getattr(r2, "device", "")) or None
     # Validate the envelope before touching it. A queue file holding valid JSON
     # that is not an object (`[1,2]`, `"hi"`, `42`) used to raise AttributeError
     # here, and `{"op": []}` raised TypeError on the unhashable dict lookup —
@@ -1196,9 +1063,9 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
     if not isinstance(op, str) or op not in OPS:
         log(f"[{ts}] REFUSED unknown op {op!r}")
         return {"ok": False, "error": f"unknown op {op!r}",
-                "allowed": allowed_ops(ceiling, device)}
+                "allowed": allowed_ops(ceiling)}
     try:
-        needed = op_tier(op, params, device)
+        needed = op_tier(op, params)
     except Exception as e:
         log(f"[{ts}] REFUSED {op} — bad params: {e}")
         return {"ok": False, "op": op, "error": f"{type(e).__name__}: {e}"}
@@ -1217,22 +1084,6 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
         log(f"[{ts}]   !! {error}")
         return {"ok": False, "op": op, "error": error}
     log(f"[{ts}]   -> {json.dumps(data)[:160]}")
-    # The gate clears itself. Reaching here means R2 ACKNOWLEDGED the command
-    # (both gated ops now raise on a timeout or an error code), and `needed`
-    # was 'motion', so a human chose that ceiling deliberately. That is exactly
-    # the evidence the gate was waiting for.
-    if op in GATED_OPS and needed == "motion":
-        acked = sent_cids(op, params)
-        if acked:
-            _record_verified_cids(acked, device or "?")
-            log(f"[{ts}]   ** {device or '?'} acknowledged CID(s) "
-                f"{', '.join(hex(c) for c in acked)} — exactly these are now "
-                f"confirmed for this robot. Promote exactly these to OBSERVED "
-                f"in docs/research/r2-protocol.md.")
-            still = [hex(c) for c in sorted(set(OP_CIDS[op]) - set(acked))]
-            if still:
-                log(f"[{ts}]      '{op}' still needs {', '.join(still)} before "
-                    f"it drops to the read ceiling.")
     return {"ok": True, "op": op, "data": data}
 
 
@@ -1248,14 +1099,6 @@ async def cmd_daemon(args) -> int:
     print(f"  allowed ops: {', '.join(allowed)}")
     if ceiling != "motion":
         print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
-    # Ops whose tier is not a flat constant would otherwise read as a plain
-    # allow above, which overstates what the ceiling actually permits.
-    for op in sorted(o for o in OPS if callable(OPS[o][0])):
-        print(f"  note       : '{op}' is {tier_note(op)}")
-    # NOTE: this listing is computed without a device, because we have not
-    # connected yet. Gate evidence is per-robot, so the authoritative status
-    # prints after READY below. This list can therefore be optimistic; it is
-    # display only, and `op_tier` decides with the real device.
     print(f"  queue      : {BRIDGE}")
     print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
     print(f"{'='*62}\n")
@@ -1269,21 +1112,7 @@ async def cmd_daemon(args) -> int:
         r2.start_keepalive()
         print(f"\n>>> READY — holding session with {hits[0].name}. "
               f"Every command is logged below.\n")
-        # Authoritative gate status: now we know which robot we are talking to,
-        # and evidence is per-CID per-robot. Report exactly what is missing
-        # rather than a fixed sentence that goes stale the moment one clears.
-        device = str(getattr(r2, "device", "")) or None
-        confirmed = _verified_cids(device)
-        for gated in GATED_OPS:
-            missing = [hex(c) for c in sorted(set(OP_CIDS[gated]) - confirmed)]
-            if missing:
-                print(f"  GATE: '{gated}' needs --allow motion — CID(s) "
-                      f"{', '.join(missing)} not yet acknowledged by this "
-                      f"robot. See #7 AC5.")
-            else:
-                print(f"  gate cleared: '{gated}' may run at the read ceiling "
-                      f"(all its CIDs acknowledged by this robot).")
-        print()
+
         last = heartbeat = time.monotonic()
         try:
             while True:
