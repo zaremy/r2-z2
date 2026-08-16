@@ -230,6 +230,50 @@ WADDLE=3`. Read-back enum `R2DoLegActions` adds `TRANSITIONING=4`.
 **INFERRED** — animation-complete is the right signal for a non-blocking
 choreography scheduler; polling or fixed sleeps would fight the robot.
 
+**OBSERVED — a notification is identifiable by `seq = 0xFF` and `flags = 0x00`.**
+Every `*_notify` tuple across `spherov2/commands/` ends in `0xff`.
+**CORROBORATED** independently: `freer2/index.js:137` recognises an unsolicited
+packet by matching its first five bytes against `[0x8D, 0x00, 0x18, 0x02, 0xFF]`
+— SOP, `flags=0x00`, DID, CID, `seq=0xFF`.
+
+Two consequences that the packet layer depends on:
+
+- `flags = 0x00` means the `is_response` bit is **clear**, so `parse()` must not
+  strip a leading error byte. A notification's payload starts immediately after
+  `seq`. Getting this wrong shifts every field by one and silently corrupts
+  sensor data rather than failing.
+- Our request sequence counter is `% 0xFF`, i.e. `0..254`, so it can **never**
+  emit `0xFF`. A packet nobody is waiting for is therefore unambiguous — which
+  is what lets `r2_probe.py` treat "unmatched" as "the robot spoke on its own"
+  and route it to the event ring instead of discarding it.
+
+### Enabling robot-initiated behaviour
+
+| Behaviour | DID | CID | Payload | Source |
+|---|---|---|---|---|
+| Enable leg-action notify | `0x17` | `0x2A` (42) | `u8` bool | `animatronic.py:64` |
+| Enable idle animations | `0x17` | `0x2C` (44) | `u8` bool | `animatronic.py:72` |
+| Enable head-reset notify | `0x17` | `0x39` (57) | `u8` bool | `animatronic.py:84` |
+
+> **SINGLE-SOURCE — the weakest evidence in this document.** Every other
+> constant here is corroborated by at least two independent implementations.
+> These three appear **only** in `spherov2`: `claude-r2d2-buddy` never disables
+> idle, and `freer2` only ever sends DID `0x17` CIDs `0x05`/`0x0D`/`0x0F`. The
+> project rule is to cross-check against two implementations before trusting a
+> constant, and that is not possible here — so these stay **INFERRED** until
+> hardware confirms them. Issue #7 AC5 is the promotion test.
+
+**UNKNOWN — `play_animation_complete_notify` has no enable command.**
+`animatronic.py:43` is a bare tuple with no setter anywhere in upstream, unlike
+the other two. Either it fires unprompted, or it is enabled by something we have
+not traced, or it does not work. Source cannot settle it: play an animation and
+read the event ring.
+
+**UNKNOWN — whether `enable_idle_animations(False)` survives a power cycle.**
+It is written as a runtime command, not obviously persisted state. The bridge
+daemon therefore reports on exit that it left idle disabled rather than silently
+restoring it — restoring would mean commanding motion on the shutdown path.
+
 ## 8. Error codes
 
 `v2.py:45-56`: `0x00` success, `0x01` bad_device_id, `0x02` bad_command_id,

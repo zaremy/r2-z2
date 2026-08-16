@@ -92,6 +92,53 @@ Then, from anywhere:
 
 Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 
+### Native idle — the survey precondition
+
+R2 fidgets on his own. With his native idle loop running, a recorder cannot tell
+a spontaneous twitch from the response to the command it just sent, so **every
+observation in a survey session is suspect until idle is off**. Turn it off at
+the start of each session:
+
+```bash
+./r2 send idle --params '{"enable": false}'
+```
+
+Disabling is permitted at the **`read`** tier, deliberately. The op's tier
+depends on which way you point it: turning idle *off* belongs with `stop` — it
+makes R2 quieter — while turning it *on* starts spontaneous motion and needs
+`--allow motion`. Gating both directions behind `motion` would have made the
+precondition unreachable from the LED and audio sessions, which are the two
+cheapest and run at lower ceilings.
+
+`enable` must be a JSON `true` or `false`. A string like `"false"` is refused
+rather than interpreted, because it is truthy in Python and would enable motion
+— the opposite of what you typed.
+
+The daemon does **not** re-enable idle on exit; it prints a reminder instead.
+Restoring it would mean commanding motion on the way out of the path whose job
+is to leave R2 stopped.
+
+### Events — hearing R2 speak first
+
+Not everything on the wire is a reply. R2 sends notifications unprompted, marked
+by `seq = 0xFF`, and the bridge used to drop them: the response dispatcher looked
+for a matching waiter and returned early when there wasn't one. Now they land in
+a bounded 200-entry ring:
+
+```bash
+./r2 send notify --params '{"leg": true, "head_reset": true}'
+./r2 send events
+```
+
+`events` drains the ring, oldest first, and reports how many were evicted before
+you got to them. It is available at **every** tier — reading is never a hazard.
+
+Only two of the three known notifications have an enable command upstream.
+`play_animation_complete_notify` has none at all, so whether it fires unprompted
+is an open question: play an animation, then read `events`. That signal matters
+beyond the survey — `../docs/architecture.md` wants choreography sequenced on
+completion events rather than fixed sleeps.
+
 ## Survey harness — `r2_survey.py`
 
 Tracks the S1 capability survey ([#5](https://github.com/zaremy/r2-z2/issues/5)).

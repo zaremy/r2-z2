@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import json
 import math
 import os
@@ -35,7 +36,18 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from bleak import BleakClient, BleakScanner
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:  # pragma: no cover — only on a host without the BLE stack
+    # The packet layer, event ring, permission tiers and request handler are
+    # pure Python. Keeping bleak optional lets all of that be unit-tested with
+    # the stock system interpreter, instead of only inside mac-prototype/.venv.
+    # Anything that actually touches the radio fails loudly at call time below.
+    BleakClient = BleakScanner = None
+
+NO_BLEAK = ("bleak is not installed in this interpreter, so this host cannot "
+            "talk to R2. Use the ./r2 launcher (it runs mac-prototype/.venv "
+            "inside R2Probe.app); plain `python3` can only run the tests.")
 
 # ── BLE identity ─────────────────────────────────────────────────────────────
 # OBSERVED: spherov2/toy/r2d2.py:15 — ToyType('R2-D2', 'D2-', 'D2', .12)
@@ -78,6 +90,41 @@ CID_IO_SET_VOLUME = 0x08       # io.py:64
 CID_IO_STOP_AUDIO = 0x0A       # io.py:72
 CID_IO_LEDS_16BIT = 0x0E       # io.py:76  (CID 14) — the variant BB9E/R2D2 expose
 CID_IO_LEDS_8BIT = 0x1C        # io.py:88  (CID 28) — marked "Untested" upstream
+
+# Robot-initiated behaviour — enable commands and the notifies they turn on.
+#
+# SINGLE-SOURCE. Every other constant in this file is corroborated by at least
+# two independent implementations (see docs/research/r2-protocol.md), but these
+# four appear ONLY in spherov2: the claude-r2d2-buddy C firmware never disables
+# idle, and freer2 only ever sends DID 0x17 CIDs 0x05/0x0D/0x0F. Treat them as
+# INFERRED until hardware confirms — that is issue #7's acceptance criterion 5.
+CID_ANIM_ENABLE_LEG_NOTIFY = 0x2A        # animatronic.py:64  (CID 42)
+CID_ANIM_ENABLE_IDLE = 0x2C              # animatronic.py:72  (CID 44)
+CID_ANIM_ENABLE_HEAD_RESET_NOTIFY = 0x39  # animatronic.py:84 (CID 57)
+
+# Notification CIDs the robot sends unprompted.
+CID_ANIM_COMPLETE_NOTIFY = 0x11     # animatronic.py:43 — (23, 17, 0xff)
+CID_ANIM_LEG_COMPLETE_NOTIFY = 0x26  # animatronic.py:61 — (23, 38, 0xff)
+CID_ANIM_HEAD_RESET_NOTIFY = 0x3A   # animatronic.py:87 — (23, 58, 0xff)
+DID_SENSOR = 0x18                   # sensor.py:81
+
+# OBSERVED: every `*_notify` tuple in spherov2/commands/ ends in 0xff.
+# CORROBORATED: freer2/index.js:137 matches an unsolicited packet against
+# [0x8D, 0x00, 0x18, 0x02, 0xFF] — SOP, flags=0x00, DID, CID, seq=0xFF.
+# Note flags=0x00 there: a notification is NOT flagged is_response, so parse()
+# correctly leaves its payload intact instead of eating a byte as an error code.
+NOTIFY_SEQ = 0xFF
+
+# Our own sequence counter is `% 0xFF`, i.e. 0..254, so it can never collide
+# with 0xFF. That is what makes "unmatched" a safe test for "robot-initiated".
+KNOWN_NOTIFIES = {
+    (DID_ANIMATRONIC, CID_ANIM_COMPLETE_NOTIFY): "animation_complete",
+    (DID_ANIMATRONIC, CID_ANIM_LEG_COMPLETE_NOTIFY): "leg_action_complete",
+    (DID_ANIMATRONIC, CID_ANIM_HEAD_RESET_NOTIFY): "head_reset_to_zero",
+    (DID_SENSOR, 0x02): "sensor_stream",
+}
+
+EVENT_RING_SIZE = 200
 
 # LED bit indices — OBSERVED: spherov2/toy/r2d2.py:17-25
 LED_FRONT_R, LED_FRONT_G, LED_FRONT_B = 0, 1, 2
@@ -174,7 +221,9 @@ class R2:
 
     def __init__(self, device, verbose: bool = True):
         self.device = device
-        self.client = BleakClient(device)
+        # None when bleak is missing. Constructing an R2 stays legal so the
+        # pure logic is testable; __aenter__ is where it fails loudly.
+        self.client = BleakClient(device) if BleakClient is not None else None
         self.verbose = verbose
         self._seq = 0
         self._rx = bytearray()
@@ -182,8 +231,16 @@ class R2:
         self._last_tx = 0.0
         self._keepalive: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Packets nobody was waiting for. Before this existed they were dropped
+        # on the floor, which made every robot-initiated notification invisible.
+        self._events: collections.deque = collections.deque(maxlen=EVENT_RING_SIZE)
+        self._events_dropped = 0
+        # None = never touched this session; True = we disabled native idle.
+        self.idle_disabled: bool | None = None
 
     async def __aenter__(self) -> "R2":
+        if self.client is None:
+            raise RuntimeError(NO_BLEAK)
         self._loop = asyncio.get_running_loop()
         await self.client.connect()
         self._log(f"connected to {self.device.name} [{self.device.address}]")
@@ -235,12 +292,61 @@ class R2:
 
     def _complete(self, resp: "Response") -> None:
         fut = self._waiters.pop((resp.did, resp.cid, resp.seq), None)
-        if fut is None or fut.done():
+        if fut is None:
+            # Nobody asked for this. Either the robot spoke on its own
+            # (seq 0xff) or a response arrived after its send() timed out.
+            # Both used to be discarded here; keep them instead.
+            self._record_event(resp)
+            return
+        if fut.done():
+            self._record_event(resp, note="duplicate response")
             return
         loop = self._loop
         if loop is None or not loop.is_running():
             return
         loop.call_soon_threadsafe(lambda: fut.done() or fut.set_result(resp))
+
+    def _record_event(self, resp: "Response", note: str | None = None) -> None:
+        """Append to the bounded ring. Runs on bleak's CoreBluetooth dispatch
+        thread, so it must not touch the event loop — `deque.append` with a
+        maxlen is a single atomic bytecode under the GIL, which both makes it
+        lock-free and evicts the oldest entry for us.
+
+        `_events_dropped` is diagnostic only: len() and append() are not atomic
+        *as a pair*, so it can be off by one against a concurrent drain. That is
+        acceptable for a counter whose job is "did we lose anything, roughly".
+        """
+        if len(self._events) == EVENT_RING_SIZE:
+            self._events_dropped += 1
+        event = {
+            "t": time.time(),
+            "name": KNOWN_NOTIFIES.get((resp.did, resp.cid)),
+            "did": resp.did,
+            "cid": resp.cid,
+            "seq": resp.seq,
+            "flags": resp.flags,
+            "err": resp.err,
+            "data": resp.data.hex(),
+            "unsolicited": resp.seq == NOTIFY_SEQ,
+        }
+        if note:
+            event["note"] = note
+        self._events.append(event)
+
+    def drain_events(self) -> dict:
+        """Take everything in the ring and hand it over, oldest first.
+
+        popleft() is atomic, so draining one at a time cannot race the BLE
+        thread's appends the way `list(ring); ring.clear()` would."""
+        out = []
+        while True:
+            try:
+                out.append(self._events.popleft())
+            except IndexError:
+                break
+        dropped = self._events_dropped
+        self._events_dropped -= dropped   # not `= 0`: don't lose a concurrent
+        return {"events": out, "count": len(out), "dropped": dropped}   # bump
 
     async def send(self, did: int, cid: int, data: bytes = b"",
                    expect: bool = True, timeout: float = 5.0) -> Response | None:
@@ -337,10 +443,33 @@ class R2:
     async def battery_voltage(self) -> Response | None:
         return await self.send(DID_POWER, CID_POWER_BATTERY_VOLTAGE)
 
+    async def enable_idle_animations(self, enable: bool) -> Response | None:
+        """Turn R2's own idle loop on or off. OBSERVED: animatronic.py:72-73 —
+        CID 44, payload [int(enable)].
+
+        This is the survey precondition. R2 fidgets on his own, so with idle
+        left on, a recorder cannot tell a spontaneous twitch from the response
+        to the command it just sent — every observation is suspect."""
+        return await self.send(DID_ANIMATRONIC, CID_ANIM_ENABLE_IDLE,
+                               bytes((1 if enable else 0,)))
+
+    async def enable_leg_action_notify(self, enable: bool) -> Response | None:
+        """OBSERVED: animatronic.py:64 — CID 42, payload [int(enable)]."""
+        return await self.send(DID_ANIMATRONIC, CID_ANIM_ENABLE_LEG_NOTIFY,
+                               bytes((1 if enable else 0,)))
+
+    async def enable_head_reset_notify(self, enable: bool) -> Response | None:
+        """OBSERVED: animatronic.py:84 — CID 57, payload [int(enable)]."""
+        return await self.send(DID_ANIMATRONIC,
+                               CID_ANIM_ENABLE_HEAD_RESET_NOTIFY,
+                               bytes((1 if enable else 0,)))
+
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 async def find(timeout: float = 10.0, name: str | None = None):
+    if BleakScanner is None:
+        raise RuntimeError(NO_BLEAK)
     print(f"scanning {timeout:.0f}s for BLE devices named '{name or NAME_PREFIX}*' ...")
     devices = await BleakScanner.discover(timeout=timeout)
     hits = [d for d in devices
@@ -488,6 +617,29 @@ def _tier_ok(ceiling: str, needed: str) -> bool:
     return TIERS.index(needed) <= TIERS.index(ceiling)
 
 
+def _strict_bool(value, field: str) -> bool:
+    """Accept only a real JSON boolean.
+
+    Deliberately unforgiving: `{"enable": "false"}` is a truthy Python string,
+    so a lenient reading of it would ENABLE idle motion — the exact opposite of
+    what the caller typed. Guessing in the direction of motion is not allowed
+    here. (Same class of bug as the survey harness accepting a bool where it
+    wanted an int; JSON's types are not Python's.)"""
+    if isinstance(value, bool):
+        return value
+    raise ValueError(
+        f"'{field}' must be JSON true or false, got {value!r} "
+        f"({type(value).__name__}). Refusing to guess.")
+
+
+def _err_of(r: "Response | None") -> str:
+    """Human-readable result of a command. `Response.ERRORS.get(err)` alone
+    renders an unrecognised code as null, which reads like success."""
+    if r is None:
+        return "no response"
+    return r.ERRORS.get(r.err, f"unknown_error_{r.err:#04x}")
+
+
 async def _op_status(r2, p):
     return {"connected": r2 is not None, "head": await r2.get_head() if r2 else None}
 
@@ -520,7 +672,7 @@ async def _op_sound(r2, p):
     if "volume" in p:
         await r2.set_volume(int(p["volume"]))
     r = await r2.play_sound(int(p["id"]), int(p.get("mode", 0)))
-    return {"id": p["id"], "err": r.ERRORS.get(r.err) if r else "no response"}
+    return {"id": p["id"], "err": _err_of(r)}
 
 async def _op_stop_audio(r2, p):
     await r2.stop_audio(); return {"stopped": True}
@@ -533,7 +685,7 @@ async def _op_dome(r2, p):
 
 async def _op_animation(r2, p):
     r = await r2.play_animation(int(p["id"]))
-    return {"id": p["id"], "err": r.ERRORS.get(r.err) if r else "no response"}
+    return {"id": p["id"], "err": _err_of(r)}
 
 async def _op_stop(r2, p):
     """Emergency stop — always permitted at any tier."""
@@ -541,6 +693,60 @@ async def _op_stop(r2, p):
     await r2.stop_audio()
     return {"stopped": True}
 
+async def _op_events(r2, p):
+    """Drain everything the robot said that nobody asked for."""
+    return r2.drain_events()
+
+def _idle_tier(p: dict) -> str:
+    """Tier depends on WHICH WAY you are pointing this op.
+
+    The issue filed `idle` as tier 'motion' flat. That would have made it
+    unreachable from the two cheapest survey sessions: #8 runs `--allow leds`
+    and #9 runs `--allow audio`, and both need native idle OFF for their
+    observations to mean anything. A precondition you cannot satisfy at the
+    tier you must run at is not a precondition.
+
+    Disabling belongs with `stop` — it makes R2 quieter, and CLAUDE.md's
+    posture is 'default to STOP'. Enabling starts spontaneous motion, so it
+    keeps the motion ceiling."""
+    return "motion" if _strict_bool(p.get("enable", False), "enable") else "read"
+
+_idle_tier.min_tier = "read"
+_idle_tier.label = "read to disable / motion to enable"
+
+async def _op_idle(r2, p):
+    """Enable or disable R2's native idle animations. Defaults to DISABLING —
+    the direction every survey session needs, and the quiet one."""
+    enable = _strict_bool(p.get("enable", False), "enable")
+    r = await r2.enable_idle_animations(enable)
+    r2.idle_disabled = not enable
+    return {"idle_enabled": enable, "err": _err_of(r)}
+
+async def _op_notify(r2, p):
+    """Enable robot-initiated notifications.
+
+    Only two of the three have an enable command upstream.
+    `play_animation_complete_notify` (animatronic.py:43) is a bare tuple with
+    no setter at all, so whether it fires unprompted cannot be settled from
+    source — play an animation, then read `events`. That is the empirical
+    question issue #7 leaves open on purpose."""
+    out = {}
+    if "leg" in p:
+        out["leg"] = _err_of(await r2.enable_leg_action_notify(
+            _strict_bool(p["leg"], "leg")))
+    if "head_reset" in p:
+        out["head_reset"] = _err_of(await r2.enable_head_reset_notify(
+            _strict_bool(p["head_reset"], "head_reset")))
+    if not out:
+        raise ValueError('nothing to enable — pass {"leg": true} and/or '
+                         '{"head_reset": true}. animation_complete has no '
+                         'enable command; test it empirically via `events`.')
+    out["note"] = ("animation_complete has no enable command upstream; "
+                   "play an animation and read `events` to find out if it fires")
+    return out
+
+# (tier, handler). `tier` is a string, or a callable taking the request params
+# and returning one — see _idle_tier for why that is worth the indirection.
 OPS = {
     "status":     ("read",   _op_status),
     "battery":    ("read",   _op_battery),
@@ -548,12 +754,68 @@ OPS = {
     "read_char":  ("read",   _op_read_char),
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
+    "events":     ("read",   _op_events),    # reading is never a hazard
+    "notify":     ("read",   _op_notify),    # enabling a report moves nothing
+    "idle":       (_idle_tier, _op_idle),
     "leds":       ("leds",   _op_leds),
     "sound":      ("audio",  _op_sound),
     "stop_audio": ("audio",  _op_stop_audio),
     "dome":       ("motion", _op_dome),
     "animation":  ("motion", _op_animation),
 }
+
+
+def op_tier(op: str, params: dict | None = None) -> str:
+    """Tier this specific request needs. May raise ValueError on bad params."""
+    tier = OPS[op][0]
+    return tier(params or {}) if callable(tier) else tier
+
+
+def min_tier(op: str) -> str:
+    """Lowest ceiling at which this op could ever run — for the banner."""
+    tier = OPS[op][0]
+    return tier if isinstance(tier, str) else tier.min_tier
+
+
+def allowed_ops(ceiling: str) -> list[str]:
+    return sorted(o for o in OPS if _tier_ok(ceiling, min_tier(o)))
+
+
+async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
+    """Execute one bridge request and return the response dict.
+
+    Split out of the daemon loop so the permission ladder and every op can be
+    unit-tested against a fake R2, with no radio and no file queue. The daemon
+    loop below is then only queue plumbing."""
+    op = payload.get("op")
+    params = payload.get("params") or {}
+    ts = time.strftime("%H:%M:%S")
+
+    if op not in OPS:
+        log(f"[{ts}] REFUSED unknown op {op!r}")
+        return {"ok": False, "error": f"unknown op {op!r}",
+                "allowed": allowed_ops(ceiling)}
+    try:
+        needed = op_tier(op, params)
+    except Exception as e:
+        log(f"[{ts}] REFUSED {op} — bad params: {e}")
+        return {"ok": False, "op": op, "error": f"{type(e).__name__}: {e}"}
+    if not _tier_ok(ceiling, needed):
+        log(f"[{ts}] REFUSED {op} — needs tier '{needed}', "
+            f"daemon ceiling is '{ceiling}'")
+        return {"ok": False, "op": op, "error":
+                f"op '{op}' needs tier '{needed}'; daemon started with "
+                f"--allow {ceiling}. Restart the daemon to raise it."}
+
+    log(f"[{ts}] EXEC {op} {json.dumps(params)}")
+    try:
+        data = await OPS[op][1](r2, params)
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        log(f"[{ts}]   !! {error}")
+        return {"ok": False, "op": op, "error": error}
+    log(f"[{ts}]   -> {json.dumps(data)[:160]}")
+    return {"ok": True, "op": op, "data": data}
 
 
 async def cmd_daemon(args) -> int:
@@ -563,11 +825,15 @@ async def cmd_daemon(args) -> int:
         stale.unlink()
 
     ceiling = args.allow
-    allowed = [o for o, (t, _) in OPS.items() if _tier_ok(ceiling, t)]
+    allowed = allowed_ops(ceiling)
     print(f"\n{'='*62}\n  r2 bridge daemon — permission ceiling: {ceiling.upper()}")
-    print(f"  allowed ops: {', '.join(sorted(allowed))}")
+    print(f"  allowed ops: {', '.join(allowed)}")
     if ceiling != "motion":
         print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
+    # Ops whose tier depends on their params would otherwise read as a flat
+    # allow above, which overstates what the ceiling actually permits.
+    for op in sorted(o for o in allowed if callable(OPS[o][0])):
+        print(f"  note       : '{op}' is {OPS[op][0].label}")
     print(f"  queue      : {BRIDGE}")
     print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
     print(f"{'='*62}\n")
@@ -603,30 +869,7 @@ async def cmd_daemon(args) -> int:
                         payload = {"op": "<unparseable>", "_err": str(e)}
                     req.unlink(missing_ok=True)
                     last = time.monotonic()
-                    op = payload.get("op")
-                    ts = time.strftime("%H:%M:%S")
-
-                    if op not in OPS:
-                        print(f"[{ts}] REFUSED unknown op {op!r}")
-                        resp = {"ok": False, "error": f"unknown op {op!r}",
-                                "allowed": sorted(allowed)}
-                    elif not _tier_ok(ceiling, OPS[op][0]):
-                        need = OPS[op][0]
-                        print(f"[{ts}] REFUSED {op} — needs tier '{need}', "
-                              f"daemon ceiling is '{ceiling}'")
-                        resp = {"ok": False, "error":
-                                f"op '{op}' needs tier '{need}'; daemon started "
-                                f"with --allow {ceiling}. Restart the daemon to raise it."}
-                    else:
-                        print(f"[{ts}] EXEC {op} {json.dumps(payload.get('params', {}))}")
-                        try:
-                            data = await OPS[op][1](r2, payload.get("params", {}))
-                            resp = {"ok": True, "op": op, "data": data}
-                            print(f"[{ts}]   -> {json.dumps(data)[:160]}")
-                        except Exception as e:
-                            resp = {"ok": False, "op": op,
-                                    "error": f"{type(e).__name__}: {e}"}
-                            print(f"[{ts}]   !! {resp['error']}")
+                    resp = await handle_request(r2, payload, ceiling)
                     (RESP_DIR / req.name).write_text(json.dumps(resp, indent=2))
         except (KeyboardInterrupt, asyncio.CancelledError):
             print("\n\ninterrupted — stopping R2 before disconnect")
@@ -637,6 +880,20 @@ async def cmd_daemon(args) -> int:
                 print("stop sent (animation + audio)")
             except Exception as e:
                 print(f"stop on exit failed: {e}")
+            if r2.idle_disabled:
+                # Deliberately NOT restored here. Re-enabling idle is a command
+                # that starts spontaneous motion, and this is the path that
+                # exists to leave R2 stopped. Say so instead of doing it.
+                print("\nNOTE: native idle animations were DISABLED this session\n"
+                      "      and are left disabled — restoring them would start\n"
+                      "      motion on the way out. Re-enable when you want him\n"
+                      "      fidgeting again (needs --allow motion):\n"
+                      "        ./r2 send idle --params '{\"enable\": true}'")
+            drained = r2.drain_events()
+            if drained["count"] or drained["dropped"]:
+                print(f"\n{drained['count']} unread event(s) discarded on exit "
+                      f"({drained['dropped']} had already been evicted). "
+                      f"Read them with `./r2 send events` during a session.")
     return 0
 
 
