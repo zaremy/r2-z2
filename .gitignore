@@ -1,0 +1,38 @@
+# External research clones — never vendored into our history
+research/external/
+
+# Obsidian vault — local durable KB / governance notes, not project source
+R2Z2-vault/
+
+# Secrets
+.env
+*.env
+!.env.example
+secrets.json
+wifi_credentials.h
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ESP-IDF / PlatformIO
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+.pio/
+
+# macOS
+.DS_Store
+
+# Local scratch
+scratch/
+*.log
+
+# Generated launcher bundle — rebuild with `mac-prototype/r2 --rebuild`
+mac-prototype/tools/R2Probe.app/

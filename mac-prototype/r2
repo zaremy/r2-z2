@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# r2 — launcher for r2_probe.py.
+#
+# WHY THIS EXISTS
+#   Homebrew's Python.framework re-execs into its own Python.app, whose
+#   Info.plist has no NSBluetoothAlwaysUsageDescription key. CoreBluetooth
+#   SIGABRTs any such process the instant it touches BLE:
+#     "This app has crashed because it attempted to access privacy-sensitive
+#      data without a usage description."
+#   tools/R2Probe.app is a project-local copy of that bundle with the key added
+#   and an ad-hoc signature, so the process can legally ask for Bluetooth.
+#   macOS still requires a one-time grant for the *responsible* app (the
+#   terminal you launch this from) — see README.md.
+#
+# Rebuild the bundle after a `brew upgrade python@3.14`:  ./r2 --rebuild
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$HERE/.venv"
+APP="$HERE/tools/R2Probe.app"
+PYBIN="$(readlink -f "$VENV/bin/python3.14" 2>/dev/null || true)"
+
+rebuild() {
+  local fw
+  fw="$(dirname "$(dirname "$PYBIN")")"   # .../Versions/3.14
+  rm -rf "$APP"; mkdir -p "$HERE/tools"
+  cp -R "$fw/Resources/Python.app" "$APP"
+  /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string 'R2-D2 bring-up probe needs Bluetooth LE to discover and control the Sphero R2-D2.'" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.r2pet.r2probe" "$APP/Contents/Info.plist"
+  codesign -f -s - --deep "$APP"
+  echo "rebuilt $APP"
+}
+
+if [[ "${1:-}" == "--rebuild" ]]; then rebuild; exit 0; fi
+
+if [[ ! -d "$VENV" ]]; then
+  echo "no venv — run:  python3.14 -m venv .venv && .venv/bin/pip install bleak" >&2
+  exit 1
+fi
+[[ -d "$APP" ]] || rebuild
+
+exec env \
+  VIRTUAL_ENV="$VENV" \
+  PYTHONPATH="$VENV/lib/python3.14/site-packages" \
+  "$APP/Contents/MacOS/Python" "$HERE/r2_probe.py" "$@"
