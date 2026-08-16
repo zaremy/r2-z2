@@ -19,13 +19,56 @@ emotion.
 | Stance | `perform_leg_action(R2LegActions)` | `STOP/THREE_LEGS/TWO_LEGS/WADDLE` (`animatronic.py:16`) |
 | Leg position | `set_leg_position(float)`, `get_leg_position()` | Finer than the stance enum; semantics UNKNOWN |
 | Locomotion | Drive DID `0x16` | Deliberately untouched until dome/LED/audio pass |
-| Front LEDs | RGB, LED bits 0/1/2 | `r2d2.py:18-20` |
-| Rear LEDs | RGB, LED bits 4/5/6 | `r2d2.py:22-24` |
-| Logic displays | bit 3, **single channel** | `r2d2.py:21` — brightness only, not RGB |
-| Holo projector | bit 7, **single channel** | `r2d2.py:25` |
+| Front LEDs | RGB, LED bits 0/1/2 | **OBSERVED** — one round lens on the dome face |
+| Rear LEDs | RGB, LED bits 4/5/6 | **OBSERVED** — rectangular panel on the **back of the dome** |
+| Logic displays | bit 3, single channel | **OBSERVED** — the two square grid panels, blue/cyan. Treat as **on/off** |
+| Holo projector | bit 7, single channel | **OBSERVED** — separate clear lens on the dome face, white, **properly dimmable** |
 | Audio | 388 sound ids + volume | `io.py:60-72` |
 | Authored animations | 51 ids | `r2d2.py:417-468` |
 | ~~Idle animations~~ | ~~`enable_idle_animations(bool)`~~ | **REFUTED on hardware 2026-08-16 — R2-D2 answers `bad_command_id`. See below.** |
+
+### S1a LED survey — OBSERVED 2026-08-16 on `D2-6F6B`
+
+All 8 channels driven individually to 255 and back to 0, observed by eye and
+photographed. **`r2d2.py:17-25` is correct on every bit** — a much better
+result than the idle command gave us.
+
+| Bit | Fixture | Colour | Verdict |
+|---|---|---|---|
+| 0 | dome-face round lens | red | rgb |
+| 1 | dome-face round lens | green | rgb |
+| 2 | dome-face round lens | blue | rgb |
+| 3 | two square grid panels | blue/cyan | **brightness_only, but effectively on/off** |
+| 4 | back-of-dome panel | red | rgb |
+| 5 | back-of-dome panel | green | rgb |
+| 6 | back-of-dome panel | blue | rgb |
+| 7 | dome-face clear lens | white | **brightness_only, genuinely dimmable** |
+
+Four physical fixtures: two RGB triples, two single-colour.
+
+**The rear light is on the back of the DOME, not the body.** Easy to assume
+otherwise from the name; recording it so nobody guesses wrong later.
+
+> [!important] Bits 3 and 7 are both "brightness" but not equally useful
+> Stepped through 255 → 64 → 16, five seconds each:
+> - **Bit 7 dims cleanly** across all three steps. Usable as a continuous
+>   expressive channel — fades, slow pulses, intensity as a mood signal.
+> - **Bit 3 responds, but its curve is brutally steep** — 255 → 64 already
+>   drops most of the way, so the range between is not worth addressing.
+>   **Design for it as on/off.**
+>
+> This does NOT rule out the "thinking" indicator the behavior table wants
+> from the logic displays — patterned **blinking** delivers that, and is
+> arguably truer to how real logic displays behave (they flicker, they do not
+> fade). What is ruled out is the smooth *ramp*, not the intent.
+
+**AC4 confirmed:** a single 16-bit-mask write (`CID 0x0E`) setting all 8
+channels at once returned `success`, on hardware. Repo decision D-004 stands.
+
+**UNKNOWN, spotted in passing:** in the bit-1 photograph the holo lens appears
+to glow faintly alongside the front RGB lens. Could be reflection off adjacent
+optics rather than crosstalk. Not chased — worth one look during S1d, since
+authored animations may drive several fixtures at once.
 
 > [!danger] `enable_idle_animations` does not exist on R2-D2
 > **REFUTED** 2026-08-16 against `D2-6F6B`: `DID 0x17 CID 0x2C` returns
@@ -211,9 +254,9 @@ animation-id conflict; `DEFERRED` = requires locomotion.
 
 | Behavior | Animation candidate | Sound family | Dome | Lights | Status |
 |---|---|---|---|---|---|
-| `idle()` | `IDLE_1/2/3`, or robot-native idle | `R2_CHATTY_*` (sparse, mode 1) | slow small drift | logic dim pulse | READY |
+| `idle()` | `IDLE_1/2/3` (robot-native idle does not exist — REFUTED) | `R2_CHATTY_*` (sparse, mode 1) | slow small drift | logic **blink** pattern (bit 3 is on/off; use bit 7 for anything that fades) | READY |
 | `sleep()` | — | — | 0°, hold | all off | READY |
-| `wake()` | `EMOTE_ATTENTION` | `R2_HEY_*` | 0° → ±20° → 0° | logic up | NEEDS-SURVEY |
+| `wake()` | `EMOTE_ATTENTION` | `R2_HEY_*` | ±20° travel from rest | logic on (bit 3), holo ramp up (bit 7) | NEEDS-SURVEY |
 | `listen()` | — (composed) | — | small tilt, hold | holo on | READY |
 | `express_curious()` | `WWM_CURIOUS` | `R2_CHATTY_*` rising | ±15° alternating, pause between | holo flicker | NEEDS-SURVEY |
 | `express_happy()` | `WWM_HAPPY` | `R2_POSITIVE_*` | quick ±30° | front warm | NEEDS-SURVEY |
