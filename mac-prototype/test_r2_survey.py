@@ -284,6 +284,87 @@ class TestResolve(TempSurvey):
         self.assertEqual(S.main(["resolve", "anim:0", "--state", "needs_reobserve"]), 2)
 
 
+class TestReviewFindings(TempSurvey):
+    """Regression tests for the /review findings on PR #14."""
+
+    def test_bool_rejected_as_cooldown(self):
+        """isinstance(True, int) is True — a bool would become a 1s cooldown."""
+        with self.assertRaises(S.SurveyError):
+            S.validate_observation(dict(VALID_OBS, recommended_cooldown_s=True))
+
+    def test_negative_cooldown_rejected(self):
+        with self.assertRaises(S.SurveyError):
+            S.validate_observation(dict(VALID_OBS, recommended_cooldown_s=-5))
+
+    def test_resolve_cannot_fabricate_observed_complete(self):
+        """It has no observation, so status counted it done and export died on KeyError."""
+        self.make_manifest("motion")
+        self.assertEqual(S.main(["resolve", "anim:3", "--state", "observed_complete",
+                                 "--reason", "hand-wave"]), 2)
+        st = S.derive_state(S.load_attempts(warn=lambda m: None))["items"]
+        self.assertNotIn("anim:3", st)
+
+    def test_unresolved_attempt_survives_a_manifest_tier_switch(self):
+        """Scoping the export gate to the loaded manifest let an unsafe_replay_review
+        vanish when the operator regenerated a different tier."""
+        self.make_manifest("motion")
+        self.assertEqual(S.main(["resolve", "anim:8", "--state", "unsafe_replay_review",
+                                 "--reason", "aborted"]), 0)
+        self.assertEqual(S.main(["export"]), 2, "blocked while on the motion manifest")
+        self.make_manifest("leds")
+        self.assertEqual(S.main(["export"]), 2,
+                         "must STILL be blocked — the log is the source of truth")
+
+    def test_manifest_drift_refuses_to_emit(self):
+        """A stored command that no longer matches generation could emit an
+        animation under an LED item's id."""
+        self.make_manifest("leds")
+        payload = json.loads(S.MANIFEST.read_text())
+        payload["items"][0]["command"] = "./r2 send animation --params '{\"id\":11}'"
+        S.MANIFEST.write_text(json.dumps(payload))
+        with self.assertRaises(S.SurveyError):
+            S.load_manifest()
+        self.assertEqual(S.main(["next"]), 2)
+
+    def test_next_marks_driving_items_issued(self):
+        """A lost record on a driving animation must not allow a blind replay."""
+        self.make_manifest("motion")
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            S.main(["next", "--count", "12"])
+        st = S.derive_state(S.load_attempts(warn=lambda m: None))["items"]
+        self.assertEqual(st["anim:8"]["state"], "issued")
+        self.assertEqual(st["anim:11"]["state"], "issued")
+        self.assertNotIn("anim:0", st, "cheap items are not marked — replay is harmless")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            S.main(["next", "--count", "12"])
+        self.assertNotIn("\"id\":8}", out.getvalue(), "must not re-emit an issued driving item")
+
+    def test_concurrent_records_do_not_collide_attempt_ids(self):
+        """Two terminals during one session is ordinary; duplicate ids make --amend
+        ambiguous about which attempt it superseded."""
+        self.make_manifest()
+        import threading
+        errors = []
+
+        def rec(item):
+            try:
+                S.main(["record", item, "--json", json.dumps(VALID_OBS)])
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        threads = [threading.Thread(target=rec, args=(f"anim:{i}",)) for i in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(errors, [])
+        attempts = S.load_attempts(warn=lambda m: None)
+        ids = [a["attempt_id"] for a in attempts]
+        self.assertEqual(len(ids), len(set(ids)), f"duplicate attempt_ids: {ids}")
+
+
 class TestCannotFireCommands(TempSurvey):
     """AC2 — the safety-critical one.
 

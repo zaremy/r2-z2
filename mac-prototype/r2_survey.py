@@ -32,6 +32,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -153,6 +155,25 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def survey_lock():
+    """Exclusive lock across the read-compute-append sequence.
+
+    attempt_id is derived from the count of existing attempts, so two concurrent
+    `record` calls both read n=0 and both write `anim:7#1` — a duplicate id in an
+    append-only log, which then makes `--amend` ambiguous about which one it
+    superseded. Two terminals during one survey session is a completely ordinary
+    thing to do, so this is not theoretical."""
+    SURVEY_DIR.mkdir(parents=True, exist_ok=True)
+    lock = SURVEY_DIR / ".lock"
+    with open(lock, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
 def append_attempt(rec: dict) -> None:
     """Append-only + fsync. The one write path that must survive a crash."""
     SURVEY_DIR.mkdir(parents=True, exist_ok=True)
@@ -205,10 +226,33 @@ def save_state_cache(state: dict) -> None:
     _atomic_write(STATE, json.dumps(state, indent=2, sort_keys=True))
 
 
-def load_manifest() -> list[dict]:
+def load_manifest(verify: bool = True) -> list[dict]:
+    """Load the stored manifest and re-verify it against freshly generated data.
+
+    `next` prints `item["command"]` for a human to run. If the stored manifest
+    drifts — hand-edited, half-written, or left over from an older r2_assets.py —
+    it could print an animation command under an LED item's id, and `record`
+    would then mark the wrong item observed. The operator has no way to notice.
+    The manifest is a cache of generated data, so treat any mismatch as fatal
+    rather than trusting the file."""
     if not MANIFEST.exists():
         raise SurveyError("no manifest — run: r2_survey.py manifest")
-    return json.loads(MANIFEST.read_text())["items"]
+    items = json.loads(MANIFEST.read_text())["items"]
+    if verify:
+        canonical = {i["item_id"]: i for i in build_manifest()}
+        for stored in items:
+            fresh = canonical.get(stored["item_id"])
+            if fresh is None:
+                raise SurveyError(
+                    f"manifest is stale: {stored['item_id']!r} is not a generatable "
+                    f"item. Regenerate with `r2_survey.py manifest`.")
+            if stored.get("command") != fresh["command"] or \
+               stored.get("may_drive", False) != fresh.get("may_drive", False):
+                raise SurveyError(
+                    f"manifest drift on {stored['item_id']!r}: stored command does "
+                    f"not match generated. Refusing to emit a command that may not "
+                    f"match its item. Regenerate with `r2_survey.py manifest`.")
+    return items
 
 
 def new_attempt_id(item_id: str, n: int) -> str:
@@ -229,8 +273,14 @@ def validate_observation(obs: dict) -> None:
     if obs["wear_class"] not in WEAR_CLASSES:
         raise SurveyError(f"wear_class must be one of {WEAR_CLASSES}, "
                           f"got {obs['wear_class']!r}")
-    if not isinstance(obs["recommended_cooldown_s"], (int, float)):
-        raise SurveyError("recommended_cooldown_s must be a number")
+    cooldown = obs["recommended_cooldown_s"]
+    # isinstance(True, int) is True in Python, so bool must be excluded explicitly
+    # or `"recommended_cooldown_s": true` silently becomes a 1-second cooldown.
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)):
+        raise SurveyError("recommended_cooldown_s must be a number, not "
+                          f"{type(cooldown).__name__}")
+    if cooldown < 0:
+        raise SurveyError("recommended_cooldown_s must be >= 0")
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -283,6 +333,27 @@ def cmd_next(args) -> int:
     for it in pending:
         warn = "   ⚠ MAY DRIVE THE BODY — clear floor, stay in reach\n" if it.get("may_drive") else ""
         print(f"# {it['item_id']}  ({it['kind']}: {it['label']})\n{warn}{it['command']}\n")
+
+    # Hand-off is a state change for anything that can drive the body. Without
+    # this, an operator who fires anim:11, then loses the session before
+    # recording, leaves no trace — and the next `next` re-emits a driving
+    # animation as though it had never run. Cheap items are not marked: a lost
+    # record there costs a replayed LED, which is harmless.
+    driving = [it for it in pending if it.get("may_drive")]
+    if driving:
+        with survey_lock():
+            state = derive_state(load_attempts(warn=lambda m: None))
+            for it in driving:
+                prior = state["items"].get(it["item_id"], {}).get("attempts", [])
+                append_attempt({
+                    "attempt_id": new_attempt_id(it["item_id"], len(prior) + 1),
+                    "item_id": it["item_id"], "state": "issued", "ts": time.time(),
+                    "note": "emitted by `next` — resolve or record before re-firing",
+                })
+            save_state_cache(derive_state(load_attempts(warn=lambda m: None)))
+        print(f"# {len(driving)} driving item(s) marked `issued`. If you do not run one,"
+              f"\n# clear it:  r2_survey.py resolve <item_id> --state needs_reobserve"
+              f" --reason 'not fired'\n")
     print("# then, for each:")
     print("""#   r2_survey.py record <item_id> --json '{"outcome":"played",""")
     print("""#     "energy_cost_class":"low","wear_class":"none","recommended_cooldown_s":0}'""")
@@ -290,6 +361,11 @@ def cmd_next(args) -> int:
 
 
 def cmd_record(args) -> int:
+    with survey_lock():
+        return _record_locked(args)
+
+
+def _record_locked(args) -> int:
     attempts = load_attempts()
     state = derive_state(attempts)
 
@@ -338,8 +414,20 @@ def cmd_record(args) -> int:
 def cmd_resolve(args) -> int:
     """Move an unresolved attempt to another state — the manual escape hatch
     for a session that aborted."""
+    with survey_lock():
+        return _resolve_locked(args)
+
+
+def _resolve_locked(args) -> int:
     if args.state not in ATTEMPT_STATES:
         raise SurveyError(f"state must be one of {ATTEMPT_STATES}")
+    # `observed_complete` is the ONE state that carries an observation. Letting
+    # resolve mint it produced a terminal-success attempt with no `observation`
+    # key: status counted the item done, and export then died on a raw KeyError.
+    # Manufacturing success is exactly what the lifecycle exists to prevent.
+    if args.state == TERMINAL_OK:
+        raise SurveyError(f"{TERMINAL_OK!r} requires an observation — "
+                          f"use `record {args.item_id} --json '<observation>'`")
     # Validate against the MANIFEST, not against prior attempts. A session that
     # aborts mid-run must be able to mark items that were fired but never
     # recorded — those have no attempt yet, which is precisely why they need
@@ -366,14 +454,12 @@ def cmd_resolve(args) -> int:
 def cmd_status(args) -> int:
     items, state = load_manifest(), derive_state(load_attempts())
     per_tier: dict[str, list[int]] = {t: [0, 0] for t in TIERS}
-    unresolved = []
     for it in items:
         st = state["items"].get(it["item_id"])
         per_tier[it["tier"]][1] += 1
         if st and st["done"]:
             per_tier[it["tier"]][0] += 1
-        elif st and st["state"] in UNRESOLVED:
-            unresolved.append((it["item_id"], st["state"]))
+    unresolved = all_unresolved(state)      # whole log, not just this manifest
     total_done = sum(v[0] for v in per_tier.values())
     total = sum(v[1] for v in per_tier.values())
     print(f"observed {total_done}/{total}")
@@ -388,17 +474,25 @@ def cmd_status(args) -> int:
     return 0
 
 
+def all_unresolved(state: dict) -> list[tuple[str, str]]:
+    """Every unresolved attempt in the LOG, regardless of the current manifest.
+
+    Scoping this to the loaded manifest meant `manifest --tier leds` silently
+    dropped an outstanding `unsafe_replay_review` on a motion item — the export
+    gate passed while a possibly-driving animation sat unaccounted for. The log
+    is the source of truth; the manifest is just the current view."""
+    return sorted((item_id, st["state"]) for item_id, st in state["items"].items()
+                  if not st["done"] and st["state"] in UNRESOLVED)
+
+
 def cmd_export(args) -> int:
     items, state = load_manifest(), derive_state(load_attempts())
-    unresolved = [(i["item_id"], state["items"][i["item_id"]]["state"])
-                  for i in items
-                  if i["item_id"] in state["items"]
-                  and not state["items"][i["item_id"]]["done"]
-                  and state["items"][i["item_id"]]["state"] in UNRESOLVED]
+    unresolved = all_unresolved(state)
     if unresolved:
         print("export blocked — unresolved attempts:", file=sys.stderr)
         for item_id, s in unresolved:
-            print(f"  {item_id}: {s}", file=sys.stderr)
+            in_view = " " if any(i["item_id"] == item_id for i in items) else " (not in the current manifest view)"
+            print(f"  {item_id}: {s}{in_view}", file=sys.stderr)
         raise SurveyError(f"{len(unresolved)} attempt(s) not observed_complete")
 
     rows = []
