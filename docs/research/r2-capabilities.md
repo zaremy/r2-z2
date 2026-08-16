@@ -19,13 +19,56 @@ emotion.
 | Stance | `perform_leg_action(R2LegActions)` | `STOP/THREE_LEGS/TWO_LEGS/WADDLE` (`animatronic.py:16`) |
 | Leg position | `set_leg_position(float)`, `get_leg_position()` | Finer than the stance enum; semantics UNKNOWN |
 | Locomotion | Drive DID `0x16` | Deliberately untouched until dome/LED/audio pass |
-| Front LEDs | RGB, LED bits 0/1/2 | `r2d2.py:18-20` |
-| Rear LEDs | RGB, LED bits 4/5/6 | `r2d2.py:22-24` |
-| Logic displays | bit 3, **single channel** | `r2d2.py:21` — brightness only, not RGB |
-| Holo projector | bit 7, **single channel** | `r2d2.py:25` |
+| Front LEDs | RGB, LED bits 0/1/2 | **OBSERVED** — one round lens on the dome face |
+| Rear LEDs | RGB, LED bits 4/5/6 | **OBSERVED** — rectangular panel on the **back of the dome** |
+| Logic displays | bit 3, single channel | **OBSERVED** — the two square grid panels, blue/cyan. Treat as **on/off** |
+| Holo projector | bit 7, single channel | **OBSERVED** — separate clear lens on the dome face, white, **properly dimmable** |
 | Audio | 388 sound ids + volume | `io.py:60-72` |
 | Authored animations | 51 ids | `r2d2.py:417-468` |
 | ~~Idle animations~~ | ~~`enable_idle_animations(bool)`~~ | **REFUTED on hardware 2026-08-16 — R2-D2 answers `bad_command_id`. See below.** |
+
+### S1a LED survey — OBSERVED 2026-08-16 on `D2-6F6B`
+
+All 8 channels driven individually to 255 and back to 0, observed by eye and
+photographed. **`r2d2.py:17-25` is correct on every bit** — a much better
+result than the idle command gave us.
+
+| Bit | Fixture | Colour | Verdict |
+|---|---|---|---|
+| 0 | dome-face round lens | red | rgb |
+| 1 | dome-face round lens | green | rgb |
+| 2 | dome-face round lens | blue | rgb |
+| 3 | two square grid panels | blue/cyan | **brightness_only, but effectively on/off** |
+| 4 | back-of-dome panel | red | rgb |
+| 5 | back-of-dome panel | green | rgb |
+| 6 | back-of-dome panel | blue | rgb |
+| 7 | dome-face clear lens | white | **brightness_only, genuinely dimmable** |
+
+Four physical fixtures: two RGB triples, two single-colour.
+
+**The rear light is on the back of the DOME, not the body.** Easy to assume
+otherwise from the name; recording it so nobody guesses wrong later.
+
+> [!important] Bits 3 and 7 are both "brightness" but not equally useful
+> Stepped through 255 → 64 → 16, five seconds each:
+> - **Bit 7 dims cleanly** across all three steps. Usable as a continuous
+>   expressive channel — fades, slow pulses, intensity as a mood signal.
+> - **Bit 3 responds, but its curve is brutally steep** — 255 → 64 already
+>   drops most of the way, so the range between is not worth addressing.
+>   **Design for it as on/off.**
+>
+> This does NOT rule out the "thinking" indicator the behavior table wants
+> from the logic displays — patterned **blinking** delivers that, and is
+> arguably truer to how real logic displays behave (they flicker, they do not
+> fade). What is ruled out is the smooth *ramp*, not the intent.
+
+**AC4 confirmed:** a single 16-bit-mask write (`CID 0x0E`) setting all 8
+channels at once returned `success`, on hardware. Repo decision D-004 stands.
+
+**UNKNOWN, spotted in passing:** in the bit-1 photograph the holo lens appears
+to glow faintly alongside the front RGB lens. Could be reflection off adjacent
+optics rather than crosstalk. Not chased — worth one look during S1d, since
+authored animations may drive several fixtures at once.
 
 > [!danger] `enable_idle_animations` does not exist on R2-D2
 > **REFUTED** 2026-08-16 against `D2-6F6B`: `DID 0x17 CID 0x2C` returns
@@ -102,6 +145,72 @@ The ids are **not** R2-only. Roughly a third are borrowed voices:
 | R2-Q5 | 11 |
 | Test tones (`TEST_*Hz`) | 7 |
 
+### S1b sound survey — OBSERVED 2026-08-16 on `D2-6F6B`
+
+**25 of 40 sampled ids played and rated by ear**, at volume 200 (80 was too
+quiet to evaluate). Stopped early by operator decision: *"in general, these
+labels seem to be accurate, I don't think I need to do any more."*
+
+| Family / id | Label promised | Read as | Verdict |
+|---|---|---|---|
+| `ACCESS_PANELS`, `ALARM_1/10/12`, `ANNOYED` | warning, urgency, irritation | as labelled | ✅ |
+| `BURNOUT` | — | burnout / fatigue | ✅ |
+| `ENGAGE_HYPER_DRIVE` | — | preparing something important | ✅ |
+| `CHATTY_1/10/11/15/16` | neutral talking | success, inquisitive, answer, "huh?", disappointment | ❌ **REFUTED** |
+| `EXCITED_1/10/11` | high-energy delight | quick thinking, analyzing, quick reply | ❌ **REFUTED** |
+| `FALL` | — | damaged metal / impact | ✅ |
+| `HEAD_SPIN` | — | mechanical movement | ✅ |
+| `HEY_1/10/11` | attention-getting | whistles, expressive | ✅ |
+| `HIT_1/10/11` | reaction to impact | mechanical thunks | ⚠️ see below |
+| `LAUGH_1/2/3` | amusement | happy, high-pitched, one raspberry | ✅ |
+| `MOTOR` | — | long mechanical lift with clocklike ticking | ✅ |
+
+> [!danger] `R2_CHATTY_*` is NOT neutral talking
+> Five samples, five distinct emotional readings, none neutral. These are
+> **conversational turn-shapes** — a question implies someone to ask, an answer
+> implies something was asked. That is 62 of 212 ids, and the doc had assigned
+> them to idle/ambient.
+>
+> **Operator ruling:** an early CHATTY (`CHATTY_1`, the most neutral-leaning,
+> "quick success") is acceptable for `idle()` anyway. Recorded as a decision,
+> not a measurement — the readings above stand, and this is a taste call about
+> whether that colouring matters in practice.
+>
+> Where the family clearly belongs: **interaction**. Emotionally-loaded
+> conversational fragments are right for back-and-forth with a person.
+
+> [!danger] `R2_EXCITED_*` is cognition, not delight
+> "Quick thinking", "analyzing", "quick reply" — not high-energy excitement.
+> 16 ids. **This is the family for R2 waiting on an LLM round-trip**, which is
+> a need the behavior table had no sound for.
+
+> [!warning] `R2_HIT_*` may be foley, not vocalisation
+> They read as mechanical thunks — the sound of *being* hit. A character
+> reacting to being bumped wants a yelp, not an impact sample. Only the second
+> is expressive. Untested distinction; matters before wiring a bump reflex.
+
+**Duration: the id gap is a bucket, not a value.** Ids are spaced 2-131 apart,
+not sequentially, so the gap was suspected to encode clip length. Tested with
+the three shortest gaps and the three longest:
+
+| Id | Gap | Predicted | Heard |
+|---|---|---|---|
+| `STEP_3/4/5` | 2 | very short | short ✅ |
+| `BURNOUT` | 35 | long | long ✅ |
+| `SAD_5` | 36 | long | **medium** ❌ |
+| `MOTOR` | 131 | longest | longest ✅ |
+
+Gaps 35 and 36 gave different perceived lengths, so **it is not a linear
+duration**. Usable to bucket short/medium/long and to flag outliers; not usable
+to time choreography. S1d still needs measured or event-backed durations.
+
+**NOT SAMPLED — six families have no reading at all:** `NEGATIVE`, `POSITIVE`,
+`SAD`, `SCREAM`, `SHORT_OUT`, `STEP`. Their labels are concrete, and every
+concrete label held; the two that failed (`CHATTY` "neutral talking",
+`EXCITED`) were the two vaguest. Reasonable to trust them and revisit if a
+behaviour built on one feels wrong — but they are **UNVERIFIED**, and #9's
+acceptance criterion of ≥3 rated ids per family is **not met**.
+
 **Use only the `R2_*` family for the character.** BB-8/BB-9E sounds are a
 different droid's voice and will break the illusion; the test tones are
 factory diagnostics. That single filter cuts 388 down to a workable 212.
@@ -110,14 +219,14 @@ R2-native families:
 
 | Family | Count | Reads as |
 |---|---|---|
-| `R2_CHATTY_*` | 62 | Neutral talking — the workhorse for idle/ambient |
+| `R2_CHATTY_*` | 62 | **REFUTED — not neutral.** See S1b below |
 | `R2_NEGATIVE_*` | 28 | Refusal, complaint, disagreement |
 | `R2_SAD_*` | 25 | Dejected, lonely |
 | `R2_POSITIVE_*` | 23 | Agreement, satisfaction |
-| `R2_EXCITED_*` | 16 | High-energy delight |
+| `R2_EXCITED_*` | 16 | **REFUTED — reads as cognition/processing.** See S1b |
 | `R2_ALARM_*` | 15 | Warning, urgency |
 | `R2_HEY_*` | 12 | Attention-getting, greeting |
-| `R2_HIT_*` | 11 | Reaction to impact |
+| `R2_HIT_*` | 11 | Mechanical thunks — possibly foley, not vocalisation. See S1b |
 | `R2_STEP_*` | 6 | Movement foley |
 | `R2_LAUGH_*` | 4 | Amusement |
 | `R2_SCREAM`, `R2_SCREAM_2` | 2 | Fear/pain |
@@ -211,9 +320,10 @@ animation-id conflict; `DEFERRED` = requires locomotion.
 
 | Behavior | Animation candidate | Sound family | Dome | Lights | Status |
 |---|---|---|---|---|---|
-| `idle()` | `IDLE_1/2/3`, or robot-native idle | `R2_CHATTY_*` (sparse, mode 1) | slow small drift | logic dim pulse | READY |
+| `idle()` | `IDLE_1/2/3` (robot-native idle does not exist — REFUTED) | `R2_CHATTY_1` — operator ruling; family is conversational, not neutral | slow small drift | logic **blink** (bit 3 is on/off; bit 7 for anything that fades) | READY |
 | `sleep()` | — | — | 0°, hold | all off | READY |
-| `wake()` | `EMOTE_ATTENTION` | `R2_HEY_*` | 0° → ±20° → 0° | logic up | NEEDS-SURVEY |
+| `thinking()` | — | **`R2_EXCITED_*`** — reads as "quick thinking / analyzing" | still | logic blink (bit 3) | **NEW from S1b** — covers the LLM round-trip wait, which had no sound before |
+| `wake()` | `EMOTE_ATTENTION` | `R2_HEY_*` | ±20° travel from rest | logic on (bit 3), holo ramp up (bit 7) | NEEDS-SURVEY |
 | `listen()` | — (composed) | — | small tilt, hold | holo on | READY |
 | `express_curious()` | `WWM_CURIOUS` | `R2_CHATTY_*` rising | ±15° alternating, pause between | holo flicker | NEEDS-SURVEY |
 | `express_happy()` | `WWM_HAPPY` | `R2_POSITIVE_*` | quick ±30° | front warm | NEEDS-SURVEY |
