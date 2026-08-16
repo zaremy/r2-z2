@@ -123,8 +123,16 @@ SH8601 init sequence to a CO5300 panel and probe touch where nothing answers.
 Repo remains valuable as a **service-panel architecture reference**
 (`src/hw/` HAL split, NVS persistence, battery UI, PSRAM framebuffer).
 
-*Reversed by:* the board turning out to be V1 — confirm with `08_i2c_tools`
-before assuming either way.
+**Substantially weakened 2026-08-15.** The retailer listing for the unit
+actually purchased (Amazon B0DSVK5576) names **SH8601 + FT3168** in its title —
+the V1 stack. If that holds, `vthinkxie`'s 1.8" env is the *correct* firmware
+for this board and this decision's premise is void.
+
+The decision stands only as "do not flash before the I²C probe confirms the
+revision." The direction of the hazard is now unknown, not known.
+
+*Reversed by:* `08_i2c_tools` reporting `0x38` (FT3168) — which the listing
+predicts. Re-file this decision with the probe output either way.
 
 ---
 

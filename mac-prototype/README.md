@@ -139,10 +139,10 @@ Safety properties built in:
 
 ## Known gaps
 
-- **Discovery works; nothing beyond it has been tried.** `./r2 scan` finds
-  `D2-6F6B`. No handshake, no command has reached the robot, so nothing in
-  `../docs/research/r2-protocol.md` marked OBSERVED is confirmed on hardware
-  yet. `./r2 info` is the next step.
+- **Connect, handshake and read-only queries are confirmed on hardware**
+  (2026-08-15): wake ACKed, battery 3.95 V, head 103.08°. **No actuator has been
+  driven** — no LED, sound, dome or animation command has reached the robot, so
+  those paths in `../docs/research/r2-protocol.md` remain source-verified only.
 - No sensor streaming yet.
 - No reconnect logic; the probe is one-shot by design.
 - `reference/sphero-r2d2` pins `bleak>=1.1.1` and we run 3.0.2. Not an
