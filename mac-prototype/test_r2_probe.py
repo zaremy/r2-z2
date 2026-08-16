@@ -9,6 +9,7 @@ exercised by the stock interpreter.
 """
 
 import asyncio
+import json
 import sys
 import tempfile
 import time
@@ -437,6 +438,8 @@ class FakeR2:
     refusal — the permission ladder could be removed entirely and the suite
     stayed green. A fake that is too small hides the bug it should expose."""
 
+    device = "D2-TEST"   # gate evidence is bound to the robot that produced it
+
     def __init__(self, err: int = 0):
         self.calls: list[tuple] = []
         self.idle_disabled = None
@@ -508,11 +511,17 @@ class GateControl(unittest.TestCase):
         P.VERIFIED_CIDS = self._saved
         self._tmp.cleanup()
 
+    DEVICE = "D2-TEST"
+
     def mark_verified(self, *ops):
-        """Verification is per-op. The first live session proved why: `notify`
-        was ACKed and `idle` came back bad_command_id in the same minute."""
+        """Evidence is per-CID per-robot. Two live findings forced that shape:
+        `notify` was ACKed while `idle` came back bad_command_id in the same
+        minute, and `notify {"leg": true}` sends only ONE of its two CIDs."""
         for op in (ops or P.GATED_OPS):
-            P._record_animatronic_cids_verified(op, "D2-TEST")
+            P._record_verified_cids(P.OP_CIDS[op], self.DEVICE)
+
+    def mark_cids_verified(self, *cids):
+        P._record_verified_cids(list(cids), self.DEVICE)
 
 
 class VerifiedGate(GateControl):
@@ -790,27 +799,54 @@ class TestHandlerBasics(VerifiedGate):
         self.assertEqual(resp["data"]["results"],
                          {"animation": "success", "audio": "success"})
 
-    def test_stop_reports_a_rejected_halt_instead_of_claiming_success(self):
-        """R2 rejects at least one animatronic CID outright (0x2C ->
-        bad_command_id, observed 2026-08-16). A stop path that cannot tell you
-        it failed is not a stop path."""
-        resp, r2 = handle({"op": "stop"}, "read", FakeR2(err=0x02))
-        self.assertFalse(resp["data"]["stopped"])
-        self.assertIn("WARNING", resp["data"])
-        self.assertIn("bad_command_id", str(resp["data"]["results"]))
+    def test_a_rejected_stop_exits_non_zero(self):
+        """`./r2 send stop || panic` must see the failure. Returning ok:True
+        with `stopped: false` buried in the payload meant the shell saw
+        success while the body read 'R2 may still be moving'."""
+        resp, _ = handle({"op": "stop"}, "read", FakeR2(err=0x02))
+        self.assertFalse(resp["ok"], "a failed stop reported ok -> exit 0")
+        self.assertIn("bad_command_id", resp["error"])
+        self.assertIn("power him down by hand", resp["error"])
 
-    def test_stop_still_tries_audio_when_animation_raises(self):
-        """Both halves always run. Bailing after the first would leave audio
-        playing on an unattended robot."""
-        class HalfBroken(FakeR2):
+    def test_stop_still_tries_audio_when_animation_raises_at_await(self):
+        class RaisesInBody(FakeR2):
             async def stop_animation(self):
                 self.calls.append(("stop_animation",))
                 raise RuntimeError("link dropped")
 
-        resp, r2 = handle({"op": "stop"}, "read", HalfBroken())
+        _, r2 = handle({"op": "stop"}, "read", RaisesInBody())
         self.assertIn(("stop_audio",), r2.calls)
+
+    def test_stop_still_tries_audio_when_animation_raises_at_CALL_time(self):
+        """The coroutines used to be built eagerly in the loop's iterable, so
+        a failure at call time skipped the other half and leaked an un-awaited
+        coroutine — the guarantee was false in the case it existed for."""
+        class RaisesOnCall(FakeR2):
+            def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise AttributeError("no client")
+
+        _, r2 = handle({"op": "stop"}, "read", RaisesOnCall())
+        self.assertIn(("stop_audio",), r2.calls,
+                      "audio stop was skipped by a call-time failure")
+
+    def test_stop_still_tries_audio_when_animation_is_CANCELLED(self):
+        """CancelledError is not an Exception. A second Ctrl-C landing in the
+        animation stop must not leave audio playing on an unattended robot."""
+        class Cancelled(FakeR2):
+            async def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise asyncio.CancelledError()
+
+        _, r2 = handle({"op": "stop"}, "read", Cancelled())
+        self.assertIn(("stop_audio",), r2.calls)
+
+    def test_stop_audio_op_reports_what_r2_said(self):
+        """Its sibling was hardened while it still returned a hardcoded True
+        under the same key name."""
+        resp, _ = handle({"op": "stop_audio"}, "audio", FakeR2(err=0x02))
         self.assertFalse(resp["data"]["stopped"])
-        self.assertIn("RuntimeError", resp["data"]["results"]["animation"])
+        self.assertEqual(resp["data"]["err"], "bad_command_id")
 
     def test_motion_ops_refused_at_read_FOR_THE_RIGHT_REASON(self):
         """Assert the refusal REASON. `assertFalse(resp["ok"])` alone passed
@@ -926,12 +962,31 @@ class TestStopOnExitSurvivesCancellation(unittest.TestCase):
         self.assertFalse(issubclass(asyncio.CancelledError, Exception))
         self.assertTrue(issubclass(asyncio.CancelledError, BaseException))
 
-    def test_exit_path_catches_basexception(self):
+    def test_exit_path_uses_the_same_stop_implementation(self):
+        """The epilogue used to inline its own stops and print 'stop sent'
+        without looking at either Response — so a rejected stop and a real one
+        were indistinguishable on the path that runs when nobody is watching."""
         import inspect
-        source = inspect.getsource(P.cmd_daemon)
-        epilogue = source[source.index("Default to STOP"):]
-        self.assertIn("except BaseException", epilogue)
-        self.assertIn("asyncio.shield", epilogue)
+        epilogue = inspect.getsource(P.cmd_daemon)
+        epilogue = epilogue[epilogue.index("Default to STOP"):]
+        self.assertIn("stop_everything(r2, shield=True)", epilogue)
+        self.assertNotIn("stop sent (animation + audio)", epilogue)
+
+    def test_stop_everything_shields_and_reports(self):
+        class Rejects(FakeR2):
+            pass
+        result = run(P.stop_everything(Rejects(err=0x02), shield=True))
+        self.assertFalse(result["stopped"])
+        self.assertIsNotNone(result["warning"])
+        self.assertEqual(set(result["results"]), {"animation", "audio"})
+
+    def test_stop_everything_shape_is_fixed_on_success(self):
+        """`warning` is always present (None on success). A present-or-absent
+        key forces every consumer into .get() and cannot be relied on."""
+        result = run(P.stop_everything(FakeR2()))
+        self.assertEqual(set(result), {"stopped", "results", "warning"})
+        self.assertIsNone(result["warning"])
+        self.assertTrue(result["stopped"])
 
 
 class TestNoReplyIsSilentlyDestroyed(unittest.TestCase):
@@ -1140,6 +1195,100 @@ class TestUnprovenCidGate(GateControl):
     def test_ungated_ops_are_unaffected(self):
         for op in ("status", "battery", "head", "stop", "events"):
             self.assertIn(op, P.allowed_ops("read"))
+
+    def test_a_PARTIAL_notify_does_not_vouch_for_the_cid_it_never_sent(self):
+        """The headline bug of the second review round. `{"leg": true}` sends
+        only 0x2A, but the recorder credited the whole op — so 0x39 became
+        'verified' on evidence never gathered, and then ran at the `read`
+        ceiling against the motion device. Per-op was still too coarse."""
+        resp, r2 = handle({"op": "notify", "params": {"leg": True}}, "motion")
+        self.assertTrue(resp["ok"])
+        self.assertIn(("enable_leg_action_notify", True), r2.calls)
+        self.assertNotIn(("enable_head_reset_notify", True), r2.calls)
+
+        # 0x2A is now evidence; 0x39 is not.
+        confirmed = P._verified_cids("D2-TEST")
+        self.assertIn(P.CID_ANIM_ENABLE_LEG_NOTIFY, confirmed)
+        self.assertNotIn(P.CID_ANIM_ENABLE_HEAD_RESET_NOTIFY, confirmed)
+
+        # ...so notify as a whole stays gated, and cannot run at `read`.
+        self.assertFalse(P._animatronic_cids_verified("notify", "D2-TEST"))
+        resp, r2 = handle({"op": "notify", "params": {"head_reset": True}},
+                          "read")
+        self.assertFalse(resp["ok"], "an unacknowledged CID ran at read tier")
+        self.assertIn("needs tier 'motion'", resp["error"])
+        self.assertEqual(r2.calls, [])
+
+    def test_both_halves_together_do_clear_the_gate(self):
+        resp, _ = handle({"op": "notify",
+                          "params": {"leg": True, "head_reset": True}}, "motion")
+        self.assertTrue(resp["ok"])
+        self.assertTrue(P._animatronic_cids_verified("notify", "D2-TEST"))
+        self.assertTrue(handle({"op": "notify", "params": {"leg": True}},
+                               "read")[0]["ok"])
+
+    def test_a_confirmed_notify_run_does_not_vouch_for_idle(self):
+        """The direction the real robot produced, and the one that matters:
+        notify was ACKed and idle came back bad_command_id in the same minute.
+        A mutation letting notify's evidence cover every gated op previously
+        survived the whole green suite."""
+        resp, _ = handle({"op": "notify",
+                          "params": {"leg": True, "head_reset": True}}, "motion")
+        self.assertTrue(resp["ok"])
+        self.assertTrue(P._animatronic_cids_verified("notify", "D2-TEST"))
+        self.assertFalse(P._animatronic_cids_verified("idle", "D2-TEST"),
+                         "notify's success vouched for idle's CID")
+        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "read")
+        self.assertFalse(resp["ok"])
+        self.assertIn("needs tier 'motion'", resp["error"])
+        self.assertEqual(r2.calls, [])
+
+    def test_evidence_is_bound_to_the_robot_that_produced_it(self):
+        """One unit's acknowledgement must not vouch for another unit or
+        another firmware revision."""
+        self.mark_verified("notify")
+        self.assertTrue(P._animatronic_cids_verified("notify", "D2-TEST"))
+        self.assertFalse(P._animatronic_cids_verified("notify", "D2-OTHER"))
+
+    def test_a_legacy_format_marker_fails_closed(self):
+        """The exact file commit 14f693e wrote. It must not grant anything
+        after the schema change — and a future compatibility shim must not
+        quietly re-grant it."""
+        P.VERIFIED_CIDS.write_text(json.dumps(
+            {"verified": True, "by_op": "idle", "cids": {"enable_idle": 44}}))
+        for op in P.GATED_OPS:
+            self.assertFalse(P._animatronic_cids_verified(op, "D2-TEST"), op)
+            self.assertFalse(P._animatronic_cids_verified(op, None), op)
+
+    def test_recording_does_not_carry_legacy_keys_forward(self):
+        P.VERIFIED_CIDS.write_text(json.dumps({"verified": True, "junk": 1}))
+        self.mark_verified("notify")
+        marker = json.loads(P.VERIFIED_CIDS.read_text())
+        self.assertEqual(set(marker), {"verified_cids", "note"},
+                         "a stale top-level `verified: true` survived a write")
+
+    def test_only_known_cids_can_enter_the_marker(self):
+        P._record_verified_cids([0x99, P.CID_ANIM_ENABLE_LEG_NOTIFY], "D2-TEST")
+        self.assertEqual(P._verified_cids("D2-TEST"),
+                         {P.CID_ANIM_ENABLE_LEG_NOTIFY})
+
+    def test_gated_ops_and_op_cids_cannot_drift(self):
+        """They were two literals 35 lines apart. Drift made the recorder
+        KeyError AFTER the command had already reached the robot."""
+        self.assertEqual(set(P.GATED_OPS), set(P.OP_CIDS))
+
+    def test_op_cids_are_pinned_to_the_real_constants(self):
+        """Replacing both OP_CIDS entries with a bogus 0x99 previously left
+        the entire suite green — and that is the field the marker's own note
+        tells you to promote into docs/research/r2-protocol.md."""
+        self.assertEqual(P.OP_CIDS["idle"], [0x2C])
+        self.assertEqual(P.OP_CIDS["notify"], [0x2A, 0x39])
+        self.assertEqual(P.sent_cids("notify", {"leg": True}), [0x2A])
+        self.assertEqual(P.sent_cids("notify", {"head_reset": True}), [0x39])
+        self.assertEqual(P.sent_cids("notify", {"leg": True,
+                                                "head_reset": True}),
+                         [0x2A, 0x39])
+        self.assertEqual(P.sent_cids("idle", {}), [0x2C])
 
 
 if __name__ == "__main__":

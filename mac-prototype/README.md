@@ -96,9 +96,14 @@ Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 
 > **R2-D2 does not implement `enable_idle_animations`.** Verified 2026-08-16
 > against `D2-6F6B`: `DID 0x17 CID 0x2C` → `bad_command_id`, reproducibly.
-> It is a **BB9E** command (`bb9e.py:121`); the R2-D2 toy class
-> (`r2d2.py:483-497`) never listed it. The CID was taken from the shared
-> `Animatronic` *commands* module without checking the *toy* class.
+>
+> **The library and the firmware disagree, and no source reading predicts it.**
+> `spherov2` *does* expose the command on R2D2 — `r2d2.py:14` is
+> `class R2D2(BB9E)` and `bb9e.py:121` assigns it, so the MRO resolves it and
+> `hasattr(R2D2, 'enable_idle_animations')` is `True`. A capability the library
+> exposes is a claim to probe, not a fact. (An earlier version of this note
+> claimed the opposite — that `r2d2.py` omitted it and the source had predicted
+> the failure. That was written without checking the base class.)
 >
 > The `idle` op is kept as the record of a refuted claim — and because if a
 > firmware revision ever adds the command, the gate will notice. Running it
@@ -150,17 +155,18 @@ promote the three constants from INFERRED to OBSERVED in
 rather than interpreted, because it is truthy in Python and would enable motion
 — the opposite of what you typed.
 
-**The op fails loudly if R2 does not acknowledge.** No observation of its own
-catches a silently-failed precondition, so a timeout or an error code returns
-`ok: false` and a non-zero exit rather than a cheerful success. `bad_command_id`
-is a live possibility here, not a hypothetical: CID `0x2C` is single-source and
-unproven on this firmware. If this op fails, **discard the session's data** —
-idle state is unknown. `notify` behaves the same way, for the same reason:
-absence of an event you never successfully enabled is not evidence.
+**`idle` failing is now the EXPECTED result, not a reason to discard data.**
+`bad_command_id` is what this firmware always answers. It is not a warning about
+your session; it is the recorded refutation. Do not treat it as a session-level
+fault.
 
-The daemon does **not** re-enable idle on exit; it prints a reminder instead.
-Restoring it would mean commanding motion on the way out of the path whose job
-is to leave R2 stopped.
+**`notify` is different — if it fails, discard the session's data.** Its CIDs
+(`0x2A`, `0x39`) are confirmed working, so a failure there means something is
+genuinely wrong, and absence of an event you never successfully enabled is not
+evidence that the event does not fire.
+
+The daemon's exit notice about leaving idle disabled is unreachable on current
+firmware and kept only against a future revision.
 
 ### Events — hearing R2 speak first
 
