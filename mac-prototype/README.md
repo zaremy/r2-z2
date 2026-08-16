@@ -44,6 +44,54 @@ Rebuild the bundle after `brew upgrade python@3.14`:
 ./r2 --rebuild
 ```
 
+## Bridge daemon — driving R2 from an agent
+
+macOS attributes a Bluetooth request to the **responsible process**. Under
+Claude Code that is `claude.app` (`com.anthropic.claude-code`), whose bundle has
+no `NSBluetoothAlwaysUsageDescription`, so any child of it touching
+CoreBluetooth is killed — even though `R2Probe.app` carries the key. Terminal is
+an Apple system app and is exempt, which is why it works there. An MCP server
+would not help: same host, same responsible process.
+
+So: **you** start the daemon once from Terminal; anything else drives it through
+a file queue.
+
+```bash
+./r2 daemon --allow read          # read-only (default)
+./r2 daemon --allow leds          # + LED writes
+./r2 daemon --allow audio         # + sounds
+./r2 daemon --allow motion        # + dome and animations
+```
+
+The `--allow` ceiling mirrors the fixed bring-up ladder in `../CLAUDE.md`:
+**read-only → LEDs → audio → small dome → stance → locomotion.** Ops above the
+ceiling are **refused and logged, never executed** — so the class of physical
+behavior R2 can produce is set by you, at launch, not by whatever sends a
+command. Raising it means restarting the daemon, deliberately.
+
+Other safety properties:
+
+- Every request is printed with a timestamp before it runs — the Terminal window
+  is a live audit log, and Ctrl-C is always available
+- `stop` (stop animation + stop audio) is permitted at **every** tier
+- On exit — Ctrl-C, idle timeout, or error — it sends stop before disconnecting.
+  Default to STOP, never last-command
+- Idle timeout disconnects after 15 minutes so R2 is never left awake unattended
+
+Then, from anywhere:
+
+```bash
+./r2 send status
+./r2 send battery
+./r2 send read_char --params '{"uuid":"00002a19-0000-1000-8000-00805f9b34fb"}'
+./r2 send leds --params '{"channels":{"0":0,"1":0,"2":255}}'
+./r2 send sound --params '{"id":2813,"volume":80}'
+./r2 send dome --params '{"delta":20}'
+./r2 send stop
+```
+
+Responses print as JSON. The queue lives in `.bridge/` (gitignored).
+
 ## Safe bring-up sequence
 
 Each step is a separate command **on purpose**. Do not skip ahead, and do not
@@ -55,7 +103,7 @@ failure mode `../CLAUDE.md` forbids.
 ./r2 info                        # 2. connect, handshake, read-only queries
 ./r2 led --color 0,0,255         # 3. LEDs only, no motion
 ./r2 sound --id 2813             # 4. one sound (R2_HEY_1), then stop
-./r2 dome --angle 20             # 5. FIRST MOVEMENT — small dome, returns to 0
+./r2 dome --delta 20             # 5. FIRST MOVEMENT — small dome, returns
 ./r2 animation --id 35           # 6. one authored animation (WWM_CURIOUS)
 ```
 
@@ -81,7 +129,10 @@ negative), animation play/stop, and a payload deliberately containing
 Safety properties built in:
 
 - Default subcommand does nothing but listen.
-- Dome angle is clamped to ±45° (the robot allows -162…+182).
+- Dome moves are bounded by **travel, not destination** — capped at ±45° from a
+  freshly read position. This matters: `set_head_position` is absolute and the
+  dome does not rest at 0 (this unit was found at **103°**), so clamping the
+  target would have turned a "small test" into a ~150° swing.
 - 120 ms minimum inter-command interval, per `toy/r2d2.py:15`.
 - Clean disconnect on exit and on Ctrl-C.
 - Every TX and RX packet is logged as hex with the decoded error name.
