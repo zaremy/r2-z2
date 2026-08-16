@@ -92,6 +92,89 @@ Then, from anywhere:
 
 Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 
+### Native idle — the survey precondition
+
+R2 fidgets on his own. With his native idle loop running, a recorder cannot tell
+a spontaneous twitch from the response to the command it just sent, so **every
+observation in a survey session is suspect until idle is off**. Turn it off at
+the start of each session:
+
+```bash
+./r2 send idle --params '{"enable": false}'
+```
+
+The op's tier depends on which way you point it: turning idle *off* belongs
+with `stop` — it makes R2 quieter — while turning it *on* starts spontaneous
+motion and needs `--allow motion`. Gating both directions behind `motion`
+permanently would have made the precondition unreachable from the LED and audio
+sessions, which are the two cheapest and run at lower ceilings.
+
+#### The unproven-CID gate — read this before the first hardware session
+
+`idle` and `notify` are the only ops that write to the **motion device**
+(`DID 0x17`) using CIDs that **only one implementation documents**
+(`0x2C`, `0x2A`, `0x39` — see `../docs/research/r2-protocol.md`). The `read`
+ceiling's whole promise is *nothing sent here can move him*, and that promise
+cannot rest on constants no second source corroborates.
+
+So both ops require **`--allow motion` until one session confirms them**:
+
+```bash
+./r2 daemon --allow motion --idle-timeout 1800   # first time only
+./r2 send idle --params '{"enable": false}'
+```
+
+If R2 acknowledges, the daemon records it in `.bridge/verified-animatronic-cids.json`
+and both ops drop to the `read` tier from then on, automatically. If R2 answers
+`bad_command_id`, or does not answer, **the gate stays shut** — that is the
+outcome it exists to catch, and it means the CID is wrong.
+
+The daemon prints the gate's state in its startup banner. This is issue #7's
+AC5 enforced by the ladder rather than left as a checklist item; once it lifts,
+promote the three constants from INFERRED to OBSERVED in
+`../docs/research/r2-protocol.md`.
+
+`enable` must be a JSON `true` or `false`. A string like `"false"` is refused
+rather than interpreted, because it is truthy in Python and would enable motion
+— the opposite of what you typed.
+
+**The op fails loudly if R2 does not acknowledge.** No observation of its own
+catches a silently-failed precondition, so a timeout or an error code returns
+`ok: false` and a non-zero exit rather than a cheerful success. `bad_command_id`
+is a live possibility here, not a hypothetical: CID `0x2C` is single-source and
+unproven on this firmware. If this op fails, **discard the session's data** —
+idle state is unknown. `notify` behaves the same way, for the same reason:
+absence of an event you never successfully enabled is not evidence.
+
+The daemon does **not** re-enable idle on exit; it prints a reminder instead.
+Restoring it would mean commanding motion on the way out of the path whose job
+is to leave R2 stopped.
+
+### Events — hearing R2 speak first
+
+Not everything on the wire is a reply. R2 sends notifications unprompted, marked
+by `seq = 0xFF`, and the bridge used to drop them: the response dispatcher looked
+for a matching waiter and returned early when there wasn't one. Now they land in
+a bounded 200-entry ring:
+
+```bash
+./r2 send notify --params '{"leg": true, "head_reset": true}'
+./r2 send events
+```
+
+`events` drains the ring, oldest first, and reports two loss counters alongside
+the events: `dropped` (evicted by the ring cap before you read them) and
+`framing_errors` (truncated frames discarded during reassembly). Both matter
+more than they look — a silently lost notification is indistinguishable from
+"R2 never sent one", which is exactly the question the survey is trying to
+answer. It is available at **every** tier; reading is never a hazard.
+
+Only two of the three known notifications have an enable command upstream.
+`play_animation_complete_notify` has none at all, so whether it fires unprompted
+is an open question: play an animation, then read `events`. That signal matters
+beyond the survey — `../docs/architecture.md` wants choreography sequenced on
+completion events rather than fixed sleeps.
+
 ## Survey harness — `r2_survey.py`
 
 Tracks the S1 capability survey ([#5](https://github.com/zaremy/r2-z2/issues/5)).
