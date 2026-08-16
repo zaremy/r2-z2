@@ -114,6 +114,14 @@ cheapest and run at lower ceilings.
 rather than interpreted, because it is truthy in Python and would enable motion
 — the opposite of what you typed.
 
+**The op fails loudly if R2 does not acknowledge.** No observation of its own
+catches a silently-failed precondition, so a timeout or an error code returns
+`ok: false` and a non-zero exit rather than a cheerful success. `bad_command_id`
+is a live possibility here, not a hypothetical: CID `0x2C` is single-source and
+unproven on this firmware. If this op fails, **discard the session's data** —
+idle state is unknown. `notify` behaves the same way, for the same reason:
+absence of an event you never successfully enabled is not evidence.
+
 The daemon does **not** re-enable idle on exit; it prints a reminder instead.
 Restoring it would mean commanding motion on the way out of the path whose job
 is to leave R2 stopped.
@@ -130,8 +138,12 @@ a bounded 200-entry ring:
 ./r2 send events
 ```
 
-`events` drains the ring, oldest first, and reports how many were evicted before
-you got to them. It is available at **every** tier — reading is never a hazard.
+`events` drains the ring, oldest first, and reports two loss counters alongside
+the events: `dropped` (evicted by the ring cap before you read them) and
+`framing_errors` (truncated frames discarded during reassembly). Both matter
+more than they look — a silently lost notification is indistinguishable from
+"R2 never sent one", which is exactly the question the survey is trying to
+answer. It is available at **every** tier; reading is never a hazard.
 
 Only two of the three known notifications have an enable command upstream.
 `play_animation_complete_notify` has none at all, so whether it fires unprompted

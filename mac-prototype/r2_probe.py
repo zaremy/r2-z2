@@ -45,9 +45,9 @@ except ImportError:  # pragma: no cover — only on a host without the BLE stack
     # Anything that actually touches the radio fails loudly at call time below.
     BleakClient = BleakScanner = None
 
-NO_BLEAK = ("bleak is not installed in this interpreter, so this host cannot "
-            "talk to R2. Use the ./r2 launcher (it runs mac-prototype/.venv "
-            "inside R2Probe.app); plain `python3` can only run the tests.")
+NO_BLEAK_MSG = ("bleak is not installed in this interpreter, so this host cannot "
+                "talk to R2. Use the ./r2 launcher (it runs mac-prototype/.venv "
+                "inside R2Probe.app); plain `python3` can only run the tests.")
 
 # ── BLE identity ─────────────────────────────────────────────────────────────
 # OBSERVED: spherov2/toy/r2d2.py:15 — ToyType('R2-D2', 'D2-', 'D2', .12)
@@ -107,6 +107,13 @@ CID_ANIM_COMPLETE_NOTIFY = 0x11     # animatronic.py:43 — (23, 17, 0xff)
 CID_ANIM_LEG_COMPLETE_NOTIFY = 0x26  # animatronic.py:61 — (23, 38, 0xff)
 CID_ANIM_HEAD_RESET_NOTIFY = 0x3A   # animatronic.py:87 — (23, 58, 0xff)
 DID_SENSOR = 0x18                   # sensor.py:81
+CID_SENSOR_STREAM_NOTIFY = 0x02     # sensor.py:92 — (24, 2, 0xff)
+
+# Longest V2 frame we will reassemble before giving up and resyncing on the
+# next SOP. Real frames are header + payload + checksum, well under 100 bytes
+# even with worst-case escaping; this is a generous ceiling whose only job is
+# to stop a truncated stream growing the buffer for the life of the daemon.
+MAX_PACKET_BYTES = 512
 
 # OBSERVED: every `*_notify` tuple in spherov2/commands/ ends in 0xff.
 # CORROBORATED: freer2/index.js:137 matches an unsolicited packet against
@@ -121,7 +128,7 @@ KNOWN_NOTIFIES = {
     (DID_ANIMATRONIC, CID_ANIM_COMPLETE_NOTIFY): "animation_complete",
     (DID_ANIMATRONIC, CID_ANIM_LEG_COMPLETE_NOTIFY): "leg_action_complete",
     (DID_ANIMATRONIC, CID_ANIM_HEAD_RESET_NOTIFY): "head_reset_to_zero",
-    (DID_SENSOR, 0x02): "sensor_stream",
+    (DID_SENSOR, CID_SENSOR_STREAM_NOTIFY): "sensor_stream",
 }
 
 EVENT_RING_SIZE = 200
@@ -229,18 +236,26 @@ class R2:
         self._rx = bytearray()
         self._waiters: dict[tuple[int, int, int], asyncio.Future] = {}
         self._last_tx = 0.0
+        # Serialises seq allocation, the 120 ms pacing, and the chunked write.
+        self._tx_lock = asyncio.Lock()
         self._keepalive: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Packets nobody was waiting for. Before this existed they were dropped
         # on the floor, which made every robot-initiated notification invisible.
         self._events: collections.deque = collections.deque(maxlen=EVENT_RING_SIZE)
-        self._events_dropped = 0
+        self._events_evicted = 0    # written only by the BLE thread
+        self._events_reported = 0   # written only by the draining thread
+        # Truncated/undecodable frames. Surfaced by `events` so a lost
+        # notification is visible as a loss rather than as an absence: the
+        # daemon's log is --verbose-gated and off by default.
+        self._framing_errors = 0
+        self._framing_reported = 0
         # None = never touched this session; True = we disabled native idle.
         self.idle_disabled: bool | None = None
 
     async def __aenter__(self) -> "R2":
         if self.client is None:
-            raise RuntimeError(NO_BLEAK)
+            raise RuntimeError(NO_BLEAK_MSG)
         self._loop = asyncio.get_running_loop()
         await self.client.connect()
         self._log(f"connected to {self.device.name} [{self.device.address}]")
@@ -279,6 +294,26 @@ class R2:
         for b in data:
             if not self._rx and b != SOP:
                 continue
+            if b == SOP and self._rx:
+                # A SOP inside a frame is impossible — it is escaped to AB 05
+                # on the wire — so this is unambiguous evidence the previous
+                # frame was truncated. Resync here rather than appending, which
+                # used to merge the runt with the NEXT good packet and kill
+                # them both on the checksum. A silently lost notification is
+                # indistinguishable from "R2 never sent one", which is exactly
+                # the UNKNOWN this harness exists to settle.
+                self._framing_errors += 1
+                self._log(f"truncated frame {bytes(self._rx).hex()}; resyncing")
+                self._rx = bytearray()
+            if len(self._rx) >= MAX_PACKET_BYTES:
+                # A SOP with no EOP behind it grows this buffer forever. Over a
+                # 30-minute session that is a slow leak with no upper bound, so
+                # resynchronise instead: drop the runt and wait for a fresh SOP.
+                self._framing_errors += 1
+                self._log(f"rx overrun >{MAX_PACKET_BYTES}B without EOP; resyncing")
+                self._rx = bytearray()
+                if b != SOP:
+                    continue
             self._rx.append(b)
             if b == EOP:
                 raw, self._rx = bytes(self._rx), bytearray()
@@ -291,33 +326,63 @@ class R2:
                 self._complete(resp)
 
     def _complete(self, resp: "Response") -> None:
+        if not resp.flags & FLAG_IS_RESPONSE:
+            # Only a packet flagged is_response can answer a command. Matching
+            # on (did, cid, seq) alone let a NOTIFICATION that happened to carry
+            # a non-0xff seq resolve a live waiter — and because parse() skips
+            # the error byte for non-responses, it resolved as `err=success`
+            # with every payload field shifted by one. Spec says notifications
+            # use seq 0xff, but "the firmware always follows spec" is exactly
+            # the assumption this tool exists to test.
+            self._record_event(resp)
+            return
         fut = self._waiters.pop((resp.did, resp.cid, resp.seq), None)
         if fut is None:
-            # Nobody asked for this. Either the robot spoke on its own
-            # (seq 0xff) or a response arrived after its send() timed out.
-            # Both used to be discarded here; keep them instead.
+            # Nobody asked for this: a response that arrived after its send()
+            # timed out, or a second copy of one already handed over.
             self._record_event(resp)
             return
         if fut.done():
-            self._record_event(resp, note="duplicate response")
+            # The waiter is present but already resolved or cancelled — i.e.
+            # this reply lost a race with its own send() timeout.
+            self._record_event(resp, note="late reply; waiter already settled")
             return
         loop = self._loop
         if loop is None or not loop.is_running():
+            self._record_event(resp, note="loop not running; nobody to hand to")
             return
-        loop.call_soon_threadsafe(lambda: fut.done() or fut.set_result(resp))
+
+        def deliver() -> None:
+            # By the time this runs on the loop thread, wait_for may already
+            # have timed out and cancelled the future. `fut.done() or
+            # set_result(...)` quietly discarded the reply in that window — the
+            # command was answered, but send() reported "no response" and the
+            # packet was recorded nowhere at all.
+            if fut.done():
+                self._record_event(resp, note="late reply; waiter already settled")
+            else:
+                fut.set_result(resp)
+
+        loop.call_soon_threadsafe(deliver)
 
     def _record_event(self, resp: "Response", note: str | None = None) -> None:
         """Append to the bounded ring. Runs on bleak's CoreBluetooth dispatch
-        thread, so it must not touch the event loop — `deque.append` with a
-        maxlen is a single atomic bytecode under the GIL, which both makes it
-        lock-free and evicts the oldest entry for us.
+        thread, so it must not touch the event loop.
 
-        `_events_dropped` is diagnostic only: len() and append() are not atomic
-        *as a pair*, so it can be off by one against a concurrent drain. That is
-        acceptable for a counter whose job is "did we lose anything, roughly".
+        No lock is needed because `collections.deque` is implemented in C and
+        documented thread-safe for append and popleft, so this thread can append
+        while the loop thread drains. `maxlen` gives us eviction for free. (The
+        guarantee is deque's own, NOT the GIL's — this file targets Python 3.14,
+        where a free-threaded build has no GIL to reason from.)
+
+        `_events_evicted` is a monotonic total that ONLY this thread writes;
+        the drain side never mutates it, it just remembers the last value it
+        reported. That makes the count exact rather than merely "narrowed" — an
+        under-reported eviction count is worse than no count, because it tells
+        the operator nothing was lost when something was.
         """
         if len(self._events) == EVENT_RING_SIZE:
-            self._events_dropped += 1
+            self._events_evicted += 1
         event = {
             "t": time.time(),
             "name": KNOWN_NOTIFIES.get((resp.did, resp.cid)),
@@ -327,7 +392,11 @@ class R2:
             "flags": resp.flags,
             "err": resp.err,
             "data": resp.data.hex(),
-            "unsolicited": resp.seq == NOTIFY_SEQ,
+            # Not just `seq == 0xff`: a notification that deviates from spec on
+            # seq is exactly the case the is_response gate was added to catch,
+            # and labelling it "solicited" would bury it.
+            "unsolicited": not resp.flags & FLAG_IS_RESPONSE
+                           or resp.seq == NOTIFY_SEQ,
         }
         if note:
             event["note"] = note
@@ -336,47 +405,79 @@ class R2:
     def drain_events(self) -> dict:
         """Take everything in the ring and hand it over, oldest first.
 
-        popleft() is atomic, so draining one at a time cannot race the BLE
-        thread's appends the way `list(ring); ring.clear()` would."""
+        popleft() is individually thread-safe, so draining one at a time cannot
+        race the BLE thread's appends the way `list(ring); ring.clear()` would
+        — that pair has a window where an append lands between the copy and the
+        clear and is dropped without ever being reported."""
         out = []
         while True:
             try:
                 out.append(self._events.popleft())
             except IndexError:
                 break
-        dropped = self._events_dropped
-        self._events_dropped -= dropped   # not `= 0`: don't lose a concurrent
-        return {"events": out, "count": len(out), "dropped": dropped}   # bump
+        # Single-writer counter, read-only here: take a snapshot and diff it
+        # against what we last reported. No read-modify-write on the shared
+        # value, so no bump can be lost regardless of interleaving.
+        evicted = self._events_evicted
+        dropped, self._events_reported = evicted - self._events_reported, evicted
+        framing = self._framing_errors
+        bad, self._framing_reported = framing - self._framing_reported, framing
+        return {"events": out, "count": len(out), "dropped": dropped,
+                "framing_errors": bad}
 
     async def send(self, did: int, cid: int, data: bytes = b"",
                    expect: bool = True, timeout: float = 5.0) -> Response | None:
-        seq = self._seq
-        self._seq = (self._seq + 1) % 0xFF
-        pkt = build(did, cid, seq, data)
+        # Serialise the whole transmit path. `_last_tx` was read at the top and
+        # written after the write, with awaits in between and no mutual
+        # exclusion — so the 3 s keepalive task and a daemon op could both see
+        # the same stale timestamp, both decide they were clear to send, and
+        # transmit back to back. Measured 0.0 ms apart against a 120 ms
+        # CMD_SAFE_INTERVAL, with seqs reaching the wire out of order. R2 drops
+        # commands sent faster than that interval, which shows up as a survey
+        # item that "didn't work" rather than as an error.
+        async with self._tx_lock:
+            seq = self._seq
+            self._seq = (self._seq + 1) % 0xFF
+            pkt = build(did, cid, seq, data)
 
-        # Honour the 120 ms R2-D2 command interval.
-        gap = time.monotonic() - self._last_tx
-        if gap < CMD_SAFE_INTERVAL:
-            await asyncio.sleep(CMD_SAFE_INTERVAL - gap)
+            # Honour the 120 ms R2-D2 command interval.
+            gap = time.monotonic() - self._last_tx
+            if gap < CMD_SAFE_INTERVAL:
+                await asyncio.sleep(CMD_SAFE_INTERVAL - gap)
 
-        fut: asyncio.Future | None = None
-        if expect:
-            fut = asyncio.get_running_loop().create_future()
-            self._waiters[(did, cid, seq)] = fut
+            fut: asyncio.Future | None = None
+            if expect:
+                # Registered before the write so a fast reply cannot beat it.
+                # That makes every exit path responsible for unregistering it —
+                # see the finally below.
+                fut = asyncio.get_running_loop().create_future()
+                self._waiters[(did, cid, seq)] = fut
 
-        self._log(f"tx {pkt.hex()}  (DID={did:#04x} CID={cid:#04x} seq={seq})")
-        for i in range(0, len(pkt), MTU_CHUNK):
-            await self.client.write_gatt_char(API_UUID, pkt[i:i + MTU_CHUNK], response=True)
-        self._last_tx = time.monotonic()
+            self._log(f"tx {pkt.hex()}  (DID={did:#04x} CID={cid:#04x} seq={seq})")
+            try:
+                # Inside the lock: a packet larger than MTU_CHUNK goes out in
+                # several writes, and another sender interleaving between them
+                # would splice two packets together on the wire.
+                for i in range(0, len(pkt), MTU_CHUNK):
+                    await self.client.write_gatt_char(
+                        API_UUID, pkt[i:i + MTU_CHUNK], response=True)
+                self._last_tx = time.monotonic()
+            except BaseException:
+                self._waiters.pop((did, cid, seq), None)
+                raise
 
+        # Wait OUTSIDE the lock: holding it for the 5 s response timeout would
+        # stall the keepalive and every other op behind a single slow reply.
         if fut is None:
             return None
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
-            self._waiters.pop((did, cid, seq), None)
-            self._log(f"no response to DID={did:#04x} CID={cid:#04x} within {timeout}s")
+            self._log(f"no response to DID={did:#04x} CID={cid:#04x} "
+                      f"within {timeout}s")
             return None
+        finally:
+            self._waiters.pop((did, cid, seq), None)
 
     async def wake(self) -> Response | None:
         """DID=0x13 CID=0x0D. Idempotent; also resets the inactivity timer."""
@@ -444,8 +545,11 @@ class R2:
         return await self.send(DID_POWER, CID_POWER_BATTERY_VOLTAGE)
 
     async def enable_idle_animations(self, enable: bool) -> Response | None:
-        """Turn R2's own idle loop on or off. OBSERVED: animatronic.py:72-73 —
-        CID 44, payload [int(enable)].
+        """Turn R2's own idle loop on or off. OBSERVED in spherov2 source
+        (animatronic.py:72-73 — CID 44, payload [int(enable)]) but
+        **SINGLE-SOURCE**: no second implementation sends this CID, so it is
+        INFERRED on the wire until hardware confirms (#7 AC5). See the constant
+        block near the top of this file and docs/research/r2-protocol.md.
 
         This is the survey precondition. R2 fidgets on his own, so with idle
         left on, a recorder cannot tell a spontaneous twitch from the response
@@ -454,12 +558,16 @@ class R2:
                                bytes((1 if enable else 0,)))
 
     async def enable_leg_action_notify(self, enable: bool) -> Response | None:
-        """OBSERVED: animatronic.py:64 — CID 42, payload [int(enable)]."""
+        """OBSERVED in spherov2 source: animatronic.py:64 — CID 42, payload
+        [int(enable)]. SINGLE-SOURCE, so INFERRED on the wire until hardware
+        confirms (#7 AC5)."""
         return await self.send(DID_ANIMATRONIC, CID_ANIM_ENABLE_LEG_NOTIFY,
                                bytes((1 if enable else 0,)))
 
     async def enable_head_reset_notify(self, enable: bool) -> Response | None:
-        """OBSERVED: animatronic.py:84 — CID 57, payload [int(enable)]."""
+        """OBSERVED in spherov2 source: animatronic.py:84 — CID 57, payload
+        [int(enable)]. SINGLE-SOURCE, so INFERRED on the wire until hardware
+        confirms (#7 AC5)."""
         return await self.send(DID_ANIMATRONIC,
                                CID_ANIM_ENABLE_HEAD_RESET_NOTIFY,
                                bytes((1 if enable else 0,)))
@@ -469,7 +577,7 @@ class R2:
 
 async def find(timeout: float = 10.0, name: str | None = None):
     if BleakScanner is None:
-        raise RuntimeError(NO_BLEAK)
+        raise RuntimeError(NO_BLEAK_MSG)
     print(f"scanning {timeout:.0f}s for BLE devices named '{name or NAME_PREFIX}*' ...")
     devices = await BleakScanner.discover(timeout=timeout)
     hits = [d for d in devices
@@ -561,8 +669,21 @@ async def bounded_head_move(r2: "R2", *, delta: float | None = None,
     start = await r2.get_head()
     if start is None:
         raise RuntimeError("could not read head position; refusing to move blind")
+    # NaN defeats every guard below, silently and in the dangerous direction:
+    # `abs(nan) > 45` is False so the travel cap is skipped, and `min(182, nan)`
+    # returns 182, so the clamp hands back its own BOUND instead of the value.
+    # Measured from a resting -100 degrees that is a 282 degree swing against a
+    # +/-45 cap. This is not exotic input — `json.dumps` emits a bare `NaN` by
+    # default, so any survey script that computes a delta from a failed reading
+    # writes one into the queue and `json.loads` accepts it without complaint.
+    for name, value in (("start", start), ("delta", delta), ("angle", angle)):
+        if value is not None and not math.isfinite(value):
+            raise ValueError(f"{name}={value!r} is not a finite number; "
+                             f"refusing to move the dome")
     target = start + delta if delta is not None else angle
     travel = target - start
+    if not math.isfinite(target) or not math.isfinite(travel):
+        raise ValueError("computed a non-finite dome target; refusing to move")
     if abs(travel) > MAX_HEAD_MOVE:
         target = start + math.copysign(MAX_HEAD_MOVE, travel)
     target = max(HEAD_MIN, min(HEAD_MAX, target))
@@ -641,7 +762,13 @@ def _err_of(r: "Response | None") -> str:
 
 
 async def _op_status(r2, p):
-    return {"connected": r2 is not None, "head": await r2.get_head() if r2 else None}
+    # `r2 is not None` was structurally always True — the op could never report
+    # a dropped link, which is the one thing a status check is for.
+    client = getattr(r2, "client", None)
+    connected = bool(getattr(client, "is_connected", False))
+    return {"connected": connected,
+            "head": await r2.get_head() if connected else None,
+            "idle_disabled": r2.idle_disabled}
 
 async def _op_battery(r2, p):
     r = await r2.battery_voltage()
@@ -664,8 +791,22 @@ async def _op_gatt(r2, p):
                                     for c in s.characteristics]}
                          for s in r2.client.services]}
 
+MAX_SETTLE_S = 10.0   # ceiling on any in-op sleep; see _op_dome
+
 async def _op_leds(r2, p):
-    await r2.set_leds({int(k): int(v) for k, v in p["channels"].items()})
+    # Bound the channel indices. `mask |= 1 << int(k)` with an arbitrary key
+    # means {"channels": {"1000000000000": 1}} hangs or MemoryErrors *inside*
+    # the op, and the queue loop is serial, so `stop` cannot be dequeued while
+    # it does. Only bits 0-7 exist (r2d2.py:17-25) — reject the rest.
+    channels = {}
+    for key, value in p["channels"].items():
+        bit, level = int(key), int(value)
+        if not 0 <= bit <= LED_HOLO:
+            raise ValueError(f"LED channel {bit} out of range 0-{LED_HOLO}")
+        if not 0 <= level <= 255:
+            raise ValueError(f"LED level {level} out of range 0-255")
+        channels[bit] = level
+    await r2.set_leds(channels)
     return {"set": p["channels"]}
 
 async def _op_sound(r2, p):
@@ -680,7 +821,12 @@ async def _op_stop_audio(r2, p):
 async def _op_dome(r2, p):
     start, target = await bounded_head_move(
         r2, delta=p.get("delta"), angle=p.get("angle"))
-    await asyncio.sleep(float(p.get("settle", 2.0)))
+    # Clamp the settle. This sleep happens AFTER the dome is commanded to move,
+    # and the queue loop is serial: an unbounded value would leave R2 mid-move
+    # with `stop` undeliverable and the idle-timeout check unreachable, with
+    # Ctrl-C at the operator's terminal as the only way out.
+    settle = max(0.0, min(float(p.get("settle", 2.0)), MAX_SETTLE_S))
+    await asyncio.sleep(settle)
     return {"start": start, "commanded": target, "now": await r2.get_head()}
 
 async def _op_animation(r2, p):
@@ -697,6 +843,16 @@ async def _op_events(r2, p):
     """Drain everything the robot said that nobody asked for."""
     return r2.drain_events()
 
+def _idle_enable(p: dict) -> bool:
+    """The single place the `idle` direction is derived.
+
+    The tier gate authorises based on this value and the handler acts on it. If
+    those were two separate expressions, changing the default in one of them
+    would grant a request at `read` and then command motion — and no existing
+    test would catch it, because they all pass `enable` explicitly."""
+    return _strict_bool(p.get("enable", False), "enable")
+
+
 def _idle_tier(p: dict) -> str:
     """Tier depends on WHICH WAY you are pointing this op.
 
@@ -709,18 +865,31 @@ def _idle_tier(p: dict) -> str:
     Disabling belongs with `stop` — it makes R2 quieter, and CLAUDE.md's
     posture is 'default to STOP'. Enabling starts spontaneous motion, so it
     keeps the motion ceiling."""
-    return "motion" if _strict_bool(p.get("enable", False), "enable") else "read"
+    return "motion" if _idle_enable(p) else "read"
 
 _idle_tier.min_tier = "read"
 _idle_tier.label = "read to disable / motion to enable"
 
 async def _op_idle(r2, p):
     """Enable or disable R2's native idle animations. Defaults to DISABLING —
-    the direction every survey session needs, and the quiet one."""
-    enable = _strict_bool(p.get("enable", False), "enable")
+    the direction every survey session needs, and the quiet one.
+
+    Fails LOUDLY when R2 does not acknowledge. This op is the precondition that
+    makes a whole survey session's observations trustworthy, and there is no
+    observation of its own to catch a silent failure — so reporting ok on a
+    timeout or an error code would hand the operator clean-looking data from a
+    robot that never stopped fidgeting. `bad_command_id` is a live possibility
+    here, not a hypothetical: CID 0x2C is single-source and unproven."""
+    enable = _idle_enable(p)
     r = await r2.enable_idle_animations(enable)
+    err = _err_of(r)
+    if r is None or r.err != 0:
+        raise RuntimeError(
+            f"R2 did not confirm idle {'enable' if enable else 'disable'} "
+            f"({err}). Idle state is UNKNOWN — do not trust survey "
+            f"observations from this session until it succeeds.")
     r2.idle_disabled = not enable
-    return {"idle_enabled": enable, "err": _err_of(r)}
+    return {"idle_enabled": enable, "err": err}
 
 async def _op_notify(r2, p):
     """Enable robot-initiated notifications.
@@ -730,17 +899,28 @@ async def _op_notify(r2, p):
     no setter at all, so whether it fires unprompted cannot be settled from
     source — play an animation, then read `events`. That is the empirical
     question issue #7 leaves open on purpose."""
-    out = {}
-    if "leg" in p:
-        out["leg"] = _err_of(await r2.enable_leg_action_notify(
-            _strict_bool(p["leg"], "leg")))
-    if "head_reset" in p:
-        out["head_reset"] = _err_of(await r2.enable_head_reset_notify(
-            _strict_bool(p["head_reset"], "head_reset")))
-    if not out:
+    # Validate EVERY parameter before sending ANY command. Validating as we go
+    # meant {"leg": true, "head_reset": "yes"} put the leg notify on the wire
+    # and then returned ok:false — a refusal that had already half-executed.
+    wanted = {name: _strict_bool(p[name], name)
+              for name in ("leg", "head_reset") if name in p}
+    if not wanted:
         raise ValueError('nothing to enable — pass {"leg": true} and/or '
                          '{"head_reset": true}. animation_complete has no '
                          'enable command; test it empirically via `events`.')
+    senders = {"leg": r2.enable_leg_action_notify,
+               "head_reset": r2.enable_head_reset_notify}
+    out = {name: _err_of(await senders[name](value))
+           for name, value in wanted.items()}
+    # Fail loudly on the same argument `idle` makes: CIDs 0x2A/0x39 are
+    # single-source and unproven, so bad_command_id is live. A survey that
+    # silently failed to enable leg notifications would conclude "R2 never
+    # emits leg_action_complete" — a wrong INFERRED finding entering docs/.
+    failed = {n: e for n, e in out.items() if e != "success"}
+    if failed:
+        raise RuntimeError(f"R2 did not confirm notify enable: {failed}. "
+                           f"Absence of these events is NOT evidence they "
+                           f"do not fire.")
     out["note"] = ("animation_complete has no enable command upstream; "
                    "play an animation and read `events` to find out if it fires")
     return out
@@ -787,11 +967,25 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
     Split out of the daemon loop so the permission ladder and every op can be
     unit-tested against a fake R2, with no radio and no file queue. The daemon
     loop below is then only queue plumbing."""
+    ts = time.strftime("%H:%M:%S")
+    # Validate the envelope before touching it. A queue file holding valid JSON
+    # that is not an object (`[1,2]`, `"hi"`, `42`) used to raise AttributeError
+    # here, and `{"op": []}` raised TypeError on the unhashable dict lookup —
+    # either one unwound the poll loop and ended the session, taking the `stop`
+    # channel with it. Any local process could do that with one stray file.
+    if not isinstance(payload, dict):
+        log(f"[{ts}] REFUSED malformed request (expected a JSON object, "
+            f"got {type(payload).__name__})")
+        return {"ok": False, "error":
+                f"request must be a JSON object, got {type(payload).__name__}"}
     op = payload.get("op")
     params = payload.get("params") or {}
-    ts = time.strftime("%H:%M:%S")
+    if not isinstance(params, dict):
+        log(f"[{ts}] REFUSED {op!r} — 'params' must be a JSON object")
+        return {"ok": False, "op": op, "error":
+                f"'params' must be a JSON object, got {type(params).__name__}"}
 
-    if op not in OPS:
+    if not isinstance(op, str) or op not in OPS:
         log(f"[{ts}] REFUSED unknown op {op!r}")
         return {"ok": False, "error": f"unknown op {op!r}",
                 "allowed": allowed_ops(ceiling)}
@@ -869,17 +1063,38 @@ async def cmd_daemon(args) -> int:
                         payload = {"op": "<unparseable>", "_err": str(e)}
                     req.unlink(missing_ok=True)
                     last = time.monotonic()
-                    resp = await handle_request(r2, payload, ceiling)
-                    (RESP_DIR / req.name).write_text(json.dumps(resp, indent=2))
+                    # Belt and braces: handle_request already validates its
+                    # input, but nothing a queue file contains may end a live
+                    # session — that session is the only way to send `stop`.
+                    try:
+                        resp = await handle_request(r2, payload, ceiling)
+                    except Exception as e:
+                        resp = {"ok": False, "error":
+                                f"request handler crashed: {type(e).__name__}: {e}"}
+                        print(f"[{time.strftime('%H:%M:%S')}] !! {resp['error']}")
+                    try:
+                        (RESP_DIR / req.name).write_text(json.dumps(resp, indent=2))
+                    except Exception as e:
+                        print(f"[{time.strftime('%H:%M:%S')}] !! could not write "
+                              f"response for {req.name}: {e}")
         except (KeyboardInterrupt, asyncio.CancelledError):
             print("\n\ninterrupted — stopping R2 before disconnect")
         finally:
             # Default to STOP: never leave audio or an animation running.
+            #
+            # `except BaseException`, not `except Exception`: CancelledError is
+            # NOT an Exception subclass, so a SECOND Ctrl-C — exactly what an
+            # operator does when R2 doesn't stop on the first — used to raise
+            # straight through this block and skip the stop entirely, leaving
+            # an animation and audio running on an unattended robot. shield()
+            # keeps the stops themselves alive through that cancellation.
             try:
-                await r2.stop_animation(); await r2.stop_audio()
+                await asyncio.shield(r2.stop_animation())
+                await asyncio.shield(r2.stop_audio())
                 print("stop sent (animation + audio)")
-            except Exception as e:
-                print(f"stop on exit failed: {e}")
+            except BaseException as e:
+                print(f"stop on exit failed: {type(e).__name__}: {e}")
+                print("!! R2 MAY STILL BE MOVING — power him down manually")
             if r2.idle_disabled:
                 # Deliberately NOT restored here. Re-enabling idle is a command
                 # that starts spontaneous motion, and this is the path that

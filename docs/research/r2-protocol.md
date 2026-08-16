@@ -232,9 +232,20 @@ choreography scheduler; polling or fixed sleeps would fight the robot.
 
 **OBSERVED — a notification is identifiable by `seq = 0xFF` and `flags = 0x00`.**
 Every `*_notify` tuple across `spherov2/commands/` ends in `0xff`.
-**CORROBORATED** independently: `freer2/index.js:137` recognises an unsolicited
-packet by matching its first five bytes against `[0x8D, 0x00, 0x18, 0x02, 0xFF]`
-— SOP, `flags=0x00`, DID, CID, `seq=0xFF`.
+
+**WEAKLY CORROBORATED** by `freer2/index.js:137`, which recognises an unsolicited
+packet using the byte set `[0x8D, 0x00, 0x18, 0x02, 0xFF]`. Read the code before
+citing it: it is
+
+```js
+dataToCheck.slice(0, 5).every((v) => [0x8D, 0x00, 0x18, 0x02, 0xFF].indexOf(v) >= 0)
+```
+
+— `indexOf`, i.e. **set membership, not position**. It asserts only that the
+first five bytes are drawn from that set, in any order. So it corroborates that
+`0x00` and `0xFF` appear in the header of an unsolicited sensor packet; it does
+**not** independently confirm that `0x00` is the flags field or that `0xFF` is
+the seq field. That mapping still rests on `spherov2` alone.
 
 Two consequences that the packet layer depends on:
 
