@@ -273,6 +273,15 @@ Two consequences that the packet layer depends on:
 > project rule is to cross-check against two implementations before trusting a
 > constant, and that is not possible here — so these stay **INFERRED** until
 > hardware confirms them. Issue #7 AC5 is the promotion test.
+>
+> **This is enforced in code, not just documented.** `r2_probe.py` refuses to
+> send these CIDs below the `motion` ceiling until a real robot acknowledges
+> them once — because they address the animatronic (motion) device, and the
+> `read` tier's contract is that nothing sent there can move him. A contract
+> resting on single-source constants is not a contract. The gate lifts itself
+> on the first acknowledged command at `--allow motion`; a `bad_command_id`
+> keeps it shut. **When it lifts, update this table to OBSERVED and say which
+> robot and firmware confirmed it.**
 
 **UNKNOWN — `play_animation_complete_notify` has no enable command.**
 `animatronic.py:43` is a bare tuple with no setter anywhere in upstream, unlike

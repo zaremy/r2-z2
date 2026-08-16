@@ -103,12 +103,36 @@ the start of each session:
 ./r2 send idle --params '{"enable": false}'
 ```
 
-Disabling is permitted at the **`read`** tier, deliberately. The op's tier
-depends on which way you point it: turning idle *off* belongs with `stop` — it
-makes R2 quieter — while turning it *on* starts spontaneous motion and needs
-`--allow motion`. Gating both directions behind `motion` would have made the
-precondition unreachable from the LED and audio sessions, which are the two
-cheapest and run at lower ceilings.
+The op's tier depends on which way you point it: turning idle *off* belongs
+with `stop` — it makes R2 quieter — while turning it *on* starts spontaneous
+motion and needs `--allow motion`. Gating both directions behind `motion`
+permanently would have made the precondition unreachable from the LED and audio
+sessions, which are the two cheapest and run at lower ceilings.
+
+#### The unproven-CID gate — read this before the first hardware session
+
+`idle` and `notify` are the only ops that write to the **motion device**
+(`DID 0x17`) using CIDs that **only one implementation documents**
+(`0x2C`, `0x2A`, `0x39` — see `../docs/research/r2-protocol.md`). The `read`
+ceiling's whole promise is *nothing sent here can move him*, and that promise
+cannot rest on constants no second source corroborates.
+
+So both ops require **`--allow motion` until one session confirms them**:
+
+```bash
+./r2 daemon --allow motion --idle-timeout 1800   # first time only
+./r2 send idle --params '{"enable": false}'
+```
+
+If R2 acknowledges, the daemon records it in `.bridge/verified-animatronic-cids.json`
+and both ops drop to the `read` tier from then on, automatically. If R2 answers
+`bad_command_id`, or does not answer, **the gate stays shut** — that is the
+outcome it exists to catch, and it means the CID is wrong.
+
+The daemon prints the gate's state in its startup banner. This is issue #7's
+AC5 enforced by the ladder rather than left as a checklist item; once it lifts,
+promote the three constants from INFERRED to OBSERVED in
+`../docs/research/r2-protocol.md`.
 
 `enable` must be a JSON `true` or `false`. A string like `"false"` is refused
 rather than interpreted, because it is truthy in Python and would enable motion

@@ -843,6 +843,48 @@ async def _op_events(r2, p):
     """Drain everything the robot said that nobody asked for."""
     return r2.drain_events()
 
+# ── The unproven-CID gate ────────────────────────────────────────────────────
+# `idle` (disable) and `notify` write to DID_ANIMATRONIC — the motion device —
+# using CIDs 0x2C / 0x2A / 0x39, which only spherov2 documents. The `read`
+# ceiling's whole contract is "nothing sent here can move him", and that
+# contract cannot rest on constants no second implementation corroborates.
+#
+# So they ride at `motion` until ONE session confirms them with a human
+# watching, and drop to `read` only afterwards. This makes issue #7's AC5 a
+# gate rather than a note: the ladder enforces the evidence rule instead of
+# asking the operator to remember it.
+VERIFIED_CIDS = BRIDGE / "verified-animatronic-cids.json"
+GATED_OPS = ("idle", "notify")
+
+
+def _animatronic_cids_verified() -> bool:
+    """Has a real robot acknowledged these CIDs at the motion ceiling yet?"""
+    try:
+        return bool(json.loads(VERIFIED_CIDS.read_text()).get("verified"))
+    except Exception:
+        return False   # unreadable, absent or malformed -> not verified
+
+
+def _record_animatronic_cids_verified(op: str, device: str) -> None:
+    VERIFIED_CIDS.parent.mkdir(parents=True, exist_ok=True)
+    VERIFIED_CIDS.write_text(json.dumps({
+        "verified": True,
+        "by_op": op,
+        "device": device,
+        "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "cids": {"enable_idle": CID_ANIM_ENABLE_IDLE,
+                 "enable_leg_notify": CID_ANIM_ENABLE_LEG_NOTIFY,
+                 "enable_head_reset_notify": CID_ANIM_ENABLE_HEAD_RESET_NOTIFY},
+        "note": "R2 acknowledged these at --allow motion. They may now run at "
+                "the read ceiling. Promote them to OBSERVED in "
+                "docs/research/r2-protocol.md.",
+    }, indent=2))
+
+
+def _gated_tier() -> str:
+    return "read" if _animatronic_cids_verified() else "motion"
+
+
 def _idle_enable(p: dict) -> bool:
     """The single place the `idle` direction is derived.
 
@@ -865,10 +907,29 @@ def _idle_tier(p: dict) -> str:
     Disabling belongs with `stop` — it makes R2 quieter, and CLAUDE.md's
     posture is 'default to STOP'. Enabling starts spontaneous motion, so it
     keeps the motion ceiling."""
-    return "motion" if _idle_enable(p) else "read"
+    return "motion" if _idle_enable(p) else _gated_tier()
 
-_idle_tier.min_tier = "read"
-_idle_tier.label = "read to disable / motion to enable"
+
+def _notify_tier(p: dict) -> str:
+    """Enabling a notification moves nothing — but see the gate above: the CIDs
+    that do it are unproven, and they address the motion device."""
+    return _gated_tier()
+
+
+def tier_note(op: str) -> str | None:
+    """One line for the banner when an op's tier is not a flat constant.
+
+    Evaluated at print time, never cached: the gate can clear mid-session, and
+    a banner that still says 'motion' after that is worse than no banner."""
+    if not callable(OPS[op][0]):
+        return None
+    verified = _animatronic_cids_verified()
+    if op == "idle":
+        return ("read to disable / motion to enable" if verified else
+                "MOTION in both directions — CIDs 0x2C/0x2A/0x39 are "
+                "single-source and unconfirmed on this robot")
+    return ("read" if verified else
+            "MOTION until its CIDs are confirmed on hardware once")
 
 async def _op_idle(r2, p):
     """Enable or disable R2's native idle animations. Defaults to DISABLING —
@@ -935,7 +996,7 @@ OPS = {
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
     "events":     ("read",   _op_events),    # reading is never a hazard
-    "notify":     ("read",   _op_notify),    # enabling a report moves nothing
+    "notify":     (_notify_tier, _op_notify),
     "idle":       (_idle_tier, _op_idle),
     "leds":       ("leds",   _op_leds),
     "sound":      ("audio",  _op_sound),
@@ -952,9 +1013,19 @@ def op_tier(op: str, params: dict | None = None) -> str:
 
 
 def min_tier(op: str) -> str:
-    """Lowest ceiling at which this op could ever run — for the banner."""
+    """Lowest ceiling at which this op could run RIGHT NOW — for the banner.
+
+    Evaluated with empty params, which is each callable tier's cheapest
+    direction, so the banner never advertises an op the ceiling would refuse.
+    Anything that raises resolves to the strictest tier: an op whose
+    requirement we cannot determine is not an op to advertise as permitted."""
     tier = OPS[op][0]
-    return tier if isinstance(tier, str) else tier.min_tier
+    if isinstance(tier, str):
+        return tier
+    try:
+        return tier({})
+    except Exception:
+        return TIERS[-1]
 
 
 def allowed_ops(ceiling: str) -> list[str]:
@@ -1009,6 +1080,15 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
         log(f"[{ts}]   !! {error}")
         return {"ok": False, "op": op, "error": error}
     log(f"[{ts}]   -> {json.dumps(data)[:160]}")
+    # The gate clears itself. Reaching here means R2 ACKNOWLEDGED the command
+    # (both gated ops now raise on a timeout or an error code), and `needed`
+    # was 'motion', so a human chose that ceiling deliberately. That is exactly
+    # the evidence the gate was waiting for.
+    if op in GATED_OPS and needed == "motion" and not _animatronic_cids_verified():
+        _record_animatronic_cids_verified(op, str(getattr(r2, "device", "?")))
+        log(f"[{ts}]   ** R2 acknowledged {op} — CIDs 0x2C/0x2A/0x39 confirmed. "
+            f"They now run at the 'read' ceiling. Promote them to OBSERVED in "
+            f"docs/research/r2-protocol.md.")
     return {"ok": True, "op": op, "data": data}
 
 
@@ -1024,10 +1104,15 @@ async def cmd_daemon(args) -> int:
     print(f"  allowed ops: {', '.join(allowed)}")
     if ceiling != "motion":
         print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
-    # Ops whose tier depends on their params would otherwise read as a flat
+    # Ops whose tier is not a flat constant would otherwise read as a plain
     # allow above, which overstates what the ceiling actually permits.
-    for op in sorted(o for o in allowed if callable(OPS[o][0])):
-        print(f"  note       : '{op}' is {OPS[op][0].label}")
+    for op in sorted(o for o in OPS if callable(OPS[o][0])):
+        print(f"  note       : '{op}' is {tier_note(op)}")
+    if not _animatronic_cids_verified():
+        print("\n  GATE: CIDs 0x2C/0x2A/0x39 (idle, notify) are single-source\n"
+              "        and have never been acknowledged by this robot. They\n"
+              "        require --allow motion until one session confirms them,\n"
+              "        then they drop to 'read' automatically. See #7 AC5.")
     print(f"  queue      : {BRIDGE}")
     print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
     print(f"{'='*62}\n")
