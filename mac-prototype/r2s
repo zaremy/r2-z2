@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # r2s — survey harness. No BLE, so no app-bundle wrapper needed (unlike ./r2).
+#
+# cd into mac-prototype first: `next` emits commands as literal `./r2 send ...`,
+# which only resolves from this directory. Without the cd, running
+# `mac-prototype/r2s next` from the repo root printed commands the operator
+# could not run as shown.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
 exec "$HERE/.venv/bin/python" "$HERE/r2_survey.py" "$@"
