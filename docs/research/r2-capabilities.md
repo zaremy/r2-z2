@@ -145,40 +145,71 @@ The ids are **not** R2-only. Roughly a third are borrowed voices:
 | R2-Q5 | 11 |
 | Test tones (`TEST_*Hz`) | 7 |
 
-> [!danger] `R2_CHATTY_*` is NOT neutral talking — S1b, 2026-08-16
-> The label called it *"neutral talking — the workhorse for idle/ambient"*.
-> Five sampled ids, five distinct emotional readings, none of them neutral:
+### S1b sound survey — OBSERVED 2026-08-16 on `D2-6F6B`
+
+**25 of 40 sampled ids played and rated by ear**, at volume 200 (80 was too
+quiet to evaluate). Stopped early by operator decision: *"in general, these
+labels seem to be accurate, I don't think I need to do any more."*
+
+| Family / id | Label promised | Read as | Verdict |
+|---|---|---|---|
+| `ACCESS_PANELS`, `ALARM_1/10/12`, `ANNOYED` | warning, urgency, irritation | as labelled | ✅ |
+| `BURNOUT` | — | burnout / fatigue | ✅ |
+| `ENGAGE_HYPER_DRIVE` | — | preparing something important | ✅ |
+| `CHATTY_1/10/11/15/16` | neutral talking | success, inquisitive, answer, "huh?", disappointment | ❌ **REFUTED** |
+| `EXCITED_1/10/11` | high-energy delight | quick thinking, analyzing, quick reply | ❌ **REFUTED** |
+| `FALL` | — | damaged metal / impact | ✅ |
+| `HEAD_SPIN` | — | mechanical movement | ✅ |
+| `HEY_1/10/11` | attention-getting | whistles, expressive | ✅ |
+| `HIT_1/10/11` | reaction to impact | mechanical thunks | ⚠️ see below |
+| `LAUGH_1/2/3` | amusement | happy, high-pitched, one raspberry | ✅ |
+| `MOTOR` | — | long mechanical lift with clocklike ticking | ✅ |
+
+> [!danger] `R2_CHATTY_*` is NOT neutral talking
+> Five samples, five distinct emotional readings, none neutral. These are
+> **conversational turn-shapes** — a question implies someone to ask, an answer
+> implies something was asked. That is 62 of 212 ids, and the doc had assigned
+> them to idle/ambient.
 >
-> | Id | Name | Reads as |
-> |---|---|---|
-> | 1950 | `CHATTY_1` | quick success |
-> | 1959 | `CHATTY_10` | inquisitive, a question |
-> | 1966 | `CHATTY_11` | an answer / completion |
-> | 2007 | `CHATTY_15` | "huh?" — surprise |
-> | 2010 | `CHATTY_16` | "well, that's disappointing" |
+> **Operator ruling:** an early CHATTY (`CHATTY_1`, the most neutral-leaning,
+> "quick success") is acceptable for `idle()` anyway. Recorded as a decision,
+> not a measurement — the readings above stand, and this is a taste call about
+> whether that colouring matters in practice.
 >
-> **Consequence for idle.** These are conversational turn-shapes. A question
-> implies someone to ask; an answer implies something was asked. Played into an
-> empty room they read as R2 talking to nobody, or expecting a reply he will
-> not get — the opposite of comfortable ambient presence. **The largest family
-> in R2's vocabulary cannot be the idle workhorse**, and `## 4`'s behavior table
-> needs a different source for `idle()`.
->
-> Where they ARE valuable: interaction. Emotionally-loaded conversational
-> fragments are exactly right for back-and-forth with a person.
->
-> **UNKNOWN — do nearby ids cohere as exchanges?** Suggestive, under-powered,
-> recorded so it is not lost. 1959+1966 (7 apart) and 2007+2010 (3 apart) each
-> read as a coherent exchange **in either order** — so there is no
-> question→answer direction. But 1950+1959 (9 apart) and 1950+2132 (182 apart)
-> both read generic, so distance alone does not explain it; `CHATTY_1` looks
-> like a tonal outlier. Four pairs is not a rule. Worth re-testing with a
-> wider sample if dialogue design needs it.
->
-> **UNKNOWN — do the id gaps encode clip length?** Ids are spaced 3-22 apart,
-> not sequentially. If the gap is duration, we get lengths for all 212 sounds
-> without playing them, which is what S1d needs for event-backed choreography
-> timing. Untested.
+> Where the family clearly belongs: **interaction**. Emotionally-loaded
+> conversational fragments are right for back-and-forth with a person.
+
+> [!danger] `R2_EXCITED_*` is cognition, not delight
+> "Quick thinking", "analyzing", "quick reply" — not high-energy excitement.
+> 16 ids. **This is the family for R2 waiting on an LLM round-trip**, which is
+> a need the behavior table had no sound for.
+
+> [!warning] `R2_HIT_*` may be foley, not vocalisation
+> They read as mechanical thunks — the sound of *being* hit. A character
+> reacting to being bumped wants a yelp, not an impact sample. Only the second
+> is expressive. Untested distinction; matters before wiring a bump reflex.
+
+**Duration: the id gap is a bucket, not a value.** Ids are spaced 2-131 apart,
+not sequentially, so the gap was suspected to encode clip length. Tested with
+the three shortest gaps and the three longest:
+
+| Id | Gap | Predicted | Heard |
+|---|---|---|---|
+| `STEP_3/4/5` | 2 | very short | short ✅ |
+| `BURNOUT` | 35 | long | long ✅ |
+| `SAD_5` | 36 | long | **medium** ❌ |
+| `MOTOR` | 131 | longest | longest ✅ |
+
+Gaps 35 and 36 gave different perceived lengths, so **it is not a linear
+duration**. Usable to bucket short/medium/long and to flag outliers; not usable
+to time choreography. S1d still needs measured or event-backed durations.
+
+**NOT SAMPLED — six families have no reading at all:** `NEGATIVE`, `POSITIVE`,
+`SAD`, `SCREAM`, `SHORT_OUT`, `STEP`. Their labels are concrete, and every
+concrete label held; the two that failed (`CHATTY` "neutral talking",
+`EXCITED`) were the two vaguest. Reasonable to trust them and revisit if a
+behaviour built on one feels wrong — but they are **UNVERIFIED**, and #9's
+acceptance criterion of ≥3 rated ids per family is **not met**.
 
 **Use only the `R2_*` family for the character.** BB-8/BB-9E sounds are a
 different droid's voice and will break the illusion; the test tones are
@@ -192,10 +223,10 @@ R2-native families:
 | `R2_NEGATIVE_*` | 28 | Refusal, complaint, disagreement |
 | `R2_SAD_*` | 25 | Dejected, lonely |
 | `R2_POSITIVE_*` | 23 | Agreement, satisfaction |
-| `R2_EXCITED_*` | 16 | High-energy delight |
+| `R2_EXCITED_*` | 16 | **REFUTED — reads as cognition/processing.** See S1b |
 | `R2_ALARM_*` | 15 | Warning, urgency |
 | `R2_HEY_*` | 12 | Attention-getting, greeting |
-| `R2_HIT_*` | 11 | Reaction to impact |
+| `R2_HIT_*` | 11 | Mechanical thunks — possibly foley, not vocalisation. See S1b |
 | `R2_STEP_*` | 6 | Movement foley |
 | `R2_LAUGH_*` | 4 | Amusement |
 | `R2_SCREAM`, `R2_SCREAM_2` | 2 | Fear/pain |
@@ -289,8 +320,9 @@ animation-id conflict; `DEFERRED` = requires locomotion.
 
 | Behavior | Animation candidate | Sound family | Dome | Lights | Status |
 |---|---|---|---|---|---|
-| `idle()` | `IDLE_1/2/3` (robot-native idle does not exist — REFUTED) | `R2_CHATTY_*` (sparse, mode 1) | slow small drift | logic **blink** pattern (bit 3 is on/off; use bit 7 for anything that fades) | READY |
+| `idle()` | `IDLE_1/2/3` (robot-native idle does not exist — REFUTED) | `R2_CHATTY_1` — operator ruling; family is conversational, not neutral | slow small drift | logic **blink** (bit 3 is on/off; bit 7 for anything that fades) | READY |
 | `sleep()` | — | — | 0°, hold | all off | READY |
+| `thinking()` | — | **`R2_EXCITED_*`** — reads as "quick thinking / analyzing" | still | logic blink (bit 3) | **NEW from S1b** — covers the LLM round-trip wait, which had no sound before |
 | `wake()` | `EMOTE_ATTENTION` | `R2_HEY_*` | ±20° travel from rest | logic on (bit 3), holo ramp up (bit 7) | NEEDS-SURVEY |
 | `listen()` | — (composed) | — | small tilt, hold | holo on | READY |
 | `express_curious()` | `WWM_CURIOUS` | `R2_CHATTY_*` rising | ±15° alternating, pause between | holo flicker | NEEDS-SURVEY |
