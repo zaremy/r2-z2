@@ -92,16 +92,28 @@ Then, from anywhere:
 
 Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 
-### Native idle — the survey precondition
+### Native idle — REFUTED, you cannot turn it off
 
-R2 fidgets on his own. With his native idle loop running, a recorder cannot tell
-a spontaneous twitch from the response to the command it just sent, so **every
-observation in a survey session is suspect until idle is off**. Turn it off at
-the start of each session:
-
-```bash
-./r2 send idle --params '{"enable": false}'
-```
+> **R2-D2 does not implement `enable_idle_animations`.** Verified 2026-08-16
+> against `D2-6F6B`: `DID 0x17 CID 0x2C` → `bad_command_id`, reproducibly.
+> It is a **BB9E** command (`bb9e.py:121`); the R2-D2 toy class
+> (`r2d2.py:483-497`) never listed it. The CID was taken from the shared
+> `Animatronic` *commands* module without checking the *toy* class.
+>
+> The `idle` op is kept as the record of a refuted claim — and because if a
+> firmware revision ever adds the command, the gate will notice. Running it
+> costs one rejected packet:
+>
+> ```bash
+> ./r2 send idle --params '{"enable": false}'   # -> ok:false, bad_command_id
+> ```
+>
+> **Open question, now the important one: does R2-D2 have a native idle loop at
+> all?** Baseline measured the same session — over 30 s, connected and awake,
+> the dome did not move and he emitted zero unsolicited packets. Suggestive,
+> not conclusive. If there is no idle loop, the survey never needed this
+> precondition; if there is one, it cannot be disabled and the survey has to
+> tolerate it. That is now the question to settle, not the command.
 
 The op's tier depends on which way you point it: turning idle *off* belongs
 with `stop` — it makes R2 quieter — while turning it *on* starts spontaneous

@@ -260,11 +260,37 @@ Two consequences that the packet layer depends on:
 
 ### Enabling robot-initiated behaviour
 
-| Behaviour | DID | CID | Payload | Source |
+| Behaviour | DID | CID | Payload | Status |
 |---|---|---|---|---|
-| Enable leg-action notify | `0x17` | `0x2A` (42) | `u8` bool | `animatronic.py:64` |
-| Enable idle animations | `0x17` | `0x2C` (44) | `u8` bool | `animatronic.py:72` |
-| Enable head-reset notify | `0x17` | `0x39` (57) | `u8` bool | `animatronic.py:84` |
+| Enable leg-action notify | `0x17` | `0x2A` (42) | `u8` bool | **OBSERVED** — `success` on `D2-6F6B`, 2026-08-16 |
+| Enable head-reset notify | `0x17` | `0x39` (57) | `u8` bool | **OBSERVED** — `success` on `D2-6F6B`, 2026-08-16 |
+| ~~Enable idle animations~~ | `0x17` | `0x2C` (44) | `u8` bool | **REFUTED** — `bad_command_id` on `D2-6F6B`, 2026-08-16 |
+
+> [!danger] `0x2C` is a BB9E command, not an R2-D2 one
+> R2 rejects it with `bad_command_id` (`0x02`), reproducibly. The tell was in
+> the source the whole time: `bb9e.py:121` lists `enable_idle_animations` in the
+> BB9E toy class, and `r2d2.py:483-497` does not list it at all. We lifted the
+> CID from the shared `Animatronic` **commands** module without checking the
+> **toy** that would receive it.
+>
+> The lesson generalises: for this codebase, `commands/*.py` says what the
+> protocol *can* express, `toy/<model>.py` says what a given robot *exposes*.
+> Cite the toy class, not just the command. Full write-up in
+> `r2-capabilities.md`.
+
+### Other CIDs confirmed in the same session
+
+| Behaviour | DID | CID | Status |
+|---|---|---|---|
+| Get head position | `0x17` | `0x14` | **OBSERVED** — returns float32, `3.32°` |
+| **Stop animation** | `0x17` | `0x2B` | **OBSERVED** — `success` |
+| **Stop all audio** | `0x1A` | `0x0A` | **OBSERVED** — `success` |
+| Battery voltage | `0x13` | `0x03` | **OBSERVED** — `0x01B9` → 4.41 V |
+| Wake | `0x13` | `0x0D` | **OBSERVED** — `success` |
+
+The two stop CIDs matter most: **"default to STOP" is now verified rather than
+assumed.** That was a live worry, because `0x2B` sits one CID away from the
+rejected `0x2C` and `r2d2.py` does not list it either.
 
 > **SINGLE-SOURCE — the weakest evidence in this document.** Every other
 > constant here is corroborated by at least two independent implementations.

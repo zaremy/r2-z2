@@ -508,8 +508,11 @@ class GateControl(unittest.TestCase):
         P.VERIFIED_CIDS = self._saved
         self._tmp.cleanup()
 
-    def mark_verified(self):
-        P._record_animatronic_cids_verified("test", "D2-TEST")
+    def mark_verified(self, *ops):
+        """Verification is per-op. The first live session proved why: `notify`
+        was ACKed and `idle` came back bad_command_id in the same minute."""
+        for op in (ops or P.GATED_OPS):
+            P._record_animatronic_cids_verified(op, "D2-TEST")
 
 
 class VerifiedGate(GateControl):
@@ -782,7 +785,32 @@ class TestHandlerBasics(VerifiedGate):
         with the suite still green. `stop` is where 'default to STOP' lives."""
         resp, r2 = handle({"op": "stop"}, "read")
         self.assertTrue(resp["ok"])
+        self.assertTrue(resp["data"]["stopped"])
         self.assertEqual(r2.calls, [("stop_animation",), ("stop_audio",)])
+        self.assertEqual(resp["data"]["results"],
+                         {"animation": "success", "audio": "success"})
+
+    def test_stop_reports_a_rejected_halt_instead_of_claiming_success(self):
+        """R2 rejects at least one animatronic CID outright (0x2C ->
+        bad_command_id, observed 2026-08-16). A stop path that cannot tell you
+        it failed is not a stop path."""
+        resp, r2 = handle({"op": "stop"}, "read", FakeR2(err=0x02))
+        self.assertFalse(resp["data"]["stopped"])
+        self.assertIn("WARNING", resp["data"])
+        self.assertIn("bad_command_id", str(resp["data"]["results"]))
+
+    def test_stop_still_tries_audio_when_animation_raises(self):
+        """Both halves always run. Bailing after the first would leave audio
+        playing on an unattended robot."""
+        class HalfBroken(FakeR2):
+            async def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise RuntimeError("link dropped")
+
+        resp, r2 = handle({"op": "stop"}, "read", HalfBroken())
+        self.assertIn(("stop_audio",), r2.calls)
+        self.assertFalse(resp["data"]["stopped"])
+        self.assertIn("RuntimeError", resp["data"]["results"]["animation"])
 
     def test_motion_ops_refused_at_read_FOR_THE_RIGHT_REASON(self):
         """Assert the refusal REASON. `assertFalse(resp["ok"])` alone passed
@@ -1062,12 +1090,15 @@ class TestUnprovenCidGate(GateControl):
         self.assertIn("notify", P.allowed_ops("read"))
 
     def test_a_confirmed_run_at_motion_clears_the_gate(self):
-        self.assertFalse(P._animatronic_cids_verified())
+        self.assertFalse(P._animatronic_cids_verified("idle"))
         resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "motion")
         self.assertTrue(resp["ok"])
         self.assertIn(("enable_idle_animations", False), r2.calls)
-        self.assertTrue(P._animatronic_cids_verified(),
+        self.assertTrue(P._animatronic_cids_verified("idle"),
                         "a confirmed motion-ceiling run should clear the gate")
+        # ...and ONLY for that op. notify has its own evidence to earn.
+        self.assertFalse(P._animatronic_cids_verified("notify"),
+                         "idle's success must not vouch for notify's CIDs")
         # ...and now the cheap sessions can reach it.
         resp, _ = handle({"op": "idle", "params": {"enable": False}}, "read")
         self.assertTrue(resp["ok"])
@@ -1078,7 +1109,7 @@ class TestUnprovenCidGate(GateControl):
         resp, _ = handle({"op": "idle", "params": {"enable": False}}, "motion",
                          FakeR2(err=0x02))
         self.assertFalse(resp["ok"])
-        self.assertFalse(P._animatronic_cids_verified())
+        self.assertFalse(P._animatronic_cids_verified("idle"))
 
     def test_an_unacknowledged_run_at_motion_does_NOT_clear_the_gate(self):
         class Silent(FakeR2):
@@ -1089,13 +1120,13 @@ class TestUnprovenCidGate(GateControl):
         resp, _ = handle({"op": "idle", "params": {"enable": False}}, "motion",
                          Silent())
         self.assertFalse(resp["ok"])
-        self.assertFalse(P._animatronic_cids_verified())
+        self.assertFalse(P._animatronic_cids_verified("idle"))
 
     def test_a_corrupt_marker_reads_as_unverified(self):
         """Fail closed: an unreadable marker must not grant the read tier."""
         for junk in ("", "not json", "[]", '{"verified": false}', '{"x": 1}'):
             P.VERIFIED_CIDS.write_text(junk)
-            self.assertFalse(P._animatronic_cids_verified(), repr(junk))
+            self.assertFalse(P._animatronic_cids_verified("idle"), repr(junk))
 
     def test_enabling_idle_still_needs_motion_after_confirmation(self):
         """Confirming the CIDs proves they work; it does not make starting

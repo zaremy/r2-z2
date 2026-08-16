@@ -25,7 +25,41 @@ emotion.
 | Holo projector | bit 7, **single channel** | `r2d2.py:25` |
 | Audio | 388 sound ids + volume | `io.py:60-72` |
 | Authored animations | 51 ids | `r2d2.py:417-468` |
-| Idle animations | `enable_idle_animations(bool)` | `animatronic.py:73` — **the robot has its own idle loop** |
+| ~~Idle animations~~ | ~~`enable_idle_animations(bool)`~~ | **REFUTED on hardware 2026-08-16 — R2-D2 answers `bad_command_id`. See below.** |
+
+> [!danger] `enable_idle_animations` does not exist on R2-D2
+> **REFUTED** 2026-08-16 against `D2-6F6B`: `DID 0x17 CID 0x2C` returns
+> `bad_command_id` (`0x02`), reproducibly.
+>
+> The source said so and we misread it. `animatronic.py:72` defines the command
+> on the shared `Animatronic` **commands** class, but the per-toy capability
+> lists are what say which toy exposes it:
+> `bb9e.py:121` has `enable_idle_animations`; `r2d2.py:483-497` **does not**.
+> It is a BB9E command. We took the CID from the command definition without
+> checking the toy that was going to receive it.
+>
+> Corroborated by the same session: the two animatronic enables that
+> `r2d2.py:489-490` *does* list — `enable_leg_action_notify` (`0x2A`) and
+> `enable_head_reset_to_zero_notify` (`0x39`) — both returned `success`.
+> The capability list predicted the hardware exactly.
+>
+> **Consequence: there is no way to turn R2's idle behaviour off.** Every plan
+> that treated idle-disable as the precondition for trustworthy survey data
+> needs rewriting — see [[S1 Capability Survey]] in the vault.
+>
+> **Open, and now the important question: does R2-D2 have a native idle loop at
+> all?** A command that does not exist is weak evidence that the behaviour does
+> not either. Measured baseline: over 30 s, connected and awake, the dome did
+> not move and R2 emitted zero unsolicited packets. That is suggestive, not
+> conclusive — 30 s is short, he may have been charging, and idle may need a
+> longer inactivity window.
+>
+> **Caution on `r2d2.py` as an oracle.** Its list is incomplete in the other
+> direction: it omits `play_animation` and `stop_animation`, both of which are
+> corroborated on real hardware (`freer2/index.js:15`,
+> `claude-r2d2-buddy/main/translator.c`), and `stop_animation` (`0x2B`) was
+> confirmed `success` in this same session. Absence from the list is a *hint*,
+> not proof; presence appears reliable.
 
 ### Sensors in
 
