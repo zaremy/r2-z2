@@ -203,7 +203,7 @@ Traced command paths, public API → wire:
 | Get head position | `0x17` | `0x14` | — → `float32 BE` | `animatronic.py:47` |
 | Perform leg action | `0x17` | `0x0D` | `u8` `R2LegActions` | `animatronic.py:37` |
 | Set leg position | `0x17` | `0x15` | `float32 BE` | `animatronic.py:51` |
-| Enable idle animations | `0x17` | `0x2C` | `u8` bool | `animatronic.py:73` |
+| ~~Enable idle animations~~ | `0x17` | `0x2C` | `u8` bool | **REFUTED** — `bad_command_id` on hardware, see §7.1 below |
 | Play audio file | `0x1A` | `0x07` | `u16 BE` id + `u8` mode | `io.py:60` |
 | Set volume | `0x1A` | `0x08` | `u8` | `io.py:64` |
 | Stop all audio | `0x1A` | `0x0A` | — | `io.py:72` |
@@ -260,28 +260,63 @@ Two consequences that the packet layer depends on:
 
 ### Enabling robot-initiated behaviour
 
-| Behaviour | DID | CID | Payload | Source |
+| Behaviour | DID | CID | Payload | Status |
 |---|---|---|---|---|
-| Enable leg-action notify | `0x17` | `0x2A` (42) | `u8` bool | `animatronic.py:64` |
-| Enable idle animations | `0x17` | `0x2C` (44) | `u8` bool | `animatronic.py:72` |
-| Enable head-reset notify | `0x17` | `0x39` (57) | `u8` bool | `animatronic.py:84` |
+| Enable leg-action notify | `0x17` | `0x2A` (42) | `u8` bool | **OBSERVED** — `success` on `D2-6F6B`, 2026-08-16 |
+| Enable head-reset notify | `0x17` | `0x39` (57) | `u8` bool | **OBSERVED** — `success` on `D2-6F6B`, 2026-08-16 |
+| ~~Enable idle animations~~ | `0x17` | `0x2C` (44) | `u8` bool | **REFUTED** — `bad_command_id` on `D2-6F6B`, 2026-08-16 |
 
-> **SINGLE-SOURCE — the weakest evidence in this document.** Every other
-> constant here is corroborated by at least two independent implementations.
-> These three appear **only** in `spherov2`: `claude-r2d2-buddy` never disables
-> idle, and `freer2` only ever sends DID `0x17` CIDs `0x05`/`0x0D`/`0x0F`. The
-> project rule is to cross-check against two implementations before trusting a
-> constant, and that is not possible here — so these stay **INFERRED** until
-> hardware confirms them. Issue #7 AC5 is the promotion test.
+> [!danger] `0x2C` — the library says yes, the firmware says no
+> R2 rejects it with `bad_command_id` (`0x02`), reproducibly. **No source
+> reading predicts this.** `spherov2` genuinely exposes the command on R2D2:
+> `r2d2.py:14` is `class R2D2(BB9E)`, `bb9e.py:121` assigns
+> `enable_idle_animations`, and the MRO resolves it — `hasattr(R2D2,
+> 'enable_idle_animations')` is `True`.
 >
-> **This is enforced in code, not just documented.** `r2_probe.py` refuses to
-> send these CIDs below the `motion` ceiling until a real robot acknowledges
-> them once — because they address the animatronic (motion) device, and the
-> `read` tier's contract is that nothing sent there can move him. A contract
-> resting on single-source constants is not a contract. The gate lifts itself
-> on the first acknowledged command at `--allow motion`; a `bad_command_id`
-> keeps it shut. **When it lifts, update this table to OBSERVED and say which
-> robot and firmware confirmed it.**
+> The lesson is **not** "read the toy class instead of the command module". It
+> is stronger and less comfortable:
+>
+> 1. A toy's capability set is its class body **∪ its base classes** — resolve
+>    it through the MRO, never by grepping one file.
+> 2. Even correctly resolved, that set is a **library claim**, not a firmware
+>    guarantee. Probe it. `0x2C` is the standing counterexample.
+>
+> Full write-up, including the wrong explanation this replaces, in
+> `r2-capabilities.md`.
+
+### Other CIDs confirmed in the same session
+
+| Behaviour | DID | CID | Status |
+|---|---|---|---|
+| Get head position | `0x17` | `0x14` | **OBSERVED** — returns float32, `3.32°` |
+| **Stop animation** | `0x17` | `0x2B` | **OBSERVED** — `success` |
+| **Stop all audio** | `0x1A` | `0x0A` | **OBSERVED** — `success` |
+| Battery voltage | `0x13` | `0x03` | **OBSERVED** — `0x01B9` → 4.41 V |
+| Wake | `0x13` | `0x0D` | **OBSERVED** — `success` |
+
+The two stop CIDs matter most: **"default to STOP" is now verified rather than
+assumed.** That was a live worry, because `0x2B` sits one CID away from the
+rejected `0x2C` and `r2d2.py` does not list it either.
+
+> **RESOLVED 2026-08-16 on `D2-6F6B`.** These three were the weakest evidence in
+> this document — single-source in `spherov2`, since `claude-r2d2-buddy` never
+> disables idle and `freer2` only sends DID `0x17` CIDs `0x05`/`0x0D`/`0x0F`.
+> Hardware has now spoken on all three:
+>
+> - `0x2A` and `0x39` → **OBSERVED**, `success`.
+> - `0x2C` → **REFUTED**, `bad_command_id`.
+>
+> Being single-source turned out to be the right thing to worry about, though
+> not for the reason expected: the risk was never a transcription error, it was
+> that `spherov2` describes a **family** of toys and one member does not
+> implement everything the family does.
+>
+> **The gate is enforced in code and is per-op.** `r2_probe.py` refuses to send
+> a gated op's CIDs below the `motion` ceiling until a real robot acknowledges
+> them, because they address the animatronic (motion) device and the `read`
+> tier's contract is that nothing sent there can move him. `notify`'s gate has
+> lifted; **`idle`'s never will on this firmware**, which is the correct
+> outcome, not a bug.
 
 **UNKNOWN — `play_animation_complete_notify` has no enable command.**
 `animatronic.py:43` is a bare tuple with no setter anywhere in upstream, unlike
@@ -289,10 +324,10 @@ the other two. Either it fires unprompted, or it is enabled by something we have
 not traced, or it does not work. Source cannot settle it: play an animation and
 read the event ring.
 
-**UNKNOWN — whether `enable_idle_animations(False)` survives a power cycle.**
-It is written as a runtime command, not obviously persisted state. The bridge
-daemon therefore reports on exit that it left idle disabled rather than silently
-restoring it — restoring would mean commanding motion on the shutdown path.
+**MOOT — whether `enable_idle_animations(False)` survives a power cycle.**
+The command does not exist on this firmware (see §7.1), so there is no state to
+persist. The daemon's exit notice about leaving idle disabled is unreachable on
+current firmware and kept only against a future revision.
 
 ## 8. Error codes
 

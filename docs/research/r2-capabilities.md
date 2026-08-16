@@ -25,7 +25,57 @@ emotion.
 | Holo projector | bit 7, **single channel** | `r2d2.py:25` |
 | Audio | 388 sound ids + volume | `io.py:60-72` |
 | Authored animations | 51 ids | `r2d2.py:417-468` |
-| Idle animations | `enable_idle_animations(bool)` | `animatronic.py:73` — **the robot has its own idle loop** |
+| ~~Idle animations~~ | ~~`enable_idle_animations(bool)`~~ | **REFUTED on hardware 2026-08-16 — R2-D2 answers `bad_command_id`. See below.** |
+
+> [!danger] `enable_idle_animations` does not exist on R2-D2
+> **REFUTED** 2026-08-16 against `D2-6F6B`: `DID 0x17 CID 0x2C` returns
+> `bad_command_id` (`0x02`), reproducibly.
+>
+> **The library and the firmware genuinely disagree. No source reading predicts
+> this.** `spherov2` **does** expose `enable_idle_animations` on R2D2:
+> `r2d2.py:14` is `class R2D2(BB9E)`, and `bb9e.py:121` assigns
+> `enable_idle_animations = Animatronic.enable_idle_animations`, so the MRO
+> (`R2D2 → BB9E → ToyV2 → Toy`) resolves it and `hasattr(R2D2,
+> 'enable_idle_animations')` is `True`. The library claims the capability; the
+> robot rejects the command.
+>
+> Also measured that session: `enable_leg_action_notify` (`0x2A`) and
+> `enable_head_reset_to_zero_notify` (`0x39`) — both named directly in
+> `r2d2.py`'s own class body — returned `success`. So the library got two of
+> three right and one wrong. **A capability the library exposes is a claim to be
+> tested, not a fact.**
+>
+> **Correction, recorded deliberately.** An earlier version of this note said
+> the opposite: that `r2d2.py` omitted the command and "the source predicted
+> this and we misread it." That was wrong — it was written after grepping
+> `r2d2.py`'s class body without checking its base class. The hardware result
+> was never in doubt; the *explanation* was, and it was published before being
+> verified. See `docs/decisions.md` on why absence-from-a-file is not absence.
+>
+> **Consequence: there is no way to turn R2's idle behaviour off.** Every plan
+> that treated idle-disable as the precondition for trustworthy survey data
+> needs rewriting — see [[S1 Capability Survey]] in the vault.
+>
+> **Open, and now the important question: does R2-D2 have a native idle loop at
+> all?** A command that does not exist is weak evidence that the behaviour does
+> not either. Measured baseline: over 30 s, connected and awake, the dome did
+> not move and R2 emitted zero unsolicited packets. That is suggestive, not
+> conclusive — 30 s is short, he may have been charging, and idle may need a
+> longer inactivity window.
+>
+> **How to read `spherov2` capability questions, correctly this time.**
+>
+> 1. A toy's capability set is its **own class body ∪ every base class**.
+>    Resolve it through the MRO (`python3 -c "from spherov2.toy.r2d2 import
+>    R2D2; print(hasattr(R2D2, 'x'))"`), never by grepping one file. Reading
+>    only `r2d2.py`'s body is what produced the wrong explanation above —
+>    `play_animation` and `stop_animation` are *not* missing from R2D2 either;
+>    they come from `bb9e.py:119-120`.
+> 2. **The resolved set is still only a library claim.** `0x2C` is the
+>    counterexample: correctly resolved as present, and refused by the robot.
+>    Presence means "worth probing", not "supported".
+> 3. Absence is a weaker hint than presence, and neither is evidence. Only a
+>    response from the robot is evidence.
 
 ### Sensors in
 
@@ -194,12 +244,19 @@ interruptible by a higher-priority event (so R2 reacts to you mid-idle), and
 each behavior needs a per-family cooldown (so the same chirp cannot recur
 within N minutes). Neither needs the cloud.
 
-**OBSERVED, and a decision we owe ourselves** — the robot ships with its own
-idle loop (`enable_idle_animations`). Leaving it **on** gives free ambient life
-but makes R2's behaviour non-deterministic and un-attributable; turning it
-**off** means every motion is ours and legible in logs. Recommendation: off
-during bring-up (so `docs/decisions.md` can record what caused what), then
-re-evaluate as a *feature* once our own idle engine exists.
+**REFUTED — this was mislabelled OBSERVED and the decision it framed is moot.**
+It previously read: *"the robot ships with its own idle loop
+(`enable_idle_animations`) … Recommendation: off during bring-up."* Both halves
+are wrong. `enable_idle_animations` is rejected by this firmware (see the
+callout at the top of this file), so idle **cannot** be turned off, and the
+premise that R2 *has* a native idle loop rested entirely on the existence of a
+command that does not work.
+
+**UNKNOWN — does R2-D2 idle on his own at all?** Baseline 2026-08-16: over 30 s,
+connected and awake, zero dome movement and zero unsolicited packets.
+Suggestive, not conclusive. If he does idle, our behaviour engine has to
+tolerate non-determinism it cannot switch off, and per-observation
+`idle_contaminated` flagging (already in `r2_survey.py`) is the mechanism.
 
 ---
 

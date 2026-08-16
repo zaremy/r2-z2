@@ -9,6 +9,7 @@ exercised by the stock interpreter.
 """
 
 import asyncio
+import json
 import sys
 import tempfile
 import time
@@ -437,6 +438,8 @@ class FakeR2:
     refusal — the permission ladder could be removed entirely and the suite
     stayed green. A fake that is too small hides the bug it should expose."""
 
+    device = "D2-TEST"   # gate evidence is bound to the robot that produced it
+
     def __init__(self, err: int = 0):
         self.calls: list[tuple] = []
         self.idle_disabled = None
@@ -493,32 +496,14 @@ def handle(payload, ceiling="read", r2=None):
 
 
 class GateControl(unittest.TestCase):
-    """Redirect the unproven-CID marker to a temp file.
-
-    Without this the suite reads mac-prototype/.bridge/, so results would flip
-    the moment a real hardware session cleared the gate — tests that change
-    meaning based on machine state are worse than no tests."""
-
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self._saved = P.VERIFIED_CIDS
-        P.VERIFIED_CIDS = Path(self._tmp.name) / "verified.json"
-
-    def tearDown(self):
-        P.VERIFIED_CIDS = self._saved
-        self._tmp.cleanup()
-
-    def mark_verified(self):
-        P._record_animatronic_cids_verified("test", "D2-TEST")
+    """Kept as a base class only so the tests below keep their names and
+    setUp contract. The unproven-CID marker it used to redirect is gone: both
+    animatronic ops are pinned to `motion` unconditionally, so there is no
+    stored state a test could contaminate or depend on."""
 
 
 class VerifiedGate(GateControl):
-    """For tests about what the gated ops DO, once the gate has been cleared.
-    The gate itself is tested separately, in TestUnprovenCidGate."""
-
-    def setUp(self):
-        super().setUp()
-        self.mark_verified()
+    pass
 
 
 class TestEventsOpTier(GateControl):
@@ -531,7 +516,6 @@ class TestEventsOpTier(GateControl):
 
     def test_events_is_tier_read(self):
         self.assertEqual(P.op_tier("events"), "read")
-        self.assertEqual(P.min_tier("events"), "read")
 
     def test_events_op_drains(self):
         r2 = FakeR2()
@@ -546,17 +530,20 @@ class TestIdleControl(VerifiedGate):
     """AC5 (the half that needs no robot): the op sends the right bytes at the
     right tier. That it actually quiets him is a hardware check."""
 
-    def test_disabling_idle_is_allowed_at_read_once_confirmed(self):
-        """#8 runs `--allow leds` and #9 runs `--allow audio`; both need idle
-        off. Permanently gating the disable behind 'motion' would strand them —
-        so the gate lifts after one confirmed hardware session, not never."""
-        for ceiling in P.TIERS:
-            resp, r2 = handle({"op": "idle", "params": {"enable": False}}, ceiling)
-            self.assertTrue(resp["ok"], f"idle-off refused at ceiling {ceiling}")
-            self.assertIn(("enable_idle_animations", False), r2.calls)
+    def test_idle_needs_motion_in_BOTH_directions(self):
+        """No longer direction-dependent, and no longer relaxable. It writes to
+        the motion device, so it sits above the read ceiling permanently —
+        and nothing needs it lower, because the command does not work at all."""
+        for ceiling in ("read", "leds", "audio"):
+            for enable in (True, False):
+                resp, r2 = handle({"op": "idle", "params": {"enable": enable}},
+                                  ceiling)
+                self.assertFalse(resp["ok"], f"idle ran at {ceiling}")
+                self.assertIn("needs tier 'motion'", resp["error"])
+                self.assertEqual(r2.calls, [])
 
     def test_idle_defaults_to_disabling(self):
-        resp, r2 = handle({"op": "idle"}, "read")
+        resp, r2 = handle({"op": "idle"}, "motion")
         self.assertTrue(resp["ok"])
         self.assertIn(("enable_idle_animations", False), r2.calls)
         self.assertFalse(resp["data"]["idle_enabled"])
@@ -572,7 +559,7 @@ class TestIdleControl(VerifiedGate):
         self.assertIn(("enable_idle_animations", True), r2.calls)
 
     def test_idle_records_the_state_it_left_r2_in(self):
-        _, r2 = handle({"op": "idle", "params": {"enable": False}}, "read")
+        _, r2 = handle({"op": "idle", "params": {"enable": False}}, "motion")
         self.assertTrue(r2.idle_disabled)
         _, r2 = handle({"op": "idle", "params": {"enable": True}}, "motion")
         self.assertFalse(r2.idle_disabled)
@@ -585,7 +572,7 @@ class TestIdleControl(VerifiedGate):
                 self.calls.append(("enable_idle_animations", enable))
                 return None
 
-        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "read",
+        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "motion",
                           Silent())
         self.assertFalse(resp["ok"])
         self.assertIn("no response", resp["error"])
@@ -595,19 +582,17 @@ class TestIdleControl(VerifiedGate):
     def test_rejected_disable_fails_loudly(self):
         """CID 0x2C is single-source and unproven — bad_command_id is a live
         possibility on this firmware, not a hypothetical."""
-        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "read",
+        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "motion",
                           FakeR2(err=0x02))
         self.assertFalse(resp["ok"])
         self.assertIn("bad_command_id", resp["error"])
         self.assertIsNone(r2.idle_disabled)
 
-    def test_tier_gate_and_handler_read_the_same_default(self):
-        """The gate authorises on one derivation and the handler acts on
-        another. If those defaults ever diverge, a read-tier request commands
-        motion — so pin them to the single shared helper."""
+    def test_idle_defaults_to_the_quiet_direction(self):
+        """An op's ceiling no longer depends on its arguments, but the default
+        direction still matters."""
         self.assertIs(P._idle_enable({}), False)
-        self.assertEqual(P._idle_tier({}), "read")
-        _, r2 = handle({"op": "idle"}, "read")
+        _, r2 = handle({"op": "idle"}, "motion")
         self.assertIn(("enable_idle_animations", False), r2.calls)
 
     def test_non_boolean_enable_is_refused_not_guessed(self):
@@ -665,13 +650,13 @@ class TestNotifyOp(VerifiedGate):
 
     def test_enables_both_notifies(self):
         resp, r2 = handle({"op": "notify",
-                           "params": {"leg": True, "head_reset": True}}, "read")
+                           "params": {"leg": True, "head_reset": True}}, "motion")
         self.assertTrue(resp["ok"])
         self.assertIn(("enable_leg_action_notify", True), r2.calls)
         self.assertIn(("enable_head_reset_notify", True), r2.calls)
 
     def test_empty_params_is_an_error_not_a_silent_noop(self):
-        resp, r2 = handle({"op": "notify"}, "read")
+        resp, r2 = handle({"op": "notify"}, "motion")
         self.assertFalse(resp["ok"])
         self.assertIn("nothing to enable", resp["error"])
         self.assertEqual(r2.calls, [])
@@ -681,25 +666,25 @@ class TestNotifyOp(VerifiedGate):
         so the op must not imply it turned anything else on. The previous
         assertion looked for a key named 'animation' that no regression would
         ever produce — it could not fail."""
-        resp, _ = handle({"op": "notify", "params": {"leg": True}}, "read")
+        resp, _ = handle({"op": "notify", "params": {"leg": True}}, "motion")
         self.assertEqual(set(resp["data"]) - {"note"}, {"leg"})
         self.assertIn("animation_complete has no enable", resp["data"]["note"])
         resp, _ = handle({"op": "notify",
-                          "params": {"leg": True, "head_reset": True}}, "read")
+                          "params": {"leg": True, "head_reset": True}}, "motion")
         self.assertEqual(set(resp["data"]) - {"note"}, {"leg", "head_reset"})
 
     def test_a_bad_param_does_not_half_execute(self):
         """Validating as it went put the leg notify on the wire and THEN
         returned ok:false — a refusal that had already changed robot state."""
         resp, r2 = handle({"op": "notify",
-                           "params": {"leg": True, "head_reset": "yes"}}, "read")
+                           "params": {"leg": True, "head_reset": "yes"}}, "motion")
         self.assertFalse(resp["ok"])
         self.assertIn("must be JSON true or false", resp["error"])
         self.assertEqual(r2.calls, [], "leg notify was sent before validation")
 
     def test_non_boolean_leg_is_refused(self):
         for bad in ["true", "false", 1, 0, None]:
-            resp, r2 = handle({"op": "notify", "params": {"leg": bad}}, "read")
+            resp, r2 = handle({"op": "notify", "params": {"leg": bad}}, "motion")
             self.assertFalse(resp["ok"], f"accepted {bad!r}")
             self.assertEqual(r2.calls, [])
 
@@ -724,7 +709,7 @@ class TestRequestEnvelope(GateControl):
             self.assertEqual(r2.calls, [])
 
     def test_non_object_params_are_refused(self):
-        resp, r2 = handle({"op": "idle", "params": [1, 2]}, "read")
+        resp, r2 = handle({"op": "idle", "params": [1, 2]}, "motion")
         self.assertFalse(resp["ok"])
         self.assertIn("'params' must be a JSON object", resp["error"])
         self.assertEqual(r2.calls, [])
@@ -782,7 +767,59 @@ class TestHandlerBasics(VerifiedGate):
         with the suite still green. `stop` is where 'default to STOP' lives."""
         resp, r2 = handle({"op": "stop"}, "read")
         self.assertTrue(resp["ok"])
+        self.assertTrue(resp["data"]["stopped"])
         self.assertEqual(r2.calls, [("stop_animation",), ("stop_audio",)])
+        self.assertEqual(resp["data"]["results"],
+                         {"animation": "success", "audio": "success"})
+
+    def test_a_rejected_stop_exits_non_zero(self):
+        """`./r2 send stop || panic` must see the failure. Returning ok:True
+        with `stopped: false` buried in the payload meant the shell saw
+        success while the body read 'R2 may still be moving'."""
+        resp, _ = handle({"op": "stop"}, "read", FakeR2(err=0x02))
+        self.assertFalse(resp["ok"], "a failed stop reported ok -> exit 0")
+        self.assertIn("bad_command_id", resp["error"])
+        self.assertIn("power him down by hand", resp["error"])
+
+    def test_stop_still_tries_audio_when_animation_raises_at_await(self):
+        class RaisesInBody(FakeR2):
+            async def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise RuntimeError("link dropped")
+
+        _, r2 = handle({"op": "stop"}, "read", RaisesInBody())
+        self.assertIn(("stop_audio",), r2.calls)
+
+    def test_stop_still_tries_audio_when_animation_raises_at_CALL_time(self):
+        """The coroutines used to be built eagerly in the loop's iterable, so
+        a failure at call time skipped the other half and leaked an un-awaited
+        coroutine — the guarantee was false in the case it existed for."""
+        class RaisesOnCall(FakeR2):
+            def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise AttributeError("no client")
+
+        _, r2 = handle({"op": "stop"}, "read", RaisesOnCall())
+        self.assertIn(("stop_audio",), r2.calls,
+                      "audio stop was skipped by a call-time failure")
+
+    def test_stop_still_tries_audio_when_animation_is_CANCELLED(self):
+        """CancelledError is not an Exception. A second Ctrl-C landing in the
+        animation stop must not leave audio playing on an unattended robot."""
+        class Cancelled(FakeR2):
+            async def stop_animation(self):
+                self.calls.append(("stop_animation",))
+                raise asyncio.CancelledError()
+
+        _, r2 = handle({"op": "stop"}, "read", Cancelled())
+        self.assertIn(("stop_audio",), r2.calls)
+
+    def test_stop_audio_op_reports_what_r2_said(self):
+        """Its sibling was hardened while it still returned a hardcoded True
+        under the same key name."""
+        resp, _ = handle({"op": "stop_audio"}, "audio", FakeR2(err=0x02))
+        self.assertFalse(resp["data"]["stopped"])
+        self.assertEqual(resp["data"]["err"], "bad_command_id")
 
     def test_motion_ops_refused_at_read_FOR_THE_RIGHT_REASON(self):
         """Assert the refusal REASON. `assertFalse(resp["ok"])` alone passed
@@ -811,7 +848,7 @@ class TestHandlerBasics(VerifiedGate):
         class Boom(FakeR2):
             async def enable_idle_animations(self, enable):
                 raise RuntimeError("radio gone")
-        resp, _ = handle({"op": "idle"}, "read", Boom())
+        resp, _ = handle({"op": "idle"}, "motion", Boom())
         self.assertFalse(resp["ok"])
         self.assertIn("RuntimeError: radio gone", resp["error"])
 
@@ -898,12 +935,31 @@ class TestStopOnExitSurvivesCancellation(unittest.TestCase):
         self.assertFalse(issubclass(asyncio.CancelledError, Exception))
         self.assertTrue(issubclass(asyncio.CancelledError, BaseException))
 
-    def test_exit_path_catches_basexception(self):
+    def test_exit_path_uses_the_same_stop_implementation(self):
+        """The epilogue used to inline its own stops and print 'stop sent'
+        without looking at either Response — so a rejected stop and a real one
+        were indistinguishable on the path that runs when nobody is watching."""
         import inspect
-        source = inspect.getsource(P.cmd_daemon)
-        epilogue = source[source.index("Default to STOP"):]
-        self.assertIn("except BaseException", epilogue)
-        self.assertIn("asyncio.shield", epilogue)
+        epilogue = inspect.getsource(P.cmd_daemon)
+        epilogue = epilogue[epilogue.index("Default to STOP"):]
+        self.assertIn("stop_everything(r2, shield=True)", epilogue)
+        self.assertNotIn("stop sent (animation + audio)", epilogue)
+
+    def test_stop_everything_shields_and_reports(self):
+        class Rejects(FakeR2):
+            pass
+        result = run(P.stop_everything(Rejects(err=0x02), shield=True))
+        self.assertFalse(result["stopped"])
+        self.assertIsNotNone(result["warning"])
+        self.assertEqual(set(result["results"]), {"animation", "audio"})
+
+    def test_stop_everything_shape_is_fixed_on_success(self):
+        """`warning` is always present (None on success). A present-or-absent
+        key forces every consumer into .get() and cannot be relied on."""
+        result = run(P.stop_everything(FakeR2()))
+        self.assertEqual(set(result), {"stopped", "results", "warning"})
+        self.assertIsNone(result["warning"])
+        self.assertTrue(result["stopped"])
 
 
 class TestNoReplyIsSilentlyDestroyed(unittest.TestCase):
@@ -1032,83 +1088,11 @@ class TestNotifyFailsLoudly(VerifiedGate):
         """A survey that silently failed to enable leg notifications would
         conclude 'R2 never emits leg_action_complete' — a wrong INFERRED
         finding entering docs/."""
-        resp, _ = handle({"op": "notify", "params": {"leg": True}}, "read",
+        resp, _ = handle({"op": "notify", "params": {"leg": True}}, "motion",
                          FakeR2(err=0x02))
         self.assertFalse(resp["ok"])
         self.assertIn("bad_command_id", resp["error"])
         self.assertIn("NOT evidence", resp["error"])
-
-
-class TestUnprovenCidGate(GateControl):
-    """`idle` and `notify` write to the MOTION device using CIDs that only one
-    implementation documents. The `read` ceiling promises nothing sent there
-    can move him, so that promise cannot rest on unproven constants: they ride
-    at `motion` until one session confirms them with a human watching."""
-
-    def test_gated_ops_need_motion_before_confirmation(self):
-        for op, params in (("idle", {"enable": False}),
-                           ("notify", {"leg": True})):
-            for ceiling in ("read", "leds", "audio"):
-                resp, r2 = handle({"op": op, "params": params}, ceiling)
-                self.assertFalse(resp["ok"], f"{op} allowed at {ceiling} unproven")
-                self.assertIn("needs tier 'motion'", resp["error"])
-                self.assertEqual(r2.calls, [], "an unproven CID reached the wire")
-
-    def test_banner_does_not_advertise_a_gated_op_as_permitted(self):
-        self.assertNotIn("idle", P.allowed_ops("read"))
-        self.assertNotIn("notify", P.allowed_ops("read"))
-        self.mark_verified()
-        self.assertIn("idle", P.allowed_ops("read"))
-        self.assertIn("notify", P.allowed_ops("read"))
-
-    def test_a_confirmed_run_at_motion_clears_the_gate(self):
-        self.assertFalse(P._animatronic_cids_verified())
-        resp, r2 = handle({"op": "idle", "params": {"enable": False}}, "motion")
-        self.assertTrue(resp["ok"])
-        self.assertIn(("enable_idle_animations", False), r2.calls)
-        self.assertTrue(P._animatronic_cids_verified(),
-                        "a confirmed motion-ceiling run should clear the gate")
-        # ...and now the cheap sessions can reach it.
-        resp, _ = handle({"op": "idle", "params": {"enable": False}}, "read")
-        self.assertTrue(resp["ok"])
-
-    def test_a_REJECTED_run_at_motion_does_NOT_clear_the_gate(self):
-        """The gate is evidence, not attendance. A bad_command_id means the
-        CID is wrong — exactly the case the gate exists for."""
-        resp, _ = handle({"op": "idle", "params": {"enable": False}}, "motion",
-                         FakeR2(err=0x02))
-        self.assertFalse(resp["ok"])
-        self.assertFalse(P._animatronic_cids_verified())
-
-    def test_an_unacknowledged_run_at_motion_does_NOT_clear_the_gate(self):
-        class Silent(FakeR2):
-            async def enable_idle_animations(self, enable):
-                self.calls.append(("enable_idle_animations", enable))
-                return None
-
-        resp, _ = handle({"op": "idle", "params": {"enable": False}}, "motion",
-                         Silent())
-        self.assertFalse(resp["ok"])
-        self.assertFalse(P._animatronic_cids_verified())
-
-    def test_a_corrupt_marker_reads_as_unverified(self):
-        """Fail closed: an unreadable marker must not grant the read tier."""
-        for junk in ("", "not json", "[]", '{"verified": false}', '{"x": 1}'):
-            P.VERIFIED_CIDS.write_text(junk)
-            self.assertFalse(P._animatronic_cids_verified(), repr(junk))
-
-    def test_enabling_idle_still_needs_motion_after_confirmation(self):
-        """Confirming the CIDs proves they work; it does not make starting
-        spontaneous motion a read-tier action."""
-        self.mark_verified()
-        resp, r2 = handle({"op": "idle", "params": {"enable": True}}, "read")
-        self.assertFalse(resp["ok"])
-        self.assertIn("needs tier 'motion'", resp["error"])
-        self.assertEqual(r2.calls, [])
-
-    def test_ungated_ops_are_unaffected(self):
-        for op in ("status", "battery", "head", "stop", "events"):
-            self.assertIn(op, P.allowed_ops("read"))
 
 
 if __name__ == "__main__":

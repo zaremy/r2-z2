@@ -93,14 +93,15 @@ CID_IO_LEDS_8BIT = 0x1C        # io.py:88  (CID 28) — marked "Untested" upstre
 
 # Robot-initiated behaviour — enable commands and the notifies they turn on.
 #
-# SINGLE-SOURCE. Every other constant in this file is corroborated by at least
-# two independent implementations (see docs/research/r2-protocol.md), but these
-# four appear ONLY in spherov2: the claude-r2d2-buddy C firmware never disables
-# idle, and freer2 only ever sends DID 0x17 CIDs 0x05/0x0D/0x0F. Treat them as
-# INFERRED until hardware confirms — that is issue #7's acceptance criterion 5.
-CID_ANIM_ENABLE_LEG_NOTIFY = 0x2A        # animatronic.py:64  (CID 42)
-CID_ANIM_ENABLE_IDLE = 0x2C              # animatronic.py:72  (CID 44)
-CID_ANIM_ENABLE_HEAD_RESET_NOTIFY = 0x39  # animatronic.py:84 (CID 57)
+# These were single-source in spherov2. Hardware has now ruled on all three
+# against D2-6F6B, 2026-08-16:
+CID_ANIM_ENABLE_LEG_NOTIFY = 0x2A        # animatronic.py:64 — OBSERVED, success
+CID_ANIM_ENABLE_HEAD_RESET_NOTIFY = 0x39  # animatronic.py:84 — OBSERVED, success
+CID_ANIM_ENABLE_IDLE = 0x2C              # animatronic.py:72 — REFUTED,
+# bad_command_id. spherov2 DOES expose enable_idle_animations on R2D2 (class
+# R2D2(BB9E), bb9e.py:121, resolved via the MRO) — the library and the firmware
+# genuinely disagree, and no source reading predicts that. Kept only so the
+# gate can re-probe it if a firmware revision ever adds the command.
 
 # Notification CIDs the robot sends unprompted.
 CID_ANIM_COMPLETE_NOTIFY = 0x11     # animatronic.py:43 — (23, 17, 0xff)
@@ -545,15 +546,13 @@ class R2:
         return await self.send(DID_POWER, CID_POWER_BATTERY_VOLTAGE)
 
     async def enable_idle_animations(self, enable: bool) -> Response | None:
-        """Turn R2's own idle loop on or off. OBSERVED in spherov2 source
-        (animatronic.py:72-73 — CID 44, payload [int(enable)]) but
-        **SINGLE-SOURCE**: no second implementation sends this CID, so it is
-        INFERRED on the wire until hardware confirms (#7 AC5). See the constant
-        block near the top of this file and docs/research/r2-protocol.md.
+        """**REFUTED — R2-D2 answers bad_command_id to this.**
 
-        This is the survey precondition. R2 fidgets on his own, so with idle
-        left on, a recorder cannot tell a spontaneous twitch from the response
-        to the command it just sent — every observation is suspect."""
+        Verified 2026-08-16 on D2-6F6B. spherov2 exposes it on R2D2 by
+        inheritance (bb9e.py:121 via class R2D2(BB9E)), so the library claims
+        the capability and the firmware refuses it. There is NO way to turn
+        R2's idle behaviour off; whether he idles at all is now an open
+        question. See docs/research/r2-capabilities.md."""
         return await self.send(DID_ANIMATRONIC, CID_ANIM_ENABLE_IDLE,
                                bytes((1 if enable else 0,)))
 
@@ -768,6 +767,9 @@ async def _op_status(r2, p):
     connected = bool(getattr(client, "is_connected", False))
     return {"connected": connected,
             "head": await r2.get_head() if connected else None,
+            # None means "never established", NOT "idle is on". On current
+            # firmware it is always None: `_op_idle` raises on the
+            # bad_command_id before it can set the flag.
             "idle_disabled": r2.idle_disabled}
 
 async def _op_battery(r2, p):
@@ -816,7 +818,11 @@ async def _op_sound(r2, p):
     return {"id": p["id"], "err": _err_of(r)}
 
 async def _op_stop_audio(r2, p):
-    await r2.stop_audio(); return {"stopped": True}
+    # Was `{"stopped": True}` unconditionally — the same hardcoded claim
+    # `stop` was hardened against, under the same key name, so one op gave a
+    # measured answer and its sibling gave a lie.
+    err = _err_of(await r2.stop_audio())
+    return {"stopped": err == "success", "err": err}
 
 async def _op_dome(r2, p):
     start, target = await bounded_head_move(
@@ -833,56 +839,89 @@ async def _op_animation(r2, p):
     r = await r2.play_animation(int(p["id"]))
     return {"id": p["id"], "err": _err_of(r)}
 
+async def stop_everything(r2, shield: bool = False) -> dict:
+    """Halt animation and audio. THE single stop implementation.
+
+    Shared by the `stop` op and the daemon's shutdown epilogue. The epilogue is
+    the most important stop in the program and it used to print "stop sent"
+    while discarding both Response objects — a rejected stop and a successful
+    one were indistinguishable, on the path where nobody is watching.
+
+    Each coroutine is created INSIDE its own try. Building them both up front
+    (as this did) meant a failure at call time skipped the other half entirely
+    and leaked an un-awaited coroutine — so the "always attempts both"
+    guarantee was exactly false in the case it existed for.
+
+    Catches BaseException because CancelledError is not an Exception: a Ctrl-C
+    landing in the first stop must not skip the second. `shield=True` keeps the
+    commands alive through that cancellation, for the shutdown path."""
+    results = {}
+    for name, make in (("animation", lambda: r2.stop_animation()),
+                       ("audio", lambda: r2.stop_audio())):
+        try:
+            call = make()
+            results[name] = _err_of(await (asyncio.shield(call) if shield else call))
+        except BaseException as e:
+            results[name] = f"{type(e).__name__}: {e}"
+    failed = {k: v for k, v in results.items() if v != "success"}
+    return {
+        "stopped": not failed,
+        "results": results,
+        # Fixed shape: always present, None on success. A present-or-absent key
+        # forces every consumer into .get() and cannot be relied on.
+        "warning": (f"STOP DID NOT FULLY SUCCEED: {failed}. R2 may still be "
+                    f"moving or playing audio — power him down by hand."
+                    if failed else None),
+    }
+
+
 async def _op_stop(r2, p):
-    """Emergency stop — always permitted at any tier."""
-    await r2.stop_animation()
-    await r2.stop_audio()
-    return {"stopped": True}
+    """Emergency stop — always permitted at any tier.
+
+    RAISES when the robot did not confirm both halts, so `./r2 send stop`
+    exits non-zero. Returning ok:True with `stopped: false` buried in the
+    payload meant `./r2 send stop || panic` saw success while the body read
+    "R2 may still be moving". The commands are already on the wire by then —
+    raising reports the outcome, it does not skip the attempt."""
+    result = await stop_everything(r2)
+    if not result["stopped"]:
+        raise RuntimeError(f"{result['warning']} (results: {result['results']})")
+    return result
 
 async def _op_events(r2, p):
     """Drain everything the robot said that nobody asked for."""
     return r2.drain_events()
 
-# ── The unproven-CID gate ────────────────────────────────────────────────────
-# `idle` (disable) and `notify` write to DID_ANIMATRONIC — the motion device —
-# using CIDs 0x2C / 0x2A / 0x39, which only spherov2 documents. The `read`
-# ceiling's whole contract is "nothing sent here can move him", and that
-# contract cannot rest on constants no second implementation corroborates.
+# ── Why `idle` and `notify` are pinned to `motion` ───────────────────────────
+# Both write to DID_ANIMATRONIC, the motion device. The `read` ceiling's
+# contract is "nothing sent here can move him", so they sit at `motion`. Flat,
+# permanent, no way to relax it.
 #
-# So they ride at `motion` until ONE session confirms them with a human
-# watching, and drop to `read` only afterwards. This makes issue #7's AC5 a
-# gate rather than a note: the ladder enforces the evidence rule instead of
-# asking the operator to remember it.
-VERIFIED_CIDS = BRIDGE / "verified-animatronic-cids.json"
-GATED_OPS = ("idle", "notify")
-
-
-def _animatronic_cids_verified() -> bool:
-    """Has a real robot acknowledged these CIDs at the motion ceiling yet?"""
-    try:
-        return bool(json.loads(VERIFIED_CIDS.read_text()).get("verified"))
-    except Exception:
-        return False   # unreadable, absent or malformed -> not verified
-
-
-def _record_animatronic_cids_verified(op: str, device: str) -> None:
-    VERIFIED_CIDS.parent.mkdir(parents=True, exist_ok=True)
-    VERIFIED_CIDS.write_text(json.dumps({
-        "verified": True,
-        "by_op": op,
-        "device": device,
-        "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "cids": {"enable_idle": CID_ANIM_ENABLE_IDLE,
-                 "enable_leg_notify": CID_ANIM_ENABLE_LEG_NOTIFY,
-                 "enable_head_reset_notify": CID_ANIM_ENABLE_HEAD_RESET_NOTIFY},
-        "note": "R2 acknowledged these at --allow motion. They may now run at "
-                "the read ceiling. Promote them to OBSERVED in "
-                "docs/research/r2-protocol.md.",
-    }, indent=2))
-
-
-def _gated_tier() -> str:
-    return "read" if _animatronic_cids_verified() else "motion"
+# There WAS a mechanism to relax it: a marker file recording which CIDs a real
+# robot had acknowledged, after which these ops dropped to `read`. It is gone,
+# for two reasons.
+#
+# 1. It bought nothing. Its whole justification was that idle-disable had to be
+#    reachable from the cheap sessions — but `enable_idle_animations` does not
+#    exist on this firmware (REFUTED, see docs/research/r2-capabilities.md), and
+#    no planned session needs `notify` below `motion` either: #8 runs at `leds`
+#    and #9 at `audio` without it, and #11 is inherently a motion session
+#    because the events it verifies are produced by animations and leg actions.
+#    Passive observation needs no enable at all — `events` captures whatever
+#    arrives regardless.
+#
+# 2. It kept getting the same bug. Three review rounds produced three distinct
+#    evidence-borrowing defects at three granularities: global (notify vouched
+#    for idle), per-op (a partial `notify` vouched for the CID it never sent),
+#    per-CID-per-device (still an unauthenticated file in the requester's own
+#    write domain, and a local process cannot start its own `--allow motion`
+#    daemon, so it was a real bypass rather than a moot one). When a mechanism
+#    reproduces its bug class at every level of refinement, the mechanism is
+#    the problem.
+#
+# The evidence itself is not lost — it belongs in docs, not in runtime
+# authorization state. CIDs 0x2A and 0x39 are recorded OBSERVED, and 0x2C
+# REFUTED, in docs/research/r2-protocol.md.
 
 
 def _idle_enable(p: dict) -> bool:
@@ -895,60 +934,36 @@ def _idle_enable(p: dict) -> bool:
     return _strict_bool(p.get("enable", False), "enable")
 
 
-def _idle_tier(p: dict) -> str:
-    """Tier depends on WHICH WAY you are pointing this op.
-
-    The issue filed `idle` as tier 'motion' flat. That would have made it
-    unreachable from the two cheapest survey sessions: #8 runs `--allow leds`
-    and #9 runs `--allow audio`, and both need native idle OFF for their
-    observations to mean anything. A precondition you cannot satisfy at the
-    tier you must run at is not a precondition.
-
-    Disabling belongs with `stop` — it makes R2 quieter, and CLAUDE.md's
-    posture is 'default to STOP'. Enabling starts spontaneous motion, so it
-    keeps the motion ceiling."""
-    return "motion" if _idle_enable(p) else _gated_tier()
-
-
-def _notify_tier(p: dict) -> str:
-    """Enabling a notification moves nothing — but see the gate above: the CIDs
-    that do it are unproven, and they address the motion device."""
-    return _gated_tier()
-
-
-def tier_note(op: str) -> str | None:
-    """One line for the banner when an op's tier is not a flat constant.
-
-    Evaluated at print time, never cached: the gate can clear mid-session, and
-    a banner that still says 'motion' after that is worse than no banner."""
-    if not callable(OPS[op][0]):
-        return None
-    verified = _animatronic_cids_verified()
-    if op == "idle":
-        return ("read to disable / motion to enable" if verified else
-                "MOTION in both directions — CIDs 0x2C/0x2A/0x39 are "
-                "single-source and unconfirmed on this robot")
-    return ("read" if verified else
-            "MOTION until its CIDs are confirmed on hardware once")
-
 async def _op_idle(r2, p):
-    """Enable or disable R2's native idle animations. Defaults to DISABLING —
-    the direction every survey session needs, and the quiet one.
+    """Enable or disable R2's native idle animations.
 
-    Fails LOUDLY when R2 does not acknowledge. This op is the precondition that
-    makes a whole survey session's observations trustworthy, and there is no
-    observation of its own to catch a silent failure — so reporting ok on a
-    timeout or an error code would hand the operator clean-looking data from a
-    robot that never stopped fidgeting. `bad_command_id` is a live possibility
-    here, not a hypothetical: CID 0x2C is single-source and unproven."""
+    **REFUTED ON HARDWARE 2026-08-16 — this command does not exist on R2-D2.**
+    `D2-6F6B` answers `bad_command_id` to DID 0x17 CID 0x2C, reproducibly.
+    `enable_idle_animations` is a BB9E command (`bb9e.py:121`); the R2-D2 toy
+    class (`r2d2.py:483-497`) never exposed it. See docs/research/
+    r2-capabilities.md.
+
+    The op is KEPT rather than deleted for two reasons: it is the record of a
+    refuted claim, and if a firmware revision ever adds the command the gate
+    will notice and promote it. It costs exactly one rejected packet to find
+    out, which is the right price for not having to trust a memory.
+
+    It fails LOUDLY, which is how the refutation was caught at all. An earlier
+    version returned ok on a timeout or an error code — that would have handed
+    over clean-looking data from a robot whose idle state was never changed."""
     enable = _idle_enable(p)
     r = await r2.enable_idle_animations(enable)
     err = _err_of(r)
     if r is None or r.err != 0:
+        hint = ("  EXPECTED: this command does not exist on R2-D2 — it is a "
+                "BB9E command (bb9e.py:121, absent from r2d2.py). Refuted on "
+                "hardware 2026-08-16. There is no way to disable R2's idle "
+                "behaviour; see docs/research/r2-capabilities.md."
+                if err == "bad_command_id" else "")
         raise RuntimeError(
             f"R2 did not confirm idle {'enable' if enable else 'disable'} "
             f"({err}). Idle state is UNKNOWN — do not trust survey "
-            f"observations from this session until it succeeds.")
+            f"observations from this session until it succeeds.{hint}")
     r2.idle_disabled = not enable
     return {"idle_enabled": enable, "err": err}
 
@@ -973,10 +988,10 @@ async def _op_notify(r2, p):
                "head_reset": r2.enable_head_reset_notify}
     out = {name: _err_of(await senders[name](value))
            for name, value in wanted.items()}
-    # Fail loudly on the same argument `idle` makes: CIDs 0x2A/0x39 are
-    # single-source and unproven, so bad_command_id is live. A survey that
-    # silently failed to enable leg notifications would conclude "R2 never
-    # emits leg_action_complete" — a wrong INFERRED finding entering docs/.
+    # Fail loudly. 0x2A/0x39 are OBSERVED working on D2-6F6B, so a rejection
+    # now means something is genuinely wrong — and a survey that silently
+    # failed to enable leg notifications would conclude "R2 never emits
+    # leg_action_complete", a wrong finding entering docs/.
     failed = {n: e for n, e in out.items() if e != "success"}
     if failed:
         raise RuntimeError(f"R2 did not confirm notify enable: {failed}. "
@@ -986,8 +1001,8 @@ async def _op_notify(r2, p):
                    "play an animation and read `events` to find out if it fires")
     return out
 
-# (tier, handler). `tier` is a string, or a callable taking the request params
-# and returning one — see _idle_tier for why that is worth the indirection.
+# (tier, handler). Every tier is a plain string: an op's ceiling never depends
+# on its arguments, and never on stored state.
 OPS = {
     "status":     ("read",   _op_status),
     "battery":    ("read",   _op_battery),
@@ -996,8 +1011,8 @@ OPS = {
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
     "events":     ("read",   _op_events),    # reading is never a hazard
-    "notify":     (_notify_tier, _op_notify),
-    "idle":       (_idle_tier, _op_idle),
+    "notify":     ("motion", _op_notify),   # writes DID_ANIMATRONIC
+    "idle":       ("motion", _op_idle),     # writes DID_ANIMATRONIC (refuted)
     "leds":       ("leds",   _op_leds),
     "sound":      ("audio",  _op_sound),
     "stop_audio": ("audio",  _op_stop_audio),
@@ -1007,29 +1022,18 @@ OPS = {
 
 
 def op_tier(op: str, params: dict | None = None) -> str:
-    """Tier this specific request needs. May raise ValueError on bad params."""
-    tier = OPS[op][0]
-    return tier(params or {}) if callable(tier) else tier
+    """The tier this op needs. Total: it cannot raise, and it cannot depend on
+    the request or on anything stored on disk.
 
-
-def min_tier(op: str) -> str:
-    """Lowest ceiling at which this op could run RIGHT NOW — for the banner.
-
-    Evaluated with empty params, which is each callable tier's cheapest
-    direction, so the banner never advertises an op the ceiling would refuse.
-    Anything that raises resolves to the strictest tier: an op whose
-    requirement we cannot determine is not an op to advertise as permitted."""
-    tier = OPS[op][0]
-    if isinstance(tier, str):
-        return tier
-    try:
-        return tier({})
-    except Exception:
-        return TIERS[-1]
+    It used to do both, and both were mistakes. Params-dependent tiers meant
+    the authorisation check and the handler each derived the answer separately;
+    a marker file meant authorisation state lived where the requester could
+    write it. `params` is kept only so call sites read symmetrically."""
+    return OPS[op][0]
 
 
 def allowed_ops(ceiling: str) -> list[str]:
-    return sorted(o for o in OPS if _tier_ok(ceiling, min_tier(o)))
+    return sorted(o for o in OPS if _tier_ok(ceiling, OPS[o][0]))
 
 
 async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
@@ -1080,15 +1084,6 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
         log(f"[{ts}]   !! {error}")
         return {"ok": False, "op": op, "error": error}
     log(f"[{ts}]   -> {json.dumps(data)[:160]}")
-    # The gate clears itself. Reaching here means R2 ACKNOWLEDGED the command
-    # (both gated ops now raise on a timeout or an error code), and `needed`
-    # was 'motion', so a human chose that ceiling deliberately. That is exactly
-    # the evidence the gate was waiting for.
-    if op in GATED_OPS and needed == "motion" and not _animatronic_cids_verified():
-        _record_animatronic_cids_verified(op, str(getattr(r2, "device", "?")))
-        log(f"[{ts}]   ** R2 acknowledged {op} — CIDs 0x2C/0x2A/0x39 confirmed. "
-            f"They now run at the 'read' ceiling. Promote them to OBSERVED in "
-            f"docs/research/r2-protocol.md.")
     return {"ok": True, "op": op, "data": data}
 
 
@@ -1104,15 +1099,6 @@ async def cmd_daemon(args) -> int:
     print(f"  allowed ops: {', '.join(allowed)}")
     if ceiling != "motion":
         print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
-    # Ops whose tier is not a flat constant would otherwise read as a plain
-    # allow above, which overstates what the ceiling actually permits.
-    for op in sorted(o for o in OPS if callable(OPS[o][0])):
-        print(f"  note       : '{op}' is {tier_note(op)}")
-    if not _animatronic_cids_verified():
-        print("\n  GATE: CIDs 0x2C/0x2A/0x39 (idle, notify) are single-source\n"
-              "        and have never been acknowledged by this robot. They\n"
-              "        require --allow motion until one session confirms them,\n"
-              "        then they drop to 'read' automatically. See #7 AC5.")
     print(f"  queue      : {BRIDGE}")
     print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
     print(f"{'='*62}\n")
@@ -1126,6 +1112,7 @@ async def cmd_daemon(args) -> int:
         r2.start_keepalive()
         print(f"\n>>> READY — holding session with {hits[0].name}. "
               f"Every command is logged below.\n")
+
         last = heartbeat = time.monotonic()
         try:
             while True:
@@ -1173,13 +1160,14 @@ async def cmd_daemon(args) -> int:
             # straight through this block and skip the stop entirely, leaving
             # an animation and audio running on an unattended robot. shield()
             # keeps the stops themselves alive through that cancellation.
-            try:
-                await asyncio.shield(r2.stop_animation())
-                await asyncio.shield(r2.stop_audio())
-                print("stop sent (animation + audio)")
-            except BaseException as e:
-                print(f"stop on exit failed: {type(e).__name__}: {e}")
-                print("!! R2 MAY STILL BE MOVING — power him down manually")
+            # Same implementation as the `stop` op, so this path cannot drift
+            # away from it — and it now reports what R2 ACTUALLY said. R2 is
+            # known to reject at least one animatronic CID (0x2C), so "the
+            # command returned" and "the robot stopped" are not the same claim.
+            halt = await stop_everything(r2, shield=True)
+            print(f"stop on exit: {json.dumps(halt['results'])}")
+            if halt["warning"]:
+                print(f"!! {halt['warning']}")
             if r2.idle_disabled:
                 # Deliberately NOT restored here. Re-enabling idle is a command
                 # that starts spontaneous motion, and this is the path that
