@@ -181,8 +181,10 @@ class R2:
         self._waiters: dict[tuple[int, int, int], asyncio.Future] = {}
         self._last_tx = 0.0
         self._keepalive: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def __aenter__(self) -> "R2":
+        self._loop = asyncio.get_running_loop()
         await self.client.connect()
         self._log(f"connected to {self.device.name} [{self.device.address}]")
         # OBSERVED: BB9E._handshake writes the anti-DoS magic BEFORE the main
@@ -211,6 +213,12 @@ class R2:
     def _on_notify(self, _char, data: bytearray) -> None:
         # R2 may deliver a packet across several notifications, or even
         # byte-by-byte (claude-r2d2-buddy/main/r2d2_central.c:68).
+        #
+        # This runs on bleak's CoreBluetooth dispatch queue, NOT the asyncio
+        # loop thread. Completing a Future directly from here is thread-unsafe
+        # and can wedge the loop, which is exactly what it did: the daemon's
+        # poll loop went silent while the delegate sat in sock_send on a full
+        # self-pipe. Hand every completion back via call_soon_threadsafe.
         for b in data:
             if not self._rx and b != SOP:
                 continue
@@ -219,13 +227,20 @@ class R2:
                 raw, self._rx = bytes(self._rx), bytearray()
                 try:
                     resp = parse(raw)
-                except ValueError as e:
-                    self._log(f"undecodable rx {raw.hex()}: {e}")
+                except Exception as e:          # not just ValueError — a short
+                    self._log(f"undecodable rx {raw.hex()}: {e}")   # packet raises IndexError
                     continue
                 self._log(f"rx {resp}")
-                fut = self._waiters.pop((resp.did, resp.cid, resp.seq), None)
-                if fut and not fut.done():
-                    fut.set_result(resp)
+                self._complete(resp)
+
+    def _complete(self, resp: "Response") -> None:
+        fut = self._waiters.pop((resp.did, resp.cid, resp.seq), None)
+        if fut is None or fut.done():
+            return
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+        loop.call_soon_threadsafe(lambda: fut.done() or fut.set_result(resp))
 
     async def send(self, did: int, cid: int, data: bytes = b"",
                    expect: bool = True, timeout: float = 5.0) -> Response | None:
@@ -267,7 +282,12 @@ class R2:
         async def loop():
             while True:
                 await asyncio.sleep(period)
-                await self.wake()
+                try:
+                    await self.wake()
+                except Exception as e:
+                    # A dropped keepalive must never take the session down —
+                    # the poll loop keeps serving and reconnect is handled above.
+                    self._log(f"keepalive error (continuing): {e}")
         self._keepalive = asyncio.create_task(loop())
 
     async def set_leds(self, mapping: dict[int, int]) -> Response | None:
@@ -561,7 +581,7 @@ async def cmd_daemon(args) -> int:
         r2.start_keepalive()
         print(f"\n>>> READY — holding session with {hits[0].name}. "
               f"Every command is logged below.\n")
-        last = time.monotonic()
+        last = heartbeat = time.monotonic()
         try:
             while True:
                 if time.monotonic() - last > args.idle_timeout:
@@ -570,6 +590,11 @@ async def cmd_daemon(args) -> int:
                     break
                 reqs = sorted(REQ_DIR.glob("*.json"))
                 if not reqs:
+                    # Heartbeat, so a wedged loop is visible instead of silent.
+                    if time.monotonic() - heartbeat > 30:
+                        heartbeat = time.monotonic()
+                        print(f"[{time.strftime('%H:%M:%S')}] idle, polling "
+                              f"{REQ_DIR}", flush=True)
                     await asyncio.sleep(0.2); continue
                 for req in reqs:
                     try:

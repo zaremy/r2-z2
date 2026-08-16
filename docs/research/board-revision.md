@@ -85,7 +85,7 @@ included in this repository yet"). Software probe is the reliable method.
 | `examples/arduino-v2/*` | ❌ | ✅ | CO5300 + CST820 |
 | `Firmware/…-V2-FactoryXiaozhi_260601.bin` | ❌ | ✅ | Checked-in V2 factory image — the recovery path |
 | `Firmware/…-FactoryXiaozhi_250805.bin` | ✅ | ❌ | Original factory image |
-| **`vthinkxie` `-e waveshare-esp32s3-touch-amoled-1-8`** | ✅ | **❌ DO NOT FLASH** | See below |
+| **`vthinkxie` `-e waveshare-esp32s3-touch-amoled-1-8`** | ✅ **likely correct for our unit** | ❌ DO NOT FLASH | Listing says V1 — see the note at the top; still gated on the I²C probe |
 
 ### Why vthinkxie's 1.8" build is V1-only
 
