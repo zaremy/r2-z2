@@ -92,6 +92,39 @@ Then, from anywhere:
 
 Responses print as JSON. The queue lives in `.bridge/` (gitignored).
 
+## Survey harness — `r2_survey.py`
+
+Tracks the S1 capability survey ([#5](https://github.com/zaremy/r2-z2/issues/5)).
+**It does not fire anything** — it emits the command for the next item and you
+run it, deliberately, one at a time. That is enforced by a test that sabotages
+`subprocess`, `os.system`, `os.popen` and `socket` and requires every command to
+still work, so the constraint survives future edits.
+
+```bash
+./r2s manifest --tier leds       # 104 items total; filter per session
+./r2s next --count 5             # prints commands — does NOT run them
+./r2s record led:0 --json '{"outcome":"played","energy_cost_class":"low",
+                            "wear_class":"none","recommended_cooldown_s":0}'
+./r2s status                     # progress per tier
+./r2s export                     # markdown table (blocked while attempts are unresolved)
+```
+
+State lives in `.survey/` (gitignored). `attempts.jsonl` is append-only and
+fsync'd per write and is the source of truth; `state.json` is a cache you can
+delete and rebuild with `./r2s rebuild`.
+
+If a session aborts — battery, dropped link, daemon timeout — mark what was
+in flight so it cannot masquerade as observed:
+
+```bash
+./r2s resolve anim:8 --state aborted_unknown --reason "battery died"
+```
+
+An `aborted_unknown` on an animation that may drive the body should be moved to
+`unsafe_replay_review`; `next` then refuses to re-emit it until you decide,
+because a blind retry of a driving id while you are not braced for it is the
+hazard the whole safety model exists to prevent.
+
 ## Safe bring-up sequence
 
 Each step is a separate command **on purpose**. Do not skip ahead, and do not

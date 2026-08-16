@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# r2s — survey harness. No BLE, so no app-bundle wrapper needed (unlike ./r2).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$HERE/.venv/bin/python" "$HERE/r2_survey.py" "$@"
