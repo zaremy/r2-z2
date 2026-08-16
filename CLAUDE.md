@@ -62,9 +62,47 @@ little entity is continuously present in the household.
   `mac-prototype/r2_probe.py` was validated three ways (spherov2, the
   `claude-r2d2-buddy` C firmware, and a clean-room trace) — keep that bar.
 
+## Where things are written
+
+Two homes, and the split is not negotiable — putting a doc in the wrong one is
+how plans go stale and decisions get lost.
+
+**Obsidian vault — `R2Z2-vault/R2Z2-vault/` (gitignored, local):** planning and
+thinking. The roadmap and per-stage notes, session logs, raw experiment results
+from hardware sessions, open questions, behavior designs in progress, hardware
+quirk notes, upstream reading notes.
+
+**Repo `docs/` (committed, PR-reviewed):** things that must survive a fresh
+clone and travel with the code. `intent.md`, `architecture.md`, `decisions.md`,
+and `research/*.md` findings cited to `file:line`.
+
+> **Rule of thumb: if it cites code, it goes in the repo. If it is thinking, it
+> goes in the vault.** When a vault note hardens into a decision, write the ADR
+> in `docs/decisions.md` — the vault note is the reasoning, the ADR is the ruling.
+
+Consequence to accept knowingly: vault content is **not** in git, so it is not
+backed up by the remote and not reviewable in a PR. That is the deliberate
+trade for a fast, linkable thinking space.
+
+### Writing for Obsidian
+
+Vault notes are Obsidian-native, not plain markdown dropped in a folder:
+
+- **YAML frontmatter on every note** — `type`, `status`, `updated`, `tags`.
+  Keep `updated` honest; it is the only staleness signal.
+- **`[[Wikilinks]]`, not relative paths.** Backlinks and the graph are the
+  point. A link to a note that does not exist yet is fine — it marks work.
+- **Exit criteria and checklists are `- [ ]` tasks**, so progress is visible and
+  searchable rather than prose to re-read.
+- **Hierarchical tags** — `#stage/s1`, `#status/blocked`, `#track/robot`.
+- **Callouts** (`> [!warning]`, `> [!info]`) for the things that bite.
+- Conventions live in `Meta/Vault Conventions.md`; templates in `Templates/`.
+  Only core plugins are enabled — do not write notes that require Dataview.
+
 ## Working agreements
 
-- `research/external/` is gitignored. Never vendor a clone into our history.
+- `reference/` holds the upstream clones and is gitignored. Never vendor a
+  clone into our history.
 - Prefer adding a project-side tool over patching an external clone.
 - Prototype in Python on the Mac; do **not** assume Python code ports to the
   ESP32. The Mac layer exists to learn behavior abstractions, not to be moved.

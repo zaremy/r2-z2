@@ -21,5 +21,5 @@ ui/        status · settings · diagnostics · hardware test
 ```
 
 The first real file will be a port of
-`research/external/claude-r2d2-buddy/main/r2d2_central.c` — retargeted C6→S3,
+`reference/claude-r2d2-buddy/main/r2d2_central.c` — retargeted C6→S3,
 `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` 2→1, with `nus_peripheral.c` dropped (D-006).

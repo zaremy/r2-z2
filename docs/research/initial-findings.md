@@ -144,6 +144,14 @@ Settings approval that a non-interactive session cannot produce.
 **Unblocking is one action by you**, documented in `mac-prototype/README.md`:
 run `./r2 scan` once from Terminal and approve the Bluetooth prompt.
 
+**Resolved, 2026-08-15.** The grant was made and discovery works —
+`D2-6F6B`, 1 match out of 13 BLE devices seen. Scope of what that proves is
+narrow but real: the launcher, the bundle workaround, bleak on Python 3.14, and
+the `D2-` name filter all work end to end. **No handshake and no command has
+reached the robot yet**, so everything in `r2-protocol.md` marked OBSERVED is
+still verified only against other implementations. `./r2 info` is the first
+test that changes that.
+
 ## Environment recorded
 
 | | |
