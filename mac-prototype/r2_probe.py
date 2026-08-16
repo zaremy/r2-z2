@@ -26,10 +26,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import math
+import os
 import struct
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
@@ -393,16 +397,40 @@ async def cmd_sound(args) -> int:
     return await with_r2(args, body)
 
 
+MAX_HEAD_MOVE = 45.0   # degrees of travel permitted in one commanded move
+HEAD_MIN, HEAD_MAX = -162.0, 182.0  # r2d2.py:471 extended_sensors r2_head_angle
+
+
+async def bounded_head_move(r2: "R2", *, delta: float | None = None,
+                            angle: float | None = None) -> tuple[float, float]:
+    """Move the dome, bounding the DISTANCE TRAVELLED, not the destination.
+
+    `set_head_position` is absolute, and the dome does not rest at 0 — this unit
+    was found at 103°. Clamping the target to ±45 would therefore command a
+    ~150° swing as a "small test". Bound the travel instead, from a freshly read
+    position. Returns (start, commanded_target)."""
+    start = await r2.get_head()
+    if start is None:
+        raise RuntimeError("could not read head position; refusing to move blind")
+    target = start + delta if delta is not None else angle
+    travel = target - start
+    if abs(travel) > MAX_HEAD_MOVE:
+        target = start + math.copysign(MAX_HEAD_MOVE, travel)
+    target = max(HEAD_MIN, min(HEAD_MAX, target))
+    await r2.set_head(target)
+    return start, target
+
+
 async def cmd_dome(args) -> int:
-    angle = max(-45.0, min(45.0, args.angle))  # probe-level clamp, well inside -162/182
     async def body(r2: R2):
-        start = await r2.get_head()
-        print(f"\nhead at {start}; moving to {angle}, then back to 0")
-        await r2.set_head(angle)
-        await asyncio.sleep(1.5)
-        await r2.set_head(0.0)
-        await asyncio.sleep(1.5)
-        print(f"head now {await r2.get_head()}")
+        start, target = await bounded_head_move(r2, delta=args.delta)
+        print(f"\nhead was {start:.1f}° → commanded {target:.1f}° "
+              f"(travel {target - start:+.1f}°, capped at ±{MAX_HEAD_MOVE:.0f}°)")
+        await asyncio.sleep(2.0)
+        print(f"head now {await r2.get_head():.1f}°; returning")
+        await bounded_head_move(r2, angle=start)
+        await asyncio.sleep(2.0)
+        print(f"head back at {await r2.get_head():.1f}°")
     return await with_r2(args, body)
 
 
@@ -414,6 +442,201 @@ async def cmd_animation(args) -> int:
         await r2.stop_animation()
         print("animation stopped")
     return await with_r2(args, body)
+
+
+# ── Bridge daemon ────────────────────────────────────────────────────────────
+# macOS attributes a Bluetooth request to the *responsible* process. Under
+# Claude Code that is claude.app (com.anthropic.claude-code), whose bundle has
+# no NSBluetoothAlwaysUsageDescription, so any child touching CoreBluetooth is
+# killed — regardless of R2Probe.app carrying the key. Terminal.app is an Apple
+# system app and is exempt, which is why it works there.
+#
+# So: the human starts `./r2 daemon` once from Terminal. It holds one R2
+# session and serves ops from a file queue. An agent (or any script) drives it
+# with `./r2 send <op>` without needing Bluetooth itself.
+
+BRIDGE = Path(__file__).parent / ".bridge"
+REQ_DIR, RESP_DIR = BRIDGE / "requests", BRIDGE / "responses"
+
+# Permission ladder — mirrors the fixed bring-up order in CLAUDE.md:
+# read-only → LEDs → audio → small dome → stance → locomotion.
+# The daemon is started with a ceiling; ops above it are refused, not executed.
+TIERS = ["read", "leds", "audio", "motion"]
+
+
+def _tier_ok(ceiling: str, needed: str) -> bool:
+    return TIERS.index(needed) <= TIERS.index(ceiling)
+
+
+async def _op_status(r2, p):
+    return {"connected": r2 is not None, "head": await r2.get_head() if r2 else None}
+
+async def _op_battery(r2, p):
+    r = await r2.battery_voltage()
+    return {"raw": r.data.hex() if r else None,
+            "volts": int.from_bytes(r.data, "big") / 100 if r and r.data else None}
+
+async def _op_head(r2, p):
+    return {"degrees": await r2.get_head()}
+
+async def _op_read_char(r2, p):
+    """Read any GATT characteristic — for chasing 00020004 and the standard
+    Battery Service 00002a19, neither of which any upstream repo documents."""
+    val = await r2.client.read_gatt_char(p["uuid"])
+    return {"uuid": p["uuid"], "hex": bytes(val).hex(), "int": int.from_bytes(val, "big"),
+            "bytes": list(val)}
+
+async def _op_gatt(r2, p):
+    return {"services": [{"uuid": s.uuid,
+                          "chars": [{"uuid": c.uuid, "props": list(c.properties)}
+                                    for c in s.characteristics]}
+                         for s in r2.client.services]}
+
+async def _op_leds(r2, p):
+    await r2.set_leds({int(k): int(v) for k, v in p["channels"].items()})
+    return {"set": p["channels"]}
+
+async def _op_sound(r2, p):
+    if "volume" in p:
+        await r2.set_volume(int(p["volume"]))
+    r = await r2.play_sound(int(p["id"]), int(p.get("mode", 0)))
+    return {"id": p["id"], "err": r.ERRORS.get(r.err) if r else "no response"}
+
+async def _op_stop_audio(r2, p):
+    await r2.stop_audio(); return {"stopped": True}
+
+async def _op_dome(r2, p):
+    start, target = await bounded_head_move(
+        r2, delta=p.get("delta"), angle=p.get("angle"))
+    await asyncio.sleep(float(p.get("settle", 2.0)))
+    return {"start": start, "commanded": target, "now": await r2.get_head()}
+
+async def _op_animation(r2, p):
+    r = await r2.play_animation(int(p["id"]))
+    return {"id": p["id"], "err": r.ERRORS.get(r.err) if r else "no response"}
+
+async def _op_stop(r2, p):
+    """Emergency stop — always permitted at any tier."""
+    await r2.stop_animation()
+    await r2.stop_audio()
+    return {"stopped": True}
+
+OPS = {
+    "status":     ("read",   _op_status),
+    "battery":    ("read",   _op_battery),
+    "head":       ("read",   _op_head),
+    "read_char":  ("read",   _op_read_char),
+    "gatt":       ("read",   _op_gatt),
+    "stop":       ("read",   _op_stop),      # always allowed: default to STOP
+    "leds":       ("leds",   _op_leds),
+    "sound":      ("audio",  _op_sound),
+    "stop_audio": ("audio",  _op_stop_audio),
+    "dome":       ("motion", _op_dome),
+    "animation":  ("motion", _op_animation),
+}
+
+
+async def cmd_daemon(args) -> int:
+    for d in (REQ_DIR, RESP_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    for stale in list(REQ_DIR.glob("*.json")) + list(RESP_DIR.glob("*.json")):
+        stale.unlink()
+
+    ceiling = args.allow
+    allowed = [o for o, (t, _) in OPS.items() if _tier_ok(ceiling, t)]
+    print(f"\n{'='*62}\n  r2 bridge daemon — permission ceiling: {ceiling.upper()}")
+    print(f"  allowed ops: {', '.join(sorted(allowed))}")
+    if ceiling != "motion":
+        print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
+    print(f"  queue      : {BRIDGE}")
+    print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
+    print(f"{'='*62}\n")
+
+    hits, _ = await find(args.timeout, args.name)
+    if not hits:
+        print("R2-D2 not found."); return 1
+
+    async with R2(hits[0], verbose=args.verbose) as r2:
+        await r2.wake()
+        r2.start_keepalive()
+        print(f"\n>>> READY — holding session with {hits[0].name}. "
+              f"Every command is logged below.\n")
+        last = time.monotonic()
+        try:
+            while True:
+                if time.monotonic() - last > args.idle_timeout:
+                    print(f"\n[{time.strftime('%H:%M:%S')}] idle "
+                          f"{args.idle_timeout:.0f}s — disconnecting (default to stop)")
+                    break
+                reqs = sorted(REQ_DIR.glob("*.json"))
+                if not reqs:
+                    await asyncio.sleep(0.2); continue
+                for req in reqs:
+                    try:
+                        payload = json.loads(req.read_text())
+                    except Exception as e:
+                        payload = {"op": "<unparseable>", "_err": str(e)}
+                    req.unlink(missing_ok=True)
+                    last = time.monotonic()
+                    op = payload.get("op")
+                    ts = time.strftime("%H:%M:%S")
+
+                    if op not in OPS:
+                        print(f"[{ts}] REFUSED unknown op {op!r}")
+                        resp = {"ok": False, "error": f"unknown op {op!r}",
+                                "allowed": sorted(allowed)}
+                    elif not _tier_ok(ceiling, OPS[op][0]):
+                        need = OPS[op][0]
+                        print(f"[{ts}] REFUSED {op} — needs tier '{need}', "
+                              f"daemon ceiling is '{ceiling}'")
+                        resp = {"ok": False, "error":
+                                f"op '{op}' needs tier '{need}'; daemon started "
+                                f"with --allow {ceiling}. Restart the daemon to raise it."}
+                    else:
+                        print(f"[{ts}] EXEC {op} {json.dumps(payload.get('params', {}))}")
+                        try:
+                            data = await OPS[op][1](r2, payload.get("params", {}))
+                            resp = {"ok": True, "op": op, "data": data}
+                            print(f"[{ts}]   -> {json.dumps(data)[:160]}")
+                        except Exception as e:
+                            resp = {"ok": False, "op": op,
+                                    "error": f"{type(e).__name__}: {e}"}
+                            print(f"[{ts}]   !! {resp['error']}")
+                    (RESP_DIR / req.name).write_text(json.dumps(resp, indent=2))
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            print("\n\ninterrupted — stopping R2 before disconnect")
+        finally:
+            # Default to STOP: never leave audio or an animation running.
+            try:
+                await r2.stop_animation(); await r2.stop_audio()
+                print("stop sent (animation + audio)")
+            except Exception as e:
+                print(f"stop on exit failed: {e}")
+    return 0
+
+
+async def cmd_send(args) -> int:
+    """Queue one op for the daemon and print its response."""
+    if not REQ_DIR.exists():
+        print("bridge not running — start it from Terminal:\n"
+              "  cd ~/Projects/R2Z2/mac-prototype && ./r2 daemon --allow read")
+        return 1
+    params = json.loads(args.params) if args.params else {}
+    rid = f"{time.time():.6f}".replace(".", "") + ".json"
+    (REQ_DIR / rid).write_text(json.dumps({"op": args.op, "params": params}))
+    resp_path = RESP_DIR / rid
+    deadline = time.monotonic() + args.wait
+    while time.monotonic() < deadline:
+        if resp_path.exists():
+            resp = json.loads(resp_path.read_text())
+            resp_path.unlink(missing_ok=True)
+            print(json.dumps(resp, indent=2))
+            return 0 if resp.get("ok") else 2
+        await asyncio.sleep(0.15)
+    (REQ_DIR / rid).unlink(missing_ok=True)
+    print(json.dumps({"ok": False, "error": f"no response in {args.wait}s — "
+                      "is the daemon running and connected?"}, indent=2))
+    return 1
 
 
 def main() -> int:
@@ -444,8 +667,25 @@ def main() -> int:
 
     dome = sub.add_parser("dome", parents=[common],
                           help="small dome rotation — FIRST MOVEMENT TEST")
-    dome.add_argument("--angle", type=float, default=20.0, help="degrees, clamped to +/-45")
+    dome.add_argument("--delta", type=float, default=20.0,
+                      help="degrees to turn FROM the current position; travel "
+                           "capped at +/-45 (the dome does not rest at 0)")
     dome.set_defaults(fn=cmd_dome)
+
+    dae = sub.add_parser("daemon", parents=[common],
+                         help="hold a session and serve ops from the file queue")
+    dae.add_argument("--allow", choices=TIERS, default="read",
+                     help="permission ceiling (default: read-only)")
+    dae.add_argument("--idle-timeout", type=float, default=900.0,
+                     help="disconnect after this many idle seconds")
+    dae.add_argument("--verbose", action="store_true", help="log every BLE packet")
+    dae.set_defaults(fn=cmd_daemon)
+
+    snd2 = sub.add_parser("send", help="queue one op for a running daemon")
+    snd2.add_argument("op", help=f"one of: {', '.join(sorted(OPS))}")
+    snd2.add_argument("--params", help="JSON object of op parameters")
+    snd2.add_argument("--wait", type=float, default=30.0, help="seconds to wait")
+    snd2.set_defaults(fn=cmd_send)
 
     anim = sub.add_parser("animation", parents=[common], help="play one authored animation")
     anim.add_argument("--id", type=int, default=35, help="animation id (default 35 WWM_CURIOUS)")

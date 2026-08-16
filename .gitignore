@@ -37,3 +37,6 @@ scratch/
 
 # Generated launcher bundle — rebuild with `mac-prototype/r2 --rebuild`
 mac-prototype/tools/R2Probe.app/
+
+# Bridge daemon queue — runtime only
+mac-prototype/.bridge/
