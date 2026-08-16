@@ -21,13 +21,18 @@ it is gitignored rather than tracked, so notes there stay local.
 
 ---
 
-## D-002 — `research/external/` is gitignored; clones are never vendored
+## D-002 — `reference/` is gitignored; clones are never vendored
 **2026-08-15**
 
 Six upstream repos (3800+ files, mixed MIT/Apache-2.0) are research inputs, not
 dependencies. Vendoring them would bloat history and blur provenance. Exact SHAs
 are pinned in [research/source-map.md](research/source-map.md); the clone
 commands are in the root README.
+
+They are kept **inside** the project at `reference/` rather than somewhere
+external, so they are one `grep -r` away while working. Moved there from
+`research/external/` on 2026-08-15 — same policy, shorter path, and the
+now-empty `research/` tree removed so `docs/research/` is the only "research".
 
 *Reversed by:* needing to fork one for real, at which point it becomes a proper
 submodule or dependency with its own decision entry.

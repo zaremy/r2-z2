@@ -1,6 +1,6 @@
 # Source Map — external repositories
 
-All clones live in `research/external/` (gitignored). SHAs captured
+All clones live in `reference/` (gitignored). SHAs captured
 2026-08-15. Every claim elsewhere in `docs/research/` cites these by
 `repo/path/file.ext:line`.
 

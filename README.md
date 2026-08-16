@@ -33,7 +33,7 @@ docs/
 mac-prototype/         Python + bleak; proves the interaction model
 firmware/              ESP32-S3 backpack (not started)
 tools/                 project utilities
-research/external/     upstream clones — gitignored, never vendored
+reference/             upstream clones — gitignored, never vendored
 ```
 
 ## Quick start
@@ -45,10 +45,11 @@ cd mac-prototype && ./r2 scan
 Requires a one-time macOS Bluetooth grant — see
 [mac-prototype/README.md](mac-prototype/README.md).
 
-To restore the external research clones (they are not in git):
+Upstream clones live in `reference/` for easy grepping. They are gitignored —
+restore them with:
 
 ```bash
-mkdir -p research/external && cd research/external
+mkdir -p reference && cd reference
 git clone https://github.com/ccb/sphero-r2d2.git
 git clone https://github.com/baoshi/claude-r2d2-buddy.git
 git clone https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.8.git

@@ -1,5 +1,6 @@
-# External research clones — never vendored into our history
-research/external/
+# Upstream clones kept locally for easy reference — never vendored into our
+# history. Restore with the commands in README.md; SHAs in docs/research/source-map.md
+reference/
 
 # Obsidian vault — local durable KB / governance notes, not project source
 R2Z2-vault/

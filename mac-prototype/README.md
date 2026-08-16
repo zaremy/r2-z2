@@ -12,7 +12,7 @@ python3.14 -m venv .venv && .venv/bin/pip install bleak
 
 Installed: **bleak 3.0.2** on **Python 3.14.6**.
 
-## ⚠️ One-time Bluetooth permission — needed before the first scan
+## ⚠️ One-time Bluetooth permission (done — kept for rebuilds and new machines)
 
 Running `r2_probe.py` under plain `.venv/bin/python` **crashes with SIGABRT**
 before it reaches the radio:
@@ -88,11 +88,12 @@ Safety properties built in:
 
 ## Known gaps
 
-- **Never run against the physical robot** — blocked on the permission grant
-  above. Nothing in `../docs/research/r2-protocol.md` marked OBSERVED has been
-  confirmed on hardware.
+- **Discovery works; nothing beyond it has been tried.** `./r2 scan` finds
+  `D2-6F6B`. No handshake, no command has reached the robot, so nothing in
+  `../docs/research/r2-protocol.md` marked OBSERVED is confirmed on hardware
+  yet. `./r2 info` is the next step.
 - No sensor streaming yet.
 - No reconnect logic; the probe is one-shot by design.
-- `research/external/sphero-r2d2` pins `bleak>=1.1.1` and we run 3.0.2. Not an
+- `reference/sphero-r2d2` pins `bleak>=1.1.1` and we run 3.0.2. Not an
   issue for the probe (it does not import spherov2), but relevant if that
   library is ever used directly.
