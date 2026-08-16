@@ -40,3 +40,6 @@ mac-prototype/tools/R2Probe.app/
 
 # Bridge daemon queue — runtime only
 mac-prototype/.bridge/
+
+# Survey harness state — runtime only
+mac-prototype/.survey/
