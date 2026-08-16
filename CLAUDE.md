@@ -1,4 +1,4 @@
-# r2-pet — persistent AI mind for a Sphero R2-D2
+# r2-z2 — persistent AI mind for a Sphero R2-D2
 
 ## Goal
 

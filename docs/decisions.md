@@ -4,14 +4,18 @@ Newest last. Each entry: what was decided, why, what would reverse it.
 
 ---
 
-## D-001 — Initialize in place in `R2Z2/`, working name `r2-pet`
+## D-001 — Initialize in place in `R2Z2/`, project name `r2-z2`
 **2026-08-15**
 
 The directory contained only `.DS_Store` and `R2Z2-vault/` (an Obsidian vault
 with a single `Welcome.md`). Nothing to protect, no existing repo. Initialized
-git here rather than nesting an `r2-pet/` subdirectory.
+git here rather than nesting a project subdirectory.
 
-The vault is left untouched and is available as durable KB/governance space.
+Published as `github.com/zaremy/r2-z2` (private). The brief's working name was
+`r2-pet`; renamed to `r2-z2` to match the directory and the vault.
+
+The vault is left untouched and is available as durable KB/governance space;
+it is gitignored rather than tracked, so notes there stay local.
 
 *Reversed by:* nothing likely.
 

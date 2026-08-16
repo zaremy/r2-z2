@@ -1,4 +1,4 @@
-# r2-pet
+# r2-z2
 
 Turning a Sphero R2-D2 into a persistent AI companion — a resident entity, not
 a remote-controlled toy.

@@ -26,7 +26,7 @@ rebuild() {
   rm -rf "$APP"; mkdir -p "$HERE/tools"
   cp -R "$fw/Resources/Python.app" "$APP"
   /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string 'R2-D2 bring-up probe needs Bluetooth LE to discover and control the Sphero R2-D2.'" "$APP/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.r2pet.r2probe" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.r2z2.r2probe" "$APP/Contents/Info.plist"
   codesign -f -s - --deep "$APP"
   echo "rebuilt $APP"
 }
