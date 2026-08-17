@@ -48,6 +48,28 @@ little entity is continuously present in the household.
 - **Do not flash firmware built for another board revision.** Confirm the
   display/touch controller pair before flashing anything third-party.
 
+## Hardware session facts that cost time to learn
+
+- **The agent cannot start the BLE daemon.** macOS attributes Bluetooth to the
+  *responsible* process; under Claude Code that is `claude.app`, which has no
+  usage description, so anything it spawns that touches CoreBluetooth is
+  SIGABRTed (exit 134, verified). Workaround that works: write a `.command`
+  file and `open -a Terminal` it — launchd spawns it and Terminal is
+  responsible. Always `ps aux | grep r2_probe` first; a stale daemon holds the
+  link and the new one fails with a misleading "R2-D2 not found".
+- **The dome has no resting position.** Observed at 103°, 3.3° and −0.06° in
+  three sessions. `set_head_position` is absolute, so bound moves by *travel*
+  from a freshly read position — never by destination, never from a remembered
+  angle.
+- **`spherov2` capability lookups must go through the MRO, and are still only
+  claims.** `class R2D2(BB9E)`, so grepping `r2d2.py`'s class body misses
+  everything inherited. And a correctly-resolved capability can still be
+  refused by the firmware — `enable_idle_animations` is the standing
+  counterexample. Presence means "worth probing", not "supported".
+- **Running a survey where a human is the instrument?** Use `/survey-session`.
+  Brief before firing, fire within ~3 s of "go", and never suppress stderr on a
+  send loop — a silent crash reads exactly like a dead device.
+
 ## Research discipline
 
 - **Read source, not README.** A README claim is a hypothesis.
