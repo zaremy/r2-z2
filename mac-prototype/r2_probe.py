@@ -84,6 +84,7 @@ CID_POWER_BATTERY_VOLTAGE = 0x03
 CID_ANIM_PLAY = 0x05           # animatronic.py:33
 CID_ANIM_SET_HEAD = 0x0F       # animatronic.py:41  (CID 15)
 CID_ANIM_GET_HEAD = 0x14       # animatronic.py:47  (CID 20)
+CID_ANIM_GET_LEG_ACTION = 0x25  # animatronic.py:58  (CID 37) — READ, cannot move him
 CID_ANIM_STOP = 0x2B           # animatronic.py:69  (CID 43)
 CID_IO_PLAY_AUDIO = 0x07       # io.py:60
 CID_IO_SET_VOLUME = 0x08       # io.py:64
@@ -133,6 +134,21 @@ KNOWN_NOTIFIES = {
 }
 
 EVENT_RING_SIZE = 200
+
+# Stance states. OBSERVED animatronic.py:8-13 — this is `R2DoLegActions`, what
+# get_leg_action RETURNS, and it is NOT `R2LegActions` (:16-20), what
+# perform_leg_action TAKES. They agree on 1/2/3 and diverge at 0 and 4, so
+# decoding a state against the command enum is silently plausible and wrong:
+# it renders TRANSITIONING as an undocumented value and UNKNOWN as STOP.
+LEG_STATE_UNKNOWN, LEG_STATE_THREE_LEGS = 0, 1
+LEG_STATE_TWO_LEGS, LEG_STATE_WADDLE, LEG_STATE_TRANSITIONING = 2, 3, 4
+LEG_STATES = {
+    LEG_STATE_UNKNOWN: "unknown",
+    LEG_STATE_THREE_LEGS: "three_legs",
+    LEG_STATE_TWO_LEGS: "two_legs",
+    LEG_STATE_WADDLE: "waddle",
+    LEG_STATE_TRANSITIONING: "transitioning",
+}
 
 # LED bit indices — OBSERVED: spherov2/toy/r2d2.py:17-25
 LED_FRONT_R, LED_FRONT_G, LED_FRONT_B = 0, 1, 2
@@ -534,6 +550,18 @@ class R2:
             return struct.unpack(">f", r.data)[0]
         return None
 
+    async def get_leg_action(self) -> int | None:
+        """Current stance, as a raw byte. OBSERVED animatronic.py:58 — CID 37,
+        returns `data[0]`.
+
+        Returns the RAW value, not a decoded name, because an undocumented
+        state is exactly the kind of thing this project exists to find, and a
+        lookup that silently maps it to None would hide it."""
+        r = await self.send(DID_ANIMATRONIC, CID_ANIM_GET_LEG_ACTION)
+        if r and len(r.data) >= 1:
+            return r.data[0]
+        return None
+
     async def play_animation(self, animation_id: int) -> Response | None:
         """OBSERVED: animatronic.py:33 — to_bytes(animation, 2), big-endian."""
         return await self.send(DID_ANIMATRONIC, CID_ANIM_PLAY,
@@ -780,6 +808,26 @@ async def _op_battery(r2, p):
 async def _op_head(r2, p):
     return {"degrees": await r2.get_head()}
 
+async def _op_stance(r2, p):
+    """Read the stance. A READ — it cannot move him, so it sits at tier `read`
+    alongside `head`, which already reads this same device (DID 0x17).
+
+    Exists because of what #11 found: an authored animation (EMOTE_YES, a
+    *nod*) ended in TWO_LEGS with the stabiliser retracted and nothing put it
+    back, and R2 fell. `stable` answers the only question that matters before
+    or after playing anything — is the third leg down?
+
+    An undocumented raw value is reported as `undocumented_<n>` rather than
+    dropped. `stable` is then False: unknown stance is not a safe stance."""
+    raw = await r2.get_leg_action()
+    if raw is None:
+        return {"raw": None, "state": None, "stable": None,
+                "note": "no response to get_leg_action; stance is UNKNOWN"}
+    return {"raw": raw,
+            "state": LEG_STATES.get(raw, f"undocumented_{raw}"),
+            "stable": raw == LEG_STATE_THREE_LEGS}
+
+
 async def _op_read_char(r2, p):
     """Read any GATT characteristic — for chasing 00020004 and the standard
     Battery Service 00002a19, neither of which any upstream repo documents."""
@@ -1007,6 +1055,7 @@ OPS = {
     "status":     ("read",   _op_status),
     "battery":    ("read",   _op_battery),
     "head":       ("read",   _op_head),
+    "stance":     ("read",   _op_stance),    # get_leg_action — a READ, like head
     "read_char":  ("read",   _op_read_char),
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP

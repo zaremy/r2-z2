@@ -458,6 +458,12 @@ class FakeR2:
         await self._cmd("get_head")
         return 103.0
 
+    leg_action = P.LEG_STATE_THREE_LEGS
+
+    async def get_leg_action(self):
+        await self._cmd("get_leg_action")
+        return self.leg_action
+
     async def set_head(self, degrees):
         return await self._cmd("set_head", degrees)
 
@@ -1093,6 +1099,83 @@ class TestNotifyFailsLoudly(VerifiedGate):
         self.assertFalse(resp["ok"])
         self.assertIn("bad_command_id", resp["error"])
         self.assertIn("NOT evidence", resp["error"])
+
+
+class TestStanceIsReadableAtEveryCeiling(GateControl):
+    """#11 found an authored animation (EMOTE_YES, a *nod*) ending in TWO_LEGS
+    with the stabiliser retracted and nothing restoring it — R2 fell. Knowing
+    the stance is what makes the animation survey safe to run, and it must not
+    itself require a ceiling that can move him."""
+
+    def test_stance_is_tier_read(self):
+        """It is `get_leg_action`, CID 0x25 — a read. `head` already reads the
+        same device (DID 0x17) at tier read, so this is the same class."""
+        self.assertEqual(P.op_tier("stance"), "read")
+
+    def test_stance_allowed_at_every_ceiling(self):
+        for ceiling in P.TIERS:
+            resp, _ = handle({"op": "stance"}, ceiling)
+            self.assertTrue(resp["ok"], f"stance refused at ceiling {ceiling}")
+
+    def test_stance_reads_and_does_not_write(self):
+        resp, r2 = handle({"op": "stance"}, "read")
+        self.assertIn(("get_leg_action",), r2.calls)
+        for call in r2.calls:
+            self.assertNotIn(call[0], {"set_head", "play_animation",
+                                       "perform_leg_action", "set_leg_position"})
+
+    def test_every_documented_state_decodes(self):
+        expected = {0: "unknown", 1: "three_legs", 2: "two_legs",
+                    3: "waddle", 4: "transitioning"}
+        for raw, name in expected.items():
+            r2 = FakeR2()
+            r2.leg_action = raw
+            resp, _ = handle({"op": "stance"}, "read", r2)
+            self.assertEqual(resp["data"]["state"], name)
+            self.assertEqual(resp["data"]["raw"], raw)
+
+    def test_only_three_legs_counts_as_stable(self):
+        """`stable` is the field a survey branches on. TRANSITIONING and
+        WADDLE are mid-motion, not a stance to trust."""
+        for raw in (0, 2, 3, 4):
+            r2 = FakeR2()
+            r2.leg_action = raw
+            resp, _ = handle({"op": "stance"}, "read", r2)
+            self.assertFalse(resp["data"]["stable"],
+                             f"raw {raw} was reported stable")
+        r2 = FakeR2()
+        r2.leg_action = P.LEG_STATE_THREE_LEGS
+        resp, _ = handle({"op": "stance"}, "read", r2)
+        self.assertTrue(resp["data"]["stable"])
+
+    def test_an_undocumented_state_is_surfaced_not_swallowed(self):
+        """A state outside the enum is exactly what this project exists to
+        find. Reporting it as None would hide it; reporting it as stable would
+        be dangerous."""
+        r2 = FakeR2()
+        r2.leg_action = 9
+        resp, _ = handle({"op": "stance"}, "read", r2)
+        self.assertEqual(resp["data"]["state"], "undocumented_9")
+        self.assertEqual(resp["data"]["raw"], 9)
+        self.assertFalse(resp["data"]["stable"])
+
+    def test_no_response_is_not_reported_as_stable(self):
+        """An unanswered read means the stance is unknown. Unknown must never
+        read as safe — the one direction this must not fail in."""
+        r2 = FakeR2()
+        r2.leg_action = None
+        resp, _ = handle({"op": "stance"}, "read", r2)
+        self.assertIsNone(resp["data"]["stable"])
+        self.assertIsNone(resp["data"]["state"])
+        self.assertIn("UNKNOWN", resp["data"]["note"])
+
+    def test_the_state_enum_is_not_the_command_enum(self):
+        """Pins the distinction that produced a wrong published claim: the
+        payload decodes against R2DoLegActions (what get_leg_action returns),
+        NOT R2LegActions (what perform_leg_action takes). They agree on 1/2/3
+        and diverge at 0 and 4."""
+        self.assertEqual(P.LEG_STATES[0], "unknown")        # R2LegActions[0] is STOP
+        self.assertEqual(P.LEG_STATES[4], "transitioning")  # R2LegActions has no 4
 
 
 if __name__ == "__main__":
