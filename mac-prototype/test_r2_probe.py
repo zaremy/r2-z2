@@ -465,6 +465,9 @@ class FakeR2:
         await self._cmd("get_leg_action")
         return self.leg_action
 
+    async def perform_leg_action(self, action):
+        return await self._cmd("perform_leg_action", action)
+
     async def set_head(self, degrees):
         return await self._cmd("set_head", degrees)
 
@@ -775,9 +778,11 @@ class TestHandlerBasics(VerifiedGate):
         resp, r2 = handle({"op": "stop"}, "read")
         self.assertTrue(resp["ok"])
         self.assertTrue(resp["data"]["stopped"])
-        self.assertEqual(r2.calls, [("stop_animation",), ("stop_audio",)])
+        self.assertEqual(r2.calls, [("stop_animation",), ("stop_audio",),
+                                    ("perform_leg_action", P.LEG_ACTION_STOP)])
         self.assertEqual(resp["data"]["results"],
-                         {"animation": "success", "audio": "success"})
+                         {"animation": "success", "audio": "success",
+                          "legs": "success"})
 
     def test_a_rejected_stop_exits_non_zero(self):
         """`./r2 send stop || panic` must see the failure. Returning ok:True
@@ -968,7 +973,7 @@ class TestStopOnExitSurvivesCancellation(unittest.TestCase):
         result = run(P.stop_everything(Rejects(err=0x02), shield=True))
         self.assertFalse(result["stopped"])
         self.assertIsNotNone(result["warning"])
-        self.assertEqual(set(result["results"]), {"animation", "audio"})
+        self.assertEqual(set(result["results"]), {"animation", "audio", "legs"})
 
     def test_stop_everything_shape_is_fixed_on_success(self):
         """`warning` is always present (None on success). A present-or-absent
@@ -1341,6 +1346,103 @@ class TestDomeCeilingCannotKnockHimOver(GateControl):
     def test_stop_is_still_reachable_from_every_rung(self):
         for ceiling in P.TIERS:
             self.assertIn("stop", P.allowed_ops(ceiling))
+
+
+class TestStanceWriteCannotReachWaddle(GateControl):
+    """#22's op. WADDLE is translation on two tracks with the stabiliser up —
+    the thing that put R2 on the floor in #11 — and it is locomotion, which
+    belongs to #23 behind a stop-distance criterion that does not exist yet."""
+
+    def test_waddle_is_absent_from_the_mapping_not_merely_branched_around(self):
+        """Structural, not behavioural. A guard can be refactored away; a name
+        that was never in the table cannot be reached by a typo or an
+        off-by-one in the first place."""
+        self.assertNotIn("waddle", P.LEG_ACTIONS)
+        self.assertNotIn(P.LEG_ACTION_WADDLE, P.LEG_ACTIONS.values())
+
+    def test_waddle_by_name_is_refused_with_a_reason(self):
+        resp, r2 = handle({"op": "set_stance", "params": {"action": "waddle"}},
+                          "stance")
+        self.assertFalse(resp["ok"])
+        self.assertIn("locomotion", resp["error"])
+        self.assertEqual([c for c in r2.calls if c[0] == "perform_leg_action"],
+                         [], "a waddle went out anyway")
+
+    def test_raw_numbers_are_refused(self):
+        """`{"action": 3}` is WADDLE. A caller who meant 'the third option'
+        would get locomotion, so numbers are not accepted at all."""
+        for bad in (0, 1, 2, 3, True, None, [1]):
+            resp, r2 = handle({"op": "set_stance", "params": {"action": bad}},
+                              "stance")
+            self.assertFalse(resp["ok"], f"action={bad!r} was accepted")
+            self.assertEqual([c for c in r2.calls if c[0] == "perform_leg_action"], [])
+
+    def test_the_two_real_stances_go_out_with_the_right_byte(self):
+        for name, value in (("three_legs", 1), ("two_legs", 2)):
+            resp, r2 = handle({"op": "set_stance", "params": {"action": name}},
+                              "stance")
+            self.assertTrue(resp["ok"], resp.get("error"))
+            self.assertIn(("perform_leg_action", value), r2.calls)
+
+    def test_it_is_tier_stance_not_dome(self):
+        self.assertEqual(P.op_tier("set_stance"), "stance")
+        resp, r2 = handle({"op": "set_stance", "params": {"action": "three_legs"}},
+                          "dome")
+        self.assertFalse(resp["ok"])
+        self.assertIn("needs tier 'stance'", resp["error"])
+        self.assertEqual([c for c in r2.calls if c[0] == "perform_leg_action"], [])
+
+    def test_a_rejected_stance_command_fails_loudly(self):
+        """A silently-refused stance command during #22 would be recorded as
+        'R2 cannot deploy the tripod' — a wrong finding entering docs/."""
+        resp, _ = handle({"op": "set_stance", "params": {"action": "three_legs"}},
+                         "stance", FakeR2(err=0x02))
+        self.assertFalse(resp["ok"])
+        self.assertIn("NOT evidence", resp["error"])
+
+    def test_it_reports_measured_before_and_after_not_the_command(self):
+        r2 = FakeR2()
+        r2.leg_action = P.LEG_STATE_TWO_LEGS
+        resp, _ = handle({"op": "set_stance", "params": {"action": "three_legs"}},
+                         "stance", r2)
+        self.assertEqual(resp["data"]["commanded"], "three_legs")
+        self.assertEqual(resp["data"]["before"], "two_legs")
+        # The fake does not change state, so `after` must NOT echo the command.
+        self.assertEqual(resp["data"]["after_reported"], "two_legs")
+
+    def test_the_after_reading_is_labelled_as_belief_not_observation(self):
+        """#11: get_leg_action reports tracked state, not a sensed position.
+        A survey that read `after_reported` as proof of a physical tripod
+        would record a stance R2 may not be in."""
+        resp, _ = handle({"op": "set_stance", "params": {"action": "two_legs"}},
+                         "stance")
+        self.assertIn("BELIEVES", resp["data"]["note"])
+
+
+class TestStopAlsoHaltsTheLegs(unittest.TestCase):
+    """An animation drives leg actions (#11), and a leg action in flight is the
+    state that put R2 on the floor. A stop that leaves the legs moving is not
+    a stop."""
+
+    def test_stop_everything_halts_legs_too(self):
+        r2 = FakeR2()
+        result = run(P.stop_everything(r2))
+        self.assertIn(("perform_leg_action", P.LEG_ACTION_STOP), r2.calls)
+        self.assertEqual(set(result["results"]), {"animation", "audio", "legs"})
+        self.assertTrue(result["stopped"])
+
+    def test_a_failed_leg_stop_makes_the_whole_stop_report_failure(self):
+        result = run(P.stop_everything(FakeR2(err=0x02)))
+        self.assertFalse(result["stopped"])
+        self.assertIn("legs", result["warning"])
+
+    def test_stop_is_still_reachable_from_the_read_ceiling(self):
+        """It sends DID 0x17 traffic, but every part of it HALTS motion —
+        which is what the read ceiling's promise permits, and is already true
+        of stop_animation."""
+        resp, r2 = handle({"op": "stop"}, "read")
+        self.assertTrue(resp["ok"])
+        self.assertIn(("perform_leg_action", P.LEG_ACTION_STOP), r2.calls)
 
 
 if __name__ == "__main__":

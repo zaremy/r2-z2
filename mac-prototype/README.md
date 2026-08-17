@@ -82,7 +82,10 @@ Other safety properties:
 
 - Every request is printed with a timestamp before it runs — the Terminal window
   is a live audit log, and Ctrl-C is always available
-- `stop` (stop animation + stop audio) is permitted at **every** tier
+- `stop` (stop animation + stop audio + **stop leg action**) is permitted at
+  **every** tier. The leg halt was added after #11: an authored animation drives
+  leg actions, and a stop that leaves the legs moving is not a stop. Every part
+  of it HALTS motion, which is what the `read` ceiling's promise permits
 - On exit — Ctrl-C, idle timeout, or error — it sends stop before disconnecting.
   Default to STOP, never last-command
 - Idle timeout disconnects after 15 minutes so R2 is never left awake unattended
@@ -103,6 +106,8 @@ Then, from anywhere:
 ./r2 send leds --params '{"channels":{"0":0,"1":0,"2":255}}'
 ./r2 send sound --params '{"id":2813,"volume":80}'
 ./r2 send dome --params '{"delta":20}'
+./r2 send stance                                   # read the leg state
+./r2 send set_stance --params '{"action":"three_legs"}'   # needs --allow stance
 ./r2 send stop
 ```
 
