@@ -85,6 +85,7 @@ CID_ANIM_PLAY = 0x05           # animatronic.py:33
 CID_ANIM_SET_HEAD = 0x0F       # animatronic.py:41  (CID 15)
 CID_ANIM_GET_HEAD = 0x14       # animatronic.py:47  (CID 20)
 CID_ANIM_GET_LEG_ACTION = 0x25  # animatronic.py:58  (CID 37) — READ, cannot move him
+CID_ANIM_PERFORM_LEG_ACTION = 0x0D  # animatronic.py:36 (CID 13) — WRITE, can fell him
 CID_ANIM_STOP = 0x2B           # animatronic.py:69  (CID 43)
 CID_IO_PLAY_AUDIO = 0x07       # io.py:60
 CID_IO_SET_VOLUME = 0x08       # io.py:64
@@ -140,6 +141,23 @@ EVENT_RING_SIZE = 200
 # perform_leg_action TAKES. They agree on 1/2/3 and diverge at 0 and 4, so
 # decoding a state against the command enum is silently plausible and wrong:
 # it renders TRANSITIONING as an undocumented value and UNKNOWN as STOP.
+# Commands. OBSERVED animatronic.py:16-20 — `R2LegActions`, what
+# perform_leg_action TAKES. Keyed by name, never by raw int: `{"action": 3}` is
+# WADDLE, and a caller who meant "the third option" would get locomotion.
+LEG_ACTION_STOP, LEG_ACTION_THREE_LEGS = 0, 1
+LEG_ACTION_TWO_LEGS, LEG_ACTION_WADDLE = 2, 3
+LEG_ACTIONS = {
+    "stop": LEG_ACTION_STOP,
+    "three_legs": LEG_ACTION_THREE_LEGS,
+    "two_legs": LEG_ACTION_TWO_LEGS,
+}
+# WADDLE is deliberately ABSENT from the table above, not merely rejected by a
+# branch: it is translation on two tracks with the stabiliser up, it is what
+# caused the only fall this project has had (#11), and it is locomotion —
+# which belongs to #23, behind a stop-distance criterion that does not exist
+# yet. Keeping it out of the mapping means no typo, no off-by-one and no
+# future refactor of the guard can reach it.
+
 LEG_STATE_UNKNOWN, LEG_STATE_THREE_LEGS = 0, 1
 LEG_STATE_TWO_LEGS, LEG_STATE_WADDLE, LEG_STATE_TRANSITIONING = 2, 3, 4
 LEG_STATES = {
@@ -550,6 +568,15 @@ class R2:
             return struct.unpack(">f", r.data)[0]
         return None
 
+    async def perform_leg_action(self, action: int) -> Response | None:
+        """OBSERVED animatronic.py:36 — CID 13, one byte payload.
+
+        Takes the raw int so the packet layer stays a packet layer; the name
+        allowlist and the WADDLE exclusion live in the op, where the refusal
+        can be explained to whoever sent it."""
+        return await self.send(DID_ANIMATRONIC, CID_ANIM_PERFORM_LEG_ACTION,
+                               bytes((action,)))
+
     async def get_leg_action(self) -> int | None:
         """Current stance, as a raw byte. OBSERVED animatronic.py:58 — CID 37,
         returns `data[0]`.
@@ -916,6 +943,13 @@ async def _op_battery(r2, p):
 async def _op_head(r2, p):
     return {"degrees": await r2.get_head()}
 
+def _stance_name(raw: int | None) -> str | None:
+    """Raw byte to a name. An out-of-enum value is surfaced, never dropped."""
+    if raw is None:
+        return None
+    return LEG_STATES.get(raw, f"undocumented_{raw}")
+
+
 async def _op_stance(r2, p):
     """Read the stance. A READ — it cannot move him, so it sits at tier `read`
     alongside `head`, which already reads this same device (DID 0x17).
@@ -934,6 +968,51 @@ async def _op_stance(r2, p):
     return {"raw": raw,
             "state": LEG_STATES.get(raw, f"undocumented_{raw}"),
             "stable": raw == LEG_STATE_THREE_LEGS}
+
+
+async def _op_set_stance(r2, p):
+    """Change the stance. Tier `stance` — this is the op that can fell him.
+
+    Takes a NAME, not a number. `{"action": 3}` is WADDLE, and a caller who
+    meant "the third option" would get locomotion out of an off-by-one.
+
+    Returns the stance BEFORE and AFTER as measured, not as commanded. #11
+    established that `get_leg_action` reports tracked state rather than a
+    sensed one, so `after` is what the firmware now believes — which is
+    exactly the thing #22 needs to find out, and is NOT proof he is physically
+    on three legs. Only a human can confirm that."""
+    action = p.get("action")
+    if not isinstance(action, str):
+        raise ValueError(
+            f"'action' must be one of {sorted(LEG_ACTIONS)} as a string, got "
+            f"{action!r}. Numbers are refused on purpose: 3 is WADDLE.")
+    if action == "waddle":
+        raise ValueError(
+            "WADDLE is refused here. It is translation on two tracks with the "
+            "stabiliser up — the thing that put R2 on the floor in #11 — and it "
+            "is locomotion, which belongs to issue #23 behind a stop-distance "
+            "criterion that does not exist yet.")
+    if action not in LEG_ACTIONS:
+        raise ValueError(f"unknown action {action!r}; expected one of "
+                         f"{sorted(LEG_ACTIONS)}")
+    before = await r2.get_leg_action()
+    err = _err_of(await r2.perform_leg_action(LEG_ACTIONS[action]))
+    if err != "success":
+        # Loud, like `notify`. A silently-refused stance command during a
+        # survey would be recorded as "R2 cannot deploy the tripod", which is
+        # a wrong finding entering docs/.
+        raise RuntimeError(
+            f"perform_leg_action({action}) returned {err!r}. This is NOT "
+            f"evidence that the stance is unreachable — it is one rejected "
+            f"command. Re-probe before recording anything.")
+    after = await r2.get_leg_action()
+    return {
+        "commanded": action,
+        "before": _stance_name(before),
+        "after_reported": _stance_name(after),
+        "note": "`after_reported` is what the firmware BELIEVES, not a sensed "
+                "position. Confirm the physical stance by eye (#11).",
+    }
 
 
 async def _op_read_char(r2, p):
@@ -1013,7 +1092,15 @@ async def stop_everything(r2, shield: bool = False) -> dict:
     commands alive through that cancellation, for the shutdown path."""
     results = {}
     for name, make in (("animation", lambda: r2.stop_animation()),
-                       ("audio", lambda: r2.stop_audio())):
+                       ("audio", lambda: r2.stop_audio()),
+                       # Added after #11: an animation drives LEG actions, and
+                       # stop_animation is not documented to halt one already
+                       # in flight. A stop that leaves the legs moving is not
+                       # a stop — and a leg action in flight is the state that
+                       # put R2 on the floor. Sent from every tier, like the
+                       # other two: this is DID 0x17 traffic that HALTS motion,
+                       # which is what the `read` ceiling's promise allows.
+                       ("legs", lambda: r2.perform_leg_action(LEG_ACTION_STOP))):
         try:
             call = make()
             results[name] = _err_of(await (asyncio.shield(call) if shield else call))
@@ -1178,6 +1265,9 @@ OPS = {
     # actions and knocked R2 over. An animation is a stance command whose
     # contents we cannot inspect before sending it.
     "animation":  ("stance", _op_animation),
+    # The op that deploys or retracts the third leg. Same rung as `animation`
+    # for the same reason: both can end with him on the floor.
+    "set_stance": ("stance", _op_set_stance),
 }
 
 
