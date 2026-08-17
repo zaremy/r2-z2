@@ -51,7 +51,11 @@ MANIFEST = SURVEY_DIR / "manifest.json"
 ATTEMPTS = SURVEY_DIR / "attempts.jsonl"
 STATE = SURVEY_DIR / "state.json"
 
-TIERS = ("leds", "audio", "motion")
+# Mirrors r2_probe.TIERS above `read`. `animation` moved from `motion` to
+# `stance` after #11: an authored animation drives leg actions and put R2
+# on the floor. An item labelled with the wrong tier tells the operator to
+# open a session that will refuse it — or worse, one that can topple him.
+TIERS = ("leds", "audio", "dome", "stance")
 SOUNDS_PER_FAMILY = 3
 
 # ── Attempt lifecycle (epic §"Attempt lifecycle") ────────────────────────────
@@ -129,7 +133,7 @@ def build_manifest() -> list[dict]:
     by_id = {v: k for k, v in ANIMATIONS.items()}
     for aid in range(ANIMATION_ID_MIN, ANIMATION_ID_MAX + 1):
         items.append({
-            "item_id": f"anim:{aid}", "tier": "motion", "kind": "animation",
+            "item_id": f"anim:{aid}", "tier": "stance", "kind": "animation",
             # ids 20/23/28/29/30 are unnamed upstream — probed anyway (#12 AC2)
             "label": by_id.get(aid, "<unnamed — probe and record the error>"),
             "may_drive": aid in (8, 9, 11),   # translator.c:101-104

@@ -155,6 +155,54 @@ Does **not** remove the need for a one-time interactive TCC grant — see
 
 ---
 
+## D-009 — Split the `motion` tier into `dome` and `stance`
+**2026-08-16**
+
+The permission ladder topped out at `motion`, documented as "dome and
+animations". **That description was false in the direction that matters.**
+
+#11 played one authored animation — id 21 `EMOTE_YES`, a *nod* — at
+`--allow motion`. It emitted `WADDLE`, `WADDLE`, `WADDLE`, `TRANSITIONING`,
+`TWO_LEGS`, and **put R2 on the floor**, with `perform_leg_action` never
+called by us. An authored animation is a stance command whose contents we do
+not get to inspect before sending it.
+
+So a session opened to survey the *dome* could change his stance and topple
+him, while the ceiling's own name promised it could not. The ladder is this
+project's core safety mechanism; a rung that grants more than it says is worse
+than no rung, because it is trusted.
+
+**Decision.** `TIERS = ["read", "leds", "audio", "dome", "stance"]`.
+
+- `dome` — `set_head` plus the `DID 0x17` writes that cannot change stance
+  (`notify`, `idle`). Bounded by `bounded_head_move`; worst case is a 45°
+  turn of the head.
+- `stance` — anything that can put him on the floor. `animation` sits here
+  **because of the observation**, not by category.
+
+`motion` is accepted as a deprecated alias and resolves **down** to `dome`,
+never up. Someone who typed the old name now gets a refusal on `animation` —
+a message on a terminal. Resolving it up would silently re-grant the ability
+to knock the robot over. **When a rename is ambiguous, resolve toward less
+capability.**
+
+The alias is resolved once at daemon start, so the banner, the refusal
+messages and the lock file all name the tier actually in force. Printing
+`MOTION` while enforcing `dome` is the class of mismatch this removes.
+
+`stance` (the read op, `get_leg_action`) stays at tier `read`: finding out
+whether he is stable must never require opening a session that can
+destabilise him.
+
+*Reversed by:* evidence that `play_animation` cannot reach the legs — which
+would contradict six `leg_action_complete` events already recorded.
+
+*Does not fix:* `set_leg_position` and `perform_leg_action` have no op yet
+(#22), and locomotion via `DID 0x16` remains unimplemented (#23). This makes
+the ladder honest about what exists today; it does not add the missing rungs.
+
+---
+
 ## Open — to be decided on hardware
 
 - **Animation ID table.** `spherov2` and `claude-r2d2-buddy` disagree
