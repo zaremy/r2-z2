@@ -370,6 +370,69 @@ battery-state-changed.
 "something happened to me" sense (picked up, bumped, tipped) without any
 camera. That is the right first perception layer for a pet.
 
+### S1e dome as a force sensor — OBSERVED 2026-08-17 on `D2-6F6B` (issue #29 AC5)
+
+There is no force, torque, current or touch sensor in the protocol. The test
+is indirect: command a small dome move, read where it actually landed, and
+compare the error against the unobstructed baseline. All moves were ±15° at
+`--allow dome`, around +2…+27°, far from either range limit.
+
+**Free-move baseline, hands off (n=5):**
+
+| | error vs commanded |
+|---|---|
+| min | 3.48° |
+| max | **4.54°** |
+| mean | 3.99° |
+
+This independently reproduces the S1c gradient. Interpolating the 2.4° @ +170
+→ 5.7° @ −145 curve to +10° predicts **4.08°**; measured mean was **3.99°** at
+an angle the curve was never fitted on.
+
+**Sustained hold, operator resisting the move (n=5):**
+
+| trial | commanded | actually moved | error | operator saw |
+|---|---|---|---|---|
+| 1 | −15° | 0.0° | 15.00° | partly blocked |
+| 2 | +15° | +5.6° | 9.40° | moved |
+| 3 | −15° | −9.4° | 5.59° | moved |
+| 4 | +15° | +1.2° | 13.73° | moved |
+| 5 | −15° | 0.0° | 14.89° | partly blocked |
+
+**AC5 verdict: `detects_resistance`.** Worst free trial 4.54°, best held trial
+5.59° — the distributions do not overlap, 5/5.
+
+**Light continuous stroking — actual petting (n=2):**
+
+| trial | commanded | actually moved | error |
+|---|---|---|---|
+| 1 | −15° | −13.4° | 1.58° |
+| 2 | +15° | +12.2° | 2.85° |
+
+**Verdict: `pet_not_detectable`.** Both strokes landed not merely inside the
+free-move band but *below its minimum* (3.48°) — the two cleanest moves of the
+session. There is no trend to chase with more trials; n=2 is small but the
+result is not marginal in the direction that would matter.
+
+> [!warning] Detection scales with force, and petting is below the floor
+> Error fell 15.00 → 9.40 → 5.59 as the hold softened, then to 1.58 with a
+> stroke. A threshold on dome error can catch **someone holding his head
+> still**; it cannot catch **someone petting him**. Touch-triggered behaviour
+> — the thing this was asked for — needs AC1 sensor streaming, not this.
+
+> [!info] `get_head` SENSES; `get_leg_action` only TRACKS
+> Settled by trial 1: a 15° command against a blocked dome reported **0.0°
+> moved**. Had the encoder been echoing the commanded value, as
+> `get_leg_action` does for stance, the error would have read ≈0 and the whole
+> method would be worthless. It does not. Position reads can be trusted as
+> physical observations, and the two readbacks are **not** the same kind of
+> thing — do not generalise from one to the other.
+
+Consequence for the behavior layer: a `react_to_touch()` semantic behavior is
+**not** buildable on dome error alone. What *is* buildable today is
+"something is stopping my head" — a distinct and narrower signal, and one that
+only exists while a move is already in flight.
+
 ---
 
 ## 2. Sound vocabulary — 388 ids, clustered
