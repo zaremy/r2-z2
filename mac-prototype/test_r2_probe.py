@@ -468,6 +468,12 @@ class FakeR2:
     async def perform_leg_action(self, action):
         return await self._cmd("perform_leg_action", action)
 
+    leg_position = 0.0
+
+    async def get_leg_position(self):
+        await self._cmd("get_leg_position")
+        return self.leg_position
+
     async def set_head(self, degrees):
         return await self._cmd("set_head", degrees)
 
@@ -1443,6 +1449,41 @@ class TestStopAlsoHaltsTheLegs(unittest.TestCase):
         resp, r2 = handle({"op": "stop"}, "read")
         self.assertTrue(resp["ok"])
         self.assertIn(("perform_leg_action", P.LEG_ACTION_STOP), r2.calls)
+
+
+class TestLegPositionIsReadOnlyForNow(GateControl):
+    """#22 AC6: learn what the float MEANS from reads before anything writes
+    it. It is finer-grained than the stance enum, documented nowhere, and
+    drives an actuator that can fell him."""
+
+    def test_leg_pos_is_tier_read(self):
+        self.assertEqual(P.op_tier("leg_pos"), "read")
+
+    def test_there_is_no_write_op_for_leg_position(self):
+        """Structural. `set_leg_position` must not be reachable at ANY ceiling
+        until its semantics are known — so it should not exist as an op at
+        all, rather than existing behind a tier."""
+        self.assertNotIn("set_leg_position", P.OPS)
+        self.assertFalse(hasattr(P, "CID_ANIM_SET_LEG_POSITION"))
+
+    def test_it_reports_the_stance_alongside_the_float(self):
+        """The number alone means nothing yet; it is only interpretable next
+        to a known stance."""
+        r2 = FakeR2()
+        r2.leg_position = 12.5
+        r2.leg_action = P.LEG_STATE_THREE_LEGS
+        resp, _ = handle({"op": "leg_pos"}, "read", r2)
+        self.assertEqual(resp["data"]["degrees"], 12.5)
+        self.assertEqual(resp["data"]["stance"], "three_legs")
+        self.assertIn("UNKNOWN", resp["data"]["note"])
+
+    def test_a_no_response_read_is_none_not_zero(self):
+        """0.0 is a plausible leg position. Reporting a failed read as 0.0
+        would put a fabricated measurement into #22's table."""
+        r2 = FakeR2()
+        r2.leg_position = None
+        resp, _ = handle({"op": "leg_pos"}, "read", r2)
+        self.assertIsNone(resp["data"]["degrees"])
 
 
 if __name__ == "__main__":
