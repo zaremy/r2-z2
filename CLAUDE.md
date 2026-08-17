@@ -84,9 +84,36 @@ little entity is continuously present in the household.
   operator can relaunch it — one session cost four manual relaunches. Their
   attention is the scarce resource, not yours: take every reading you need
   while the link is live, then let it drop and write.
+- **Build and dry-test the driver while the link is DOWN.** The bullet above is
+  about writing *docs* mid-link; this is about writing *code* mid-link, and it
+  cost a relaunch the same way. When the link is up, only fire and record —
+  every edit, extension and bugfix belongs either before the daemon starts or
+  after it drops. Dry-test verdict logic against synthetic data; it needs no
+  robot and catches the branch that never fires.
+- **Enable the notifications you intend to read, and PROVE the channel live
+  before trusting silence.** `animation_complete` fires unprompted;
+  `leg_action_complete` does **not** — it needs `notify --params '{"leg":true}'`.
+  A session that forgets still gets completions and still measures durations,
+  and silently sees **zero** leg events. That is not a missing feature, it is a
+  wrong answer in the safe direction: it classified `EMOTE_YES`, the known
+  waddler, as `no_leg_activity`. Force a leg movement, see the event, *then*
+  believe an empty sequence.
+- **Deploy is stable; retract is not.** Any forced leg movement must be a
+  **deploy**. A liveness check that toggled *away from the current state* picked
+  a retraction on an already-tripod droid and knocked him over backwards. If the
+  safe direction is unavailable from the current state, refuse and say so rather
+  than falling back to the unsafe one — a diagnostic must never be the most
+  dangerous command in the session.
 - **Running a survey where a human is the instrument?** Use `/survey-session`.
   Brief before firing, fire within ~3 s of "go", and never suppress stderr on a
   send loop — a silent crash reads exactly like a dead device.
+  **Invoke it — do not wait to be asked.** Survey work arrives as "go", "ok",
+  "keep going", or a bare checkpoint reference, never as "run the survey", and
+  two consecutive sessions ran three surveys each without invoking it. Widening
+  the skill's own triggers did not fix that; this line is here because
+  `CLAUDE.md` is loaded every session and skill descriptions evidently are not
+  matched reliably. If the next instruction will move the robot, the skill
+  applies.
 
 ## Research discipline
 
