@@ -551,6 +551,136 @@ itself. Mode 0 is right for interruptions that *should* cut in.
 
 ## 3. Animation vocabulary — 51 ids
 
+### S1d animation survey — OBSERVED 2026-08-17 on `D2-6F6B` (issue #12), 56/56 ids
+
+Ran at `--allow stance` with R2 **free-standing on a table, unassisted** — no
+hand catching him, so a recorded fall is a real fall and a recorded "did not
+fall" is a genuine unassisted survival — neither label is contaminated by
+intervention.
+
+**Fall observations cover 37 of 56 ids** (7 fell, 30 did not). The other 19 —
+`0-13, 16, 17, 21, 52, 55` — carry **no fall observation at all** and are
+excluded from both columns rather than counted as survivors. Most were swept in
+early blocks before per-id fall attribution was being recorded; 52 and 55 sit
+in the final block, whose single fall could not be attributed to a specific id
+and is left UNATTRIBUTED. So the fall column is uncontaminated, not complete.
+
+> [!danger] Most authored animations retract the stabiliser and waddle
+> **36 of 56 ids emit `WADDLE`.** It is the norm, not an outlier.
+>
+> Every one was started from a **verified** `THREE_LEGS` baseline — the driver
+> asserted it and read it back before each id — and every one **retracted the
+> leg itself**. Pre-deploying the tripod does not make an authored animation
+> safe; the animation overrides it. See D-010.
+
+| classification | n | ids |
+|---|---|---|
+| `waddles` — unsafe while standing | 36 | 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 19, 21, 22, 24, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 48, 49, 50, 51, 53, 54 |
+| `leaves_bipod` — stable standing, recoverable | 4 | 11, 18, 20, 28 |
+| `returns_to_tripod` — cleans up after itself | 2 | 29, 30 |
+| `no_leg_activity` — no stance hazard observed | 14 | 0, 1, 6, 16, 17, 23, 25, 26, 27, 34, 44, 47, 52, 55 |
+
+**Usable on a standing droid: 20 of 56.** The other 36 are the emotional core
+of the library — `EMOTE_*` and most of `WWM_*`, including `WWM_CURIOUS` (35),
+the animation `architecture.md` names for `express_curious()`.
+
+#### The fall outcome is stochastic; the event sequence is not
+
+Seven ids were **observed** to fell him: **14, 15, 22, 31, 37, 38, 51**. That
+list is not a safe/unsafe boundary, and this is the most important result here.
+
+Repeat trials on ids 53 and 54 replayed their leg-event sequences almost
+exactly — 53 gave 6 waddles in 3.29 s then 3.16 s; 54 gave 2 waddles in 1.86 s
+then 1.69 s — while the **fall outcome did not reproduce**. One fall in the
+52-55 block could not be attributed to either on a repeat and is recorded
+UNATTRIBUTED rather than guessed.
+
+> [!warning] A per-id empirical safe-list is not achievable *for the household case*
+> Falling depends on starting pose, residual momentum from the previous item,
+> and the surface — none of which the animation id determines.
+>
+> The evidence for non-reproducibility is **two ids re-run once each**, which is
+> thin, and does not prove impossibility in general: a safe-list might well be
+> establishable under tightly controlled pose, surface and rest-between-items.
+> **But those are exactly the conditions a droid living in a house cannot be
+> guaranteed**, so a safe-list built under them would not transfer to the case
+> we care about. This is why D-010 treats `WADDLE` emission, not observed
+> falls, as the safety boundary — the emission is a property of the animation,
+> the fall is a property of the situation.
+
+No feature we examined separates fallers from survivors. These are three scalar
+summaries, not an exhaustive search — event order, first-waddle timing,
+inter-event spacing and multivariate combinations are **untested**:
+
+| | fell (n=7) | stayed up (n=30) |
+|---|---|---|
+| waddle count | 4 – 12 | 0 – 10 |
+| longest consecutive run | 2 – 5 | 0 – 8 |
+| duration | 3.00 – 9.11 s | 1.51 – 21.30 s |
+
+Every range overlaps. Id 42 has 10 waddles and a run of 8 and stayed up; id 22
+has 4 and a run of 2 and went down. **`leg_action_complete` reports state
+transitions only** — never direction, distance or force — so a two-waddle lurch
+and a six-waddle shuffle are the same symbol. The signal that would predict a
+fall (accelerometer, gyro) is sensor streaming, #29 AC1.
+
+#### A reactive stance guard cannot work — REFUTED on hardware
+
+Tested on id 37: play the animation and re-deploy the stabiliser the moment it
+retracts. The re-deploy was **accepted**, not refused — the firmware permits
+commanding `three_legs` mid-animation. It arrived far too late.
+
+The arithmetic rules it out permanently. Detection costs a bridge round-trip
+(~0.3-0.5 s) and deployment settles in **2.28-2.56 s** (#22). A fall completes
+in well under a second. **Even with zero detection latency the leg lands more
+than a second after he is already down.** No polling rate fixes this.
+
+Two assumptions this rests on, stated rather than buried: that a stabiliser is
+only load-bearing once *settled* (a partially-extended leg may help sooner),
+and that the guard cannot act *before* the retraction it is reacting to. The
+hardware test was one animation. What is firmly refuted is the reactive guard
+as built; what remains open is a predictive one, which would need the
+animation's leg track known in advance — the thing D-010 says we cannot get.
+
+#### The unnamed gaps are valid — all five
+
+Ids **20, 23, 28, 29, 30** are absent from the `spherov2` enum, and this doc
+previously expected `0x02 bad_command_id`. **All five play normally.** They are
+valid-but-unnamed, not invalid. Two of them (29, 30) are the *only* ids in the
+entire library that touch the legs and put the stabiliser back — behaviourally
+the most valuable class found, and unnamed upstream.
+
+#### Durations are event-backed and free
+
+`animation_complete` fires with no enable command and carries the id, so every
+duration here is measured rather than stopwatched. Range **0.88 s** (id 55
+`MOTOR`) to **21.30 s** (id 27 `IDLE_3`).
+
+> [!warning] Two method traps, both hit in this session
+> **Leg notifications must be enabled or every id looks safe.**
+> `animation_complete` fires unprompted; `leg_action_complete` does **not**. A
+> session that forgets the enable still sees completions and still measures
+> durations, and silently sees zero leg events. The first run of this survey
+> did exactly that and classified `EMOTE_YES` — the known waddler — as
+> `no_leg_activity`, the safest bucket. Prove the channel live by commanding a
+> leg move and seeing the event before trusting any silence.
+>
+> **Deploy is stable; retract is not.** A diagnostic that retracted the
+> stabiliser to prove the channel was live knocked him over backwards. Any
+> forced leg movement must be a deploy.
+
+> [!warning] `may_drive` is refuted as a safety filter, empirically
+> It flags ids 8/9/11 (`translator.c:101-104`). Measured: **8 and 9 waddle; 11
+> does not.** One of three, in the wrong direction. It describes driving, not
+> stance, and stance is what topples him.
+
+**Not covered by this pass:** AC4's seven conflict verdicts (0, 3, 4, 7, 9, 13,
+15) need the epic's conflict-resolution protocol with predeclared predicates
+and media artifacts; AC6 interruption testing; and the per-id
+`energy_cost_class` / `wear_class` / `recommended_cooldown_s` fields.
+
+### Enum groups
+
 Four groups (`r2d2.py:417-468`):
 
 | Group | Ids | Meaning |
@@ -561,9 +691,10 @@ Four groups (`r2d2.py:417-468`):
 | `WWM_*` | 31-54 | 23 "Watch With Me" reaction animations |
 | `MOTOR` | 55 | Motor sound/behaviour |
 
-Ids **20, 23, 28, 29, 30 are absent** from the enum. UNKNOWN whether they are
-invalid, or valid-but-unnamed. Probe them and watch for error `0x02`
-(bad_command_id) / `0x07` (bad_parameter_value).
+Ids **20, 23, 28, 29, 30 are absent** from the enum. **RESOLVED 2026-08-17 —
+all five are valid and play normally**; none returned `bad_command_id`. See the
+S1d section above. They are valid-but-unnamed, and 29/30 are the only two ids
+in the library that restore the stabiliser after using it.
 
 `WMM_FRUSTRATED=39` is a typo for `WWM_` in upstream. Cosmetic; the id is fine.
 
