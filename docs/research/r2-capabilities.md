@@ -282,6 +282,83 @@ animation_complete, **`TWO_LEGS`**.
 > in place (opposite-direction track drive). Three `WADDLE`s followed by
 > `TWO_LEGS` fits a retracted tripod that never came back down.
 
+### Stance bring-up — OBSERVED 2026-08-17 on `D2-6F6B` (issue #22)
+
+First session in which the legs were commanded deliberately. Ran at
+`--allow stance`. **All ten acceptance criteria met.** No falls.
+
+| Measure | **OBSERVED** |
+|---|---|
+| Deploy from `UNKNOWN` | **works** — tripod comes down, confirmed by eye |
+| `get_leg_action` after the write | **`UNKNOWN` → `TRANSITIONING` → `THREE_LEGS`** |
+| Transitions attempted | **6/6 completed**, none stalled or refused |
+| Settling | **2.28 - 2.56 s**, tight across all six |
+| `TRANSITIONING` | present on **every** transition, never skipped |
+| Ack latency | 0.69 - 0.87 s |
+| `leg_pos` at `three_legs` | **2.90** (3.03 on a second deploy) |
+| `leg_pos` at `two_legs` | **230.13** |
+
+**The stance IS bootstrappable, and that is what unblocks #12.** The write
+updates the state the read exposes, so a session can establish a known
+baseline instead of being stuck at `UNKNOWN` forever. `TWO_LEGS → THREE_LEGS`
+works from a standing bipod (3/3), so an animation that leaves him bipod can
+be recovered **in software** — no human needed to stand him up.
+
+**`leg_pos` is the third leg's position**, confirmed by the operator watching
+it move at the moment the float jumped 227 units. Cleanly bimodal, ~2.9
+deployed and ~230.1 retracted, repeatable to ~0.13 between deployments. That
+makes `set_leg_position` interpretable enough to write safely later — which is
+exactly why #22 required reading it first.
+
+**The deploy pushes him slightly FORWARD, not backward** (operator
+observation). Clearance is needed in front. An earlier briefing of mine said
+the opposite; it was a guess and it was wrong.
+
+> [!warning] `stop` wipes the stance baseline
+> `perform_leg_action(STOP)` does **not** retract the leg — `leg_pos` was
+> byte-identical either side of a `stop` and the operator confirmed the leg
+> stayed down. But it **resets `get_leg_action` to `UNKNOWN`**.
+>
+> `stop` runs on every exit, so **no session can hand off a known stance to
+> the next one.** The bootstrap above has to be redone every time. Not
+> dangerous — he is not destabilised — but it means "what stance is he in?"
+> is unanswerable at the start of every session by construction.
+
+> [!important] R2 retracts the third leg by himself, a short time after the link drops
+> **OBSERVED**, and watched happening. Three candidates were tested in one
+> session and the first two were eliminated outright:
+>
+> - **`stop` does not retract it.** Tested with the link still up: `leg_pos`
+>   byte-identical either side, operator confirmed the leg stayed down.
+> - **Disconnect does not retract it.** Tested with Ctrl-C: leg stayed down,
+>   operator confirmed nothing happened.
+> - **Time does.** With R2 sitting disconnected in tripod, the leg raised on
+>   its own a short while later, watched by the operator. No command was in
+>   flight and nothing was touching him.
+>
+> **The delay was about one minute** (operator, watching). That number rules
+> out the first explanation reached for: it is too quick for an inactivity or
+> sleep timer, and too slow to be part of the disconnect itself.
+>
+> **INFERRED:** this is R2's own *link-loss parking* behaviour — controller
+> gone, no keepalive arriving, so retract to the compact state. The retraction
+> and the delay are OBSERVED; the reason is not, and n=1 on the timing.
+>
+> Note the direction it parks in. **R2's idea of a safe default is bipod, not
+> tripod** — the opposite of what "default to STOP" implies to a reader of
+> `CLAUDE.md`'s safety section. Our stop leaves him standing on three legs;
+> a minute later he takes one away, and nothing in our code is involved.
+>
+> **He therefore has no resting posture** — exactly like the dome having no
+> home position, and for the household-presence goal in `CLAUDE.md` it is the
+> same class of problem: a persistent companion is always *discovered* in
+> bipod, whatever stance you left him in. Any behaviour that assumes a tripod
+> at wake-up is assuming something false.
+>
+> It matters for the goal in `CLAUDE.md` — a persistent household presence
+> that is always discovered in bipod has effectively no resting posture, the
+> same way the dome has no home position.
+
 ### Sensors in
 
 `extended_sensors` (`r2d2.py:470-477`): `r2_head_angle` (-162…182), gyroscope
