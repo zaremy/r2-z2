@@ -66,6 +66,24 @@ little entity is continuously present in the household.
   everything inherited. And a correctly-resolved capability can still be
   refused by the firmware — `enable_idle_animations` is the standing
   counterexample. Presence means "worth probing", not "supported".
+- **R2 parks himself in bipod about a minute after the link drops.** OBSERVED,
+  by elimination: `stop` does not retract the third leg (tested with the link
+  up), and the disconnect does not either (tested with Ctrl-C) — it raises on
+  its own a minute later. So **"default to STOP" does not mean he is left
+  stable**; his own safe default is two legs. He has no resting posture, the
+  same way the dome has no home position. Any behaviour that assumes a tripod
+  at wake-up is assuming something false.
+- **Authored animations drive leg actions and can fell him.** `EMOTE_YES` — a
+  nod — emitted WADDLE three times and put him on the floor, with
+  `perform_leg_action` never called by us. An animation is a stance command
+  whose contents cannot be inspected first, which is why it sits at the
+  `stance` tier and not `dome` (D-009). Bipod is a stable *standing* stance;
+  WADDLE is what topples him. **The tripod is needed to MOVE, not to STAND.**
+- **Batch the hardware work, then write it up.** Interleaving measurement with
+  docs and PRs lets the daemon idle-timeout expire mid-writeup, and only the
+  operator can relaunch it — one session cost four manual relaunches. Their
+  attention is the scarce resource, not yours: take every reading you need
+  while the link is live, then let it drop and write.
 - **Running a survey where a human is the instrument?** Use `/survey-session`.
   Brief before firing, fire within ~3 s of "go", and never suppress stderr on a
   send loop — a silent crash reads exactly like a dead device.
