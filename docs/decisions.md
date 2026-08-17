@@ -213,8 +213,10 @@ body, across all 56 ids, with R2 free-standing and unassisted.
 
 **36 of 56 emit `WADDLE`.** The survey asserted and **read back** `THREE_LEGS`
 before every id; all 36 retracted the stabiliser themselves. Only **20 of 56**
-are usable on a standing droid, and the 36 include the entire emotional core —
-`EMOTE_*` and most of `WWM_*`, `WWM_CURIOUS` among them.
+are usable on a standing droid. The 36 include most of the emotional core —
+most of `EMOTE_*` and most of `WWM_*`, `WWM_CURIOUS` among them. Not all:
+`EMOTE_NO` (16) and `EMOTE_RETREAT` (17) touch no legs at all, and `EMOTE_DRIVE`
+(11) and `EMOTE_FIERY` (18) only leave him in bipod.
 
 **Decision.** Semantic behaviors compose dome + sound + light + explicit stance
 themselves. They do **not** call `play_animation` for anything emotional. The
