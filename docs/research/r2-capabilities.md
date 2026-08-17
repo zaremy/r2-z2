@@ -226,17 +226,40 @@ is silently plausible.
 So the sequence is: `WADDLE`, `WADDLE`, `WADDLE`, **`TRANSITIONING`**,
 animation_complete, **`TWO_LEGS`**.
 
-> [!important] The animation left him in bipod, and that is why he fell
-> `EMOTE_YES` ends in `TWO_LEGS` — third leg **retracted** — and nothing puts it
-> back. The last event of the whole sequence is the stance it was left in.
-> R2 was standing on two legs with no stabiliser when the animation reported
-> complete.
+> [!important] It is WADDLE that topples him, not the bipod end-state
+> `EMOTE_YES` ends in `TWO_LEGS` — stabiliser retracted, never restored — and
+> R2 fell during it. The obvious reading is "bipod is unstable". **That reading
+> is wrong**, and was corrected the same session by the cheapest possible test:
+> after the fall he was stood back up and **left standing in bipod, stable and
+> upright, indefinitely** (OBSERVED).
 >
-> **This is directly checkable and cheap.** `get_leg_action` (CID `0x25`) is a
-> **read**, so stance can be verified before and after any animation without
-> touching an actuator, and `perform_leg_action(THREE_LEGS)` restores the
-> tripod. Neither op exists in `r2_probe.py` yet — adding them is what makes
-> #12 safe to run. See #22.
+> So being on two legs is fine. What is in the event sequence besides the
+> end-state is **`WADDLE` ×3** — translation on two tracks with the stabiliser
+> up. **INFERRED:** the tripod is required to *move*, not to *stand*; on two
+> legs he can rotate in place but translating topples him. This matches the
+> operator's independent hypothesis, formed from watching, before the event
+> payloads were decoded.
+>
+> **Consequence for #12: the hazard is an animation that waddles, not one that
+> ends bipod.** A classifier keying on the final stance would pass a
+> waddle-in-the-middle animation as safe. Key on whether `WADDLE` appears in
+> the leg-event sequence at all.
+
+> [!warning] `get_leg_action` does not SENSE the stance
+> **OBSERVED:** R2 standing visibly and definitely in bipod, freshly connected,
+> answered `raw: 0` = `UNKNOWN`. It reports tracked state that a reconnect
+> wipes, not a measurement of where the legs are.
+>
+> **So a stance read cannot establish ground truth at session start.** The
+> obvious safety protocol — "read stance, confirm tripod, then play" — blocks on
+> the first item and never opens, because the honest answer at connect is always
+> `UNKNOWN`. `stable` is correctly `false` there; the op is not lying, it simply
+> cannot bootstrap.
+>
+> Establishing a known stance needs `perform_leg_action` (a write, and stance
+> bring-up — see #22) or a human eye. What the read IS good for: detecting a
+> *change* within a session, once a baseline exists. Same discipline as the
+> dome — read it, do not assume it, and never trust it across handling.
 
 > [!danger] An authored animation knocked the robot over
 > `EMOTE_YES` — a *nod* — commanded `WADDLE` three times and then `TWO_LEGS`,
