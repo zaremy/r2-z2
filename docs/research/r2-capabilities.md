@@ -602,7 +602,7 @@ No feature of the event stream separates fallers from survivors:
 | longest consecutive run | 2 – 5 | 0 – 8 |
 | duration | 3.00 – 9.11 s | 1.51 – 21.30 s |
 
-Every range overlaps. Id 24 has 10 waddles and a run of 8 and stayed up; id 22
+Every range overlaps. Id 42 has 10 waddles and a run of 8 and stayed up; id 22
 has 4 and a run of 2 and went down. **`leg_action_complete` reports state
 transitions only** — never direction, distance or force — so a two-waddle lurch
 and a six-waddle shuffle are the same symbol. The signal that would predict a

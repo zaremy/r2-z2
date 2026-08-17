@@ -246,7 +246,7 @@ observed standing three times can fall on the fourth. **A waddler that did not
 fall is lucky, not safe.**
 
 Nor does the event stream predict it: waddle count, longest run and duration
-all overlap between fallers and survivors. Id 24 waddled 10 times with a run of
+all overlap between fallers and survivors. Id 42 waddled 10 times with a run of
 8 and stayed up; id 22 waddled 4 times with a run of 2 and went down.
 `leg_action_complete` reports state transitions with **no direction, distance
 or force**, so the quantity that causes a fall is simply not in the signal.
