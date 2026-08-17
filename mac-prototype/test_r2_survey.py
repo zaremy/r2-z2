@@ -161,7 +161,7 @@ class TestResumeAndDurability(TempSurvey):
     """AC3 resume, AC7 durability."""
 
     def test_next_does_not_replay_observed_items(self):
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         S.main(["record", "anim:0", "--json", json.dumps(VALID_OBS)])
         state = S.derive_state(S.load_attempts(warn=lambda m: None))
         self.assertTrue(state["items"]["anim:0"]["done"])
@@ -224,7 +224,7 @@ class TestExportGate(TempSurvey):
     """AC6 parseable table, AC8 export blocked while attempts are unresolved."""
 
     def test_export_blocked_by_unresolved_attempt(self):
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         S.main(["record", "anim:0", "--json", json.dumps(VALID_OBS)])
         self.assertEqual(S.main(["resolve", "anim:1", "--state", "aborted_unknown"]), 0,
                          "resolve must work on an item with no prior attempt")
@@ -254,7 +254,7 @@ class TestUnsafeReplayGate(TempSurvey):
     """AC9: next refuses to re-emit an item held at unsafe_replay_review."""
 
     def test_next_refuses_unsafe_replay_item(self):
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         self.assertEqual(S.main(["resolve", "anim:8", "--state", "unsafe_replay_review",
                                  "--reason", "aborted mid-drive"]), 0)
         import io, contextlib
@@ -268,18 +268,18 @@ class TestUnsafeReplayGate(TempSurvey):
 class TestResolve(TempSurvey):
     def test_resolve_works_with_no_prior_attempt(self):
         """The session-abort path: fired but never recorded."""
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         self.assertEqual(S.main(["resolve", "anim:5", "--state", "aborted_unknown"]), 0)
         st = S.derive_state(S.load_attempts(warn=lambda m: None))["items"]["anim:5"]
         self.assertEqual(st["state"], "aborted_unknown")
         self.assertFalse(st["done"])
 
     def test_resolve_rejects_unknown_item(self):
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         self.assertEqual(S.main(["resolve", "anim:999", "--state", "aborted_unknown"]), 2)
 
     def test_resolve_will_not_silently_undo_a_completed_observation(self):
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         S.main(["record", "anim:0", "--json", json.dumps(VALID_OBS)])
         self.assertEqual(S.main(["resolve", "anim:0", "--state", "needs_reobserve"]), 2)
 
@@ -298,7 +298,7 @@ class TestReviewFindings(TempSurvey):
 
     def test_resolve_cannot_fabricate_observed_complete(self):
         """It has no observation, so status counted it done and export died on KeyError."""
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         self.assertEqual(S.main(["resolve", "anim:3", "--state", "observed_complete",
                                  "--reason", "hand-wave"]), 2)
         st = S.derive_state(S.load_attempts(warn=lambda m: None))["items"]
@@ -307,7 +307,7 @@ class TestReviewFindings(TempSurvey):
     def test_unresolved_attempt_survives_a_manifest_tier_switch(self):
         """Scoping the export gate to the loaded manifest let an unsafe_replay_review
         vanish when the operator regenerated a different tier."""
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         self.assertEqual(S.main(["resolve", "anim:8", "--state", "unsafe_replay_review",
                                  "--reason", "aborted"]), 0)
         self.assertEqual(S.main(["export"]), 2, "blocked while on the motion manifest")
@@ -328,7 +328,7 @@ class TestReviewFindings(TempSurvey):
 
     def test_next_marks_driving_items_issued(self):
         """A lost record on a driving animation must not allow a blind replay."""
-        self.make_manifest("motion")
+        self.make_manifest("stance")
         import io, contextlib
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             S.main(["next", "--count", "12"])

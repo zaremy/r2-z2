@@ -60,8 +60,17 @@ a file queue.
 ./r2 daemon --allow read          # read-only (default)
 ./r2 daemon --allow leds          # + LED writes
 ./r2 daemon --allow audio         # + sounds
-./r2 daemon --allow motion        # + dome and animations
+./r2 daemon --allow dome          # + dome moves (cannot change his stance)
+./r2 daemon --allow stance        # + animations — CAN PUT HIM ON THE FLOOR
 ```
+
+> [!warning] `dome` and `stance` were one tier called `motion` until #11
+> `motion` claimed to grant "dome and animations". Then one authored animation
+> — `EMOTE_YES`, a *nod* — emitted `WADDLE` x3 and knocked R2 over, with
+> `perform_leg_action` never called by us. **An authored animation is a stance
+> command whose contents we cannot inspect first**, so it now sits above the
+> dome rung. `--allow motion` still works and resolves **down** to `dome`; it
+> no longer grants `animation`. See D-009.
 
 The `--allow` ceiling mirrors the fixed bring-up ladder in `../CLAUDE.md`:
 **read-only → LEDs → audio → small dome → stance → locomotion.** Ops above the

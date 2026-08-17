@@ -537,7 +537,7 @@ class TestIdleControl(VerifiedGate):
     """AC5 (the half that needs no robot): the op sends the right bytes at the
     right tier. That it actually quiets him is a hardware check."""
 
-    def test_idle_needs_motion_in_BOTH_directions(self):
+    def test_idle_needs_the_dome_ceiling_in_BOTH_directions(self):
         """No longer direction-dependent, and no longer relaxable. It writes to
         the motion device, so it sits above the read ceiling permanently —
         and nothing needs it lower, because the command does not work at all."""
@@ -546,7 +546,7 @@ class TestIdleControl(VerifiedGate):
                 resp, r2 = handle({"op": "idle", "params": {"enable": enable}},
                                   ceiling)
                 self.assertFalse(resp["ok"], f"idle ran at {ceiling}")
-                self.assertIn("needs tier 'motion'", resp["error"])
+                self.assertIn("needs tier 'dome'", resp["error"])
                 self.assertEqual(r2.calls, [])
 
     def test_idle_defaults_to_disabling(self):
@@ -555,11 +555,11 @@ class TestIdleControl(VerifiedGate):
         self.assertIn(("enable_idle_animations", False), r2.calls)
         self.assertFalse(resp["data"]["idle_enabled"])
 
-    def test_enabling_idle_needs_the_motion_ceiling(self):
+    def test_enabling_idle_needs_the_dome_ceiling(self):
         for ceiling in ("read", "leds", "audio"):
             resp, r2 = handle({"op": "idle", "params": {"enable": True}}, ceiling)
             self.assertFalse(resp["ok"], f"idle-on wrongly allowed at {ceiling}")
-            self.assertIn("needs tier 'motion'", resp["error"])
+            self.assertIn("needs tier 'dome'", resp["error"])
             self.assertEqual(r2.calls, [])       # refused BEFORE any command
         resp, r2 = handle({"op": "idle", "params": {"enable": True}}, "motion")
         self.assertTrue(resp["ok"])
@@ -833,10 +833,14 @@ class TestHandlerBasics(VerifiedGate):
         even with `_tier_ok` stubbed to return True, because FakeR2 lacked the
         motion methods and the resulting AttributeError also produced ok:False.
         The permission ladder could be deleted wholesale and this stayed green."""
-        for op, params in (("dome", {"delta": 5}), ("animation", {"id": 1})):
+        # The two are named with their OWN tiers, not a shared one: since #11
+        # they sit on different rungs, and a test that let them share would go
+        # green again if `animation` were ever quietly moved back down.
+        for op, params, tier in (("dome", {"delta": 5}, "dome"),
+                                 ("animation", {"id": 1}, "stance")):
             resp, r2 = handle({"op": op, "params": params}, "read")
             self.assertFalse(resp["ok"])
-            self.assertIn("needs tier 'motion'", resp["error"])
+            self.assertIn(f"needs tier '{tier}'", resp["error"])
             self.assertEqual(r2.calls, [], "a command went out before refusal")
 
     def test_every_op_above_its_ceiling_is_refused_with_a_tier_reason(self):
@@ -1286,6 +1290,57 @@ class TestStanceIsReadableAtEveryCeiling(GateControl):
         and diverge at 0 and 4."""
         self.assertEqual(P.LEG_STATES[0], "unknown")        # R2LegActions[0] is STOP
         self.assertEqual(P.LEG_STATES[4], "transitioning")  # R2LegActions has no 4
+
+
+class TestDomeCeilingCannotKnockHimOver(GateControl):
+    """The ladder used to top out at `motion`, described as "dome and
+    animations". #11 proved that description false in the direction that
+    matters: `play_animation` drives leg actions — EMOTE_YES, a *nod*, emitted
+    WADDLE x3 and put R2 on the floor, with `perform_leg_action` never called.
+
+    So a session opened to survey the dome could topple the robot while the
+    ceiling's own name promised it could not. These tests pin the split."""
+
+    def test_animation_is_above_dome(self):
+        self.assertEqual(P.op_tier("dome"), "dome")
+        self.assertEqual(P.op_tier("animation"), "stance")
+        self.assertGreater(P.TIERS.index("stance"), P.TIERS.index("dome"))
+
+    def test_a_dome_session_cannot_play_an_animation(self):
+        """The whole point. #10 ran at this ceiling; had `animation` been
+        reachable there, one stray request could have ended it on the floor."""
+        resp, r2 = handle({"op": "animation", "params": {"id": 21}}, "dome")
+        self.assertFalse(resp["ok"])
+        self.assertIn("needs tier 'stance'", resp["error"])
+        self.assertEqual(r2.calls, [], "the animation went out anyway")
+
+    def test_a_dome_session_can_still_move_the_dome(self):
+        resp, _ = handle({"op": "dome", "params": {"delta": 5}}, "dome")
+        self.assertTrue(resp["ok"])
+
+    def test_motion_is_an_alias_that_resolves_DOWN_not_up(self):
+        """Someone who typed the old name gets refusals on animation — a
+        message on a terminal. Resolving it UP would silently re-grant the
+        ability to knock him over. Ambiguity resolves toward less capability."""
+        self.assertEqual(P.resolve_tier("motion"), "dome")
+        resp, r2 = handle({"op": "animation", "params": {"id": 21}}, "motion")
+        self.assertFalse(resp["ok"])
+        self.assertEqual(r2.calls, [])
+
+    def test_the_old_name_is_not_a_tier_any_more(self):
+        self.assertNotIn("motion", P.TIERS)
+
+    def test_stance_read_is_still_available_at_every_rung(self):
+        """Reading the leg state must never require a ceiling that can change
+        it — otherwise the only way to find out whether he is stable is to
+        open a session that can destabilise him."""
+        for ceiling in P.TIERS:
+            resp, _ = handle({"op": "stance"}, ceiling)
+            self.assertTrue(resp["ok"], f"stance refused at {ceiling}")
+
+    def test_stop_is_still_reachable_from_every_rung(self):
+        for ceiling in P.TIERS:
+            self.assertIn("stop", P.allowed_ops(ceiling))
 
 
 if __name__ == "__main__":

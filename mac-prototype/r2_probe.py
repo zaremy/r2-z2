@@ -841,11 +841,36 @@ def release_daemon_lock() -> None:
 # Permission ladder — mirrors the fixed bring-up order in CLAUDE.md:
 # read-only → LEDs → audio → small dome → stance → locomotion.
 # The daemon is started with a ceiling; ops above it are refused, not executed.
-TIERS = ["read", "leds", "audio", "motion"]
+#
+# `motion` used to be the top rung and covered dome AND animations, described as
+# "dome and animations". #11 showed that description was false in the direction
+# that matters: `play_animation` drives LEG ACTIONS. EMOTE_YES — a nod — emitted
+# WADDLE x3 and put R2 on the floor, without `perform_leg_action` ever being
+# called. So a session opened for a dome survey could change his stance and
+# topple him, while the ceiling's own name promised otherwise.
+#
+# Split so the rungs mean what the ladder says:
+#   dome   — set_head and the DID 0x17 writes that cannot change stance.
+#            Bounded by bounded_head_move; the worst case is a 45 degree turn.
+#   stance — anything that can put him on the floor. `animation` lives here
+#            BECAUSE OF THE OBSERVATION, not by category: an authored animation
+#            is a stance command we do not get to inspect first.
+TIERS = ["read", "leds", "audio", "dome", "stance"]
+
+# `motion` is accepted and mapped DOWN to `dome`, never up. Someone who typed it
+# expecting the old dome+animation grant now gets refusals on animation, which
+# is a message on a terminal; mapping it up would silently re-grant the ability
+# to knock the robot over. When a rename is ambiguous, resolve toward less
+# capability.
+TIER_ALIASES = {"motion": "dome"}
+
+
+def resolve_tier(name: str) -> str:
+    return TIER_ALIASES.get(name, name)
 
 
 def _tier_ok(ceiling: str, needed: str) -> bool:
-    return TIERS.index(needed) <= TIERS.index(ceiling)
+    return TIERS.index(needed) <= TIERS.index(resolve_tier(ceiling))
 
 
 def _strict_bool(value, field: str) -> bool:
@@ -1143,13 +1168,16 @@ OPS = {
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
     "events":     ("read",   _op_events),    # reading is never a hazard
-    "notify":     ("motion", _op_notify),   # writes DID_ANIMATRONIC
-    "idle":       ("motion", _op_idle),     # writes DID_ANIMATRONIC (refuted)
+    "notify":     ("dome",   _op_notify),   # writes DID_ANIMATRONIC
+    "idle":       ("dome",   _op_idle),     # writes DID_ANIMATRONIC (refuted)
     "leds":       ("leds",   _op_leds),
     "sound":      ("audio",  _op_sound),
     "stop_audio": ("audio",  _op_stop_audio),
-    "dome":       ("motion", _op_dome),
-    "animation":  ("motion", _op_animation),
+    "dome":       ("dome",   _op_dome),
+    # `stance`, not `dome`: OBSERVED #11 — an authored animation drives leg
+    # actions and knocked R2 over. An animation is a stance command whose
+    # contents we cannot inspect before sending it.
+    "animation":  ("stance", _op_animation),
 }
 
 
@@ -1222,7 +1250,7 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
 async def cmd_daemon(args) -> int:
     # BEFORE the wipe below, which is the whole point: that wipe is what makes
     # a second daemon destructive rather than merely redundant.
-    holder = acquire_daemon_lock(args.allow)
+    holder = acquire_daemon_lock(resolve_tier(args.allow))
     if holder is not None:
         started = holder.get("started") or 0
         print(f"\nREFUSING TO START — another r2 daemon already holds the bridge.\n"
@@ -1252,11 +1280,20 @@ async def _run_daemon(args) -> int:
     for stale in list(REQ_DIR.glob("*.json")) + list(RESP_DIR.glob("*.json")):
         stale.unlink()
 
-    ceiling = args.allow
+    # Resolve the alias HERE, once, so everything downstream — the banner, the
+    # refusal messages, the lock file — names the tier that is actually in
+    # force. Printing "MOTION" while enforcing `dome` is the kind of mismatch
+    # this whole split exists to remove.
+    ceiling = resolve_tier(args.allow)
+    if ceiling != args.allow:
+        print(f"\nNOTE: --allow {args.allow} is deprecated and has been read as "
+              f"'{ceiling}'.\n      It no longer grants `animation`: #11 observed an "
+              f"authored\n      animation drive leg actions and put R2 on the floor. "
+              f"Use\n      --allow stance if you actually want animations.\n")
     allowed = allowed_ops(ceiling)
     print(f"\n{'='*62}\n  r2 bridge daemon — permission ceiling: {ceiling.upper()}")
     print(f"  allowed ops: {', '.join(allowed)}")
-    if ceiling != "motion":
+    if ceiling != TIERS[-1]:
         print(f"  refused    : {', '.join(sorted(set(OPS) - set(allowed)))}")
     print(f"  queue      : {BRIDGE}")
     print(f"  idle timeout: {args.idle_timeout:.0f}s     Ctrl-C to stop safely")
@@ -1403,8 +1440,10 @@ def main() -> int:
 
     dae = sub.add_parser("daemon", parents=[common],
                          help="hold a session and serve ops from the file queue")
-    dae.add_argument("--allow", choices=TIERS, default="read",
-                     help="permission ceiling (default: read-only)")
+    dae.add_argument("--allow", choices=TIERS + list(TIER_ALIASES), default="read",
+                     help="permission ceiling (default: read-only). 'motion' is "
+                          "a deprecated alias for 'dome' and does NOT grant "
+                          "animations any more — see #11")
     dae.add_argument("--idle-timeout", type=float, default=900.0,
                      help="disconnect after this many idle seconds")
     dae.add_argument("--verbose", action="store_true", help="log every BLE packet")
