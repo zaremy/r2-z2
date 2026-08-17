@@ -425,10 +425,21 @@ already reaches for red on a negative.
 > animations routinely hold steady colours, the blink/steady distinction will be
 > muddied every time one plays.
 
-**Untested and load-bearing: we have never driven a blink ourselves.** Every
-colour we set held *steady*, which is half the scheme proven. Blinking means
-toggling the channel on a timer from our side, and neither the achievable rate
-nor whether it reads as deliberate rather than glitchy has been measured.
+**Untested and load-bearing: we have never driven a modulation ourselves.**
+Every colour we set held *steady*, which is only the status half of the scheme.
+Two things are unproven, and the expression half rests on both:
+
+- **Blink** — toggling one colour on and off from our side. Neither the
+  achievable rate nor whether it reads as deliberate rather than glitchy has
+  been measured.
+- **Alternation** — cycling between two colours. The firmware does this at rest
+  (front red/blue, back green/yellow), so the *hardware* plainly can; what is
+  unknown is whether **we** can drive it at a comparable rate over BLE, or
+  whether the round-trip makes ours look sluggish next to the firmware's own.
+
+The second is the sharper risk. Our modulation competes visually with a native
+pattern the user has already seen, so "we can do it" is not the bar — it has to
+not look worse.
 
 **The model is a utility panel.** A green or red indicator on the outside tells
 you the state from across the room; you open the panel and there is a small
