@@ -719,7 +719,9 @@ must be followed by an explicit dome move if a known orientation is wanted.
 
 ### LED colour — the channel is ours to own
 
-Ad-hoc, serving the colour-semantics ruling in D-011; not a #12 criterion.
+Ad-hoc, serving the colour-semantics ruling in **D-012**; not a #12
+criterion. (An earlier revision of this line cited D-011, which is the
+backpack-speaker decision — wrong ADR.)
 
 - **At rest the droid is not dark.** Front alternates **red/blue**, back
   alternates **green/yellow**. Animation id 0 *speeds up* the front alternation
@@ -735,6 +737,46 @@ Ad-hoc, serving the colour-semantics ruling in D-011; not a #12 criterion.
   without being re-issued. So our colour behaves as a **base layer**: masked
   during an animation, reasserted after. **n=1, one animation id** — whether
   every animation behaves this way is UNKNOWN.
+- **OBSERVED — the base colour survives a disconnect.** Green set, animations
+  played over it, daemon killed, reconnected an hour later: **still green**. The
+  base layer persists with nothing maintaining it, so it is storage rather than
+  something we refresh.
+
+#### Colour depth: PWM works, but pastels do not read
+
+Every test above sent only `0` or `255` per channel. A `(120, 190, 255)` pale
+blue rendered **pale** — "almost grey" — so intermediate levels are real and the
+full 24-bit space is available.
+
+**Low saturation reads as grey, though**, which makes pastels useless as distinct
+meanings. Any colour semantics must use hard-contrasting hues.
+
+#### The flicker is R2's; the jitter is ours
+
+Two phenomena were being conflated, and only one survives the port to firmware:
+
+| | Cause | Survives the ESP32 port? |
+|---|---|---|
+| timing jitter, up to **158 ms** | our two bridge poll loops | **no** |
+| flicker on every colour change | R2's LED update path | **yes** |
+
+**Isolated by writing the identical colour 20 times with no value change: rock
+steady.** So the write path does not blank the LED — the *change* is what is
+visible, and a 30-unit step flickers exactly as much as a full swap.
+
+**OBSERVED consequence: smooth interpolation is not available on this
+hardware.** An interpolated baby-blue→cyan pulse read as flicker rather than a
+fade for this reason, not because the ramp was too coarse. The light language is
+inherently **steppy**: design discrete high-contrast frames, do not attempt
+fades. Ruled on in D-012.
+
+> [!warning] The modulation rate ceiling here is the BRIDGE, not the LED
+> ~**0.389 s** median per set, decomposing as ~0.07 s CLI process spawn + a
+> 0.2 s daemon request-queue poll (`r2_probe.py:1442`) + a 0.15 s client
+> response poll (`r2_probe.py:1517`). Two poll loops account for ~0.35 s of it.
+> So nothing faster than ~0.8 s per cycle can be driven evenly **through this
+> harness**, and the true ceiling is **unmeasured**. Do not carry 0.4 s forward
+> as "the LED update rate". Tracked on #17.
 
 ### Enum groups
 
