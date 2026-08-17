@@ -14,6 +14,19 @@ little entity is continuously present in the household.
   connectivity, diagnostics, hardware tests, provisioning. It is *not* a face.
   Do not add character rendering to the screen without an explicit decision
   recorded in `docs/decisions.md`.
+- **The model is a utility panel: indicator outside, diagnostics behind the
+  door.** The **LED is an affordance** — glanceable from across the room, says
+  *that* something is up, never spells anything out. The **screen is the detail
+  view** — read up close, deliberately, and it is where you find out *what*.
+  Service signals on the body are therefore fine and expected; it is *rendering*
+  that is forbidden there. Two consequences, and both bind:
+  - **Nothing that needs a glance may live only on the screen.** Nobody reads a
+    diagnostic display to find out whether anything is wrong. If a state is
+    worth noticing without going to look, the LED must carry it.
+  - **Nothing with a face or text goes on the body.**
+
+  Colour carries meaning, steady-vs-blink carries mode (status between
+  interactions, expression during one). Full scheme and its evidence: **D-012**.
 
 ## Architecture rules
 
