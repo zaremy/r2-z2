@@ -43,3 +43,6 @@ mac-prototype/.bridge/
 
 # Survey harness state — runtime only
 mac-prototype/.survey/
+
+# Audio/media test material — large binaries, not project source
+testing/
