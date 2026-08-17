@@ -13,6 +13,7 @@ import json
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 
@@ -940,8 +941,14 @@ class TestStopOnExitSurvivesCancellation(unittest.TestCase):
         without looking at either Response — so a rejected stop and a real one
         were indistinguishable on the path that runs when nobody is watching."""
         import inspect
-        epilogue = inspect.getsource(P.cmd_daemon)
-        epilogue = epilogue[epilogue.index("Default to STOP"):]
+        # Both halves: the daemon body was split out of cmd_daemon so the
+        # single-instance lock could wrap it in a finally. Reading both keeps
+        # this pinned to the epilogue itself rather than to which function
+        # happens to hold it today.
+        source = inspect.getsource(P.cmd_daemon) + inspect.getsource(P._run_daemon)
+        self.assertIn("Default to STOP", source,
+                      "the stop-on-exit epilogue is gone entirely")
+        epilogue = source[source.index("Default to STOP"):]
         self.assertIn("stop_everything(r2, shield=True)", epilogue)
         self.assertNotIn("stop sent (animation + audio)", epilogue)
 
@@ -1093,6 +1100,111 @@ class TestNotifyFailsLoudly(VerifiedGate):
         self.assertFalse(resp["ok"])
         self.assertIn("bad_command_id", resp["error"])
         self.assertIn("NOT evidence", resp["error"])
+
+
+class TestOnlyOneDaemonCanHoldTheBridge(unittest.TestCase):
+    """#17 finding 3. Two daemons wipe each other's queue at startup and then
+    race to consume requests, so which `--allow` ceiling applies to a given
+    command stops being predictable — a `motion` daemon behind a `read` one
+    silently re-arms every op the operator believes is refused."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        # All four, not just the two under test: cmd_daemon reaches for
+        # REQ_DIR/RESP_DIR, and a test that wrote to the REAL bridge queue
+        # would be indistinguishable from a stray request during a session.
+        self.saved = (P.BRIDGE, P.LOCK, P.REQ_DIR, P.RESP_DIR)
+        P.BRIDGE = Path(self.tmp.name) / ".bridge"
+        P.LOCK = P.BRIDGE / "daemon.lock"
+        P.REQ_DIR, P.RESP_DIR = P.BRIDGE / "requests", P.BRIDGE / "responses"
+
+    def tearDown(self):
+        P.BRIDGE, P.LOCK, P.REQ_DIR, P.RESP_DIR = self.saved
+        self.tmp.cleanup()
+
+    def test_first_acquire_succeeds_and_records_the_ceiling(self):
+        self.assertIsNone(P.acquire_daemon_lock("read"))
+        held = json.loads(P.LOCK.read_text())
+        self.assertEqual(held["pid"], P.os.getpid())
+        self.assertEqual(held["ceiling"], "read")
+
+    def test_second_daemon_is_refused_while_the_first_lives(self):
+        P.acquire_daemon_lock("read")
+        # A different, live pid: pid 1 (launchd) always exists on macOS and is
+        # never us. Using a fabricated pid would test _pid_alive, not the lock.
+        P.LOCK.write_text(json.dumps({"pid": 1, "ceiling": "read",
+                                      "started": time.time()}))
+        holder = P.acquire_daemon_lock("motion")
+        self.assertIsNotNone(holder, "a second daemon was allowed to start")
+        self.assertEqual(holder["pid"], 1)
+        self.assertEqual(holder["ceiling"], "read")
+
+    def test_the_refusal_happens_before_the_queue_is_wiped(self):
+        """The wipe is what makes a second daemon destructive rather than
+        merely redundant, so the guard has to run first. Asserted against the
+        real cmd_daemon, not a reimplementation of its order."""
+        P.REQ_DIR.mkdir(parents=True, exist_ok=True)
+        inflight = P.REQ_DIR / "0001.json"
+        inflight.write_text(json.dumps({"op": "status"}))
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.LOCK.write_text(json.dumps({"pid": 1, "ceiling": "read",
+                                      "started": time.time()}))
+
+        args = types.SimpleNamespace(allow="motion", idle_timeout=1.0,
+                                     timeout=1.0, name=None, verbose=False)
+        rc = run(P.cmd_daemon(args))
+        self.assertEqual(rc, 1)
+        self.assertTrue(inflight.exists(),
+                        "the running daemon's in-flight request was wiped")
+
+    def test_a_stale_lock_does_not_wedge_the_bridge(self):
+        """A daemon killed with SIGKILL leaves its lock behind. If that were
+        permanent, every later start would refuse until someone deleted a file
+        they have no reason to know exists."""
+        dead = 999_999            # above /proc pid_max and macOS's default
+        self.assertFalse(P._pid_alive(dead))
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.LOCK.write_text(json.dumps({"pid": dead, "ceiling": "motion",
+                                      "started": 0}))
+        self.assertIsNone(P.acquire_daemon_lock("read"))
+        self.assertEqual(json.loads(P.LOCK.read_text())["pid"], P.os.getpid())
+
+    def test_a_truncated_lock_is_treated_as_stale(self):
+        """A lock written by a process that died mid-write must not be more
+        durable than one written by a process that died after it."""
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.LOCK.write_text('{"pid": 12')
+        self.assertIsNone(P.acquire_daemon_lock("read"))
+
+    def test_release_only_drops_our_own_lock(self):
+        """A daemon exiting slowly must not delete a lock a newer daemon
+        legitimately holds — that re-opens the double-daemon window at the one
+        moment it looks safest."""
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.LOCK.write_text(json.dumps({"pid": 1, "ceiling": "motion",
+                                      "started": time.time()}))
+        P.release_daemon_lock()
+        self.assertTrue(P.LOCK.exists(), "deleted a lock belonging to pid 1")
+
+    def test_release_drops_our_lock_so_the_next_start_is_clean(self):
+        P.acquire_daemon_lock("read")
+        P.release_daemon_lock()
+        self.assertFalse(P.LOCK.exists())
+        self.assertIsNone(P.acquire_daemon_lock("motion"))
+
+    def test_the_lock_survives_the_startup_wipe(self):
+        """The wipe globs *.json. A lock named *.json would delete itself."""
+        self.assertFalse(P.LOCK.name.endswith(".json"))
+
+    def test_permission_error_counts_as_alive(self):
+        """EPERM means the process exists and belongs to someone else. Reading
+        that as 'not there' would hand the bridge to a second daemon."""
+        real = P.os.kill
+        P.os.kill = lambda pid, sig: (_ for _ in ()).throw(PermissionError())
+        try:
+            self.assertTrue(P._pid_alive(4242))
+        finally:
+            P.os.kill = real
 
 
 if __name__ == "__main__":

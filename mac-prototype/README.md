@@ -77,6 +77,13 @@ Other safety properties:
 - On exit — Ctrl-C, idle timeout, or error — it sends stop before disconnecting.
   Default to STOP, never last-command
 - Idle timeout disconnects after 15 minutes so R2 is never left awake unattended
+- **One daemon at a time.** Startup takes `.bridge/daemon.lock`; a second daemon
+  refuses to start and prints the running one's pid and ceiling. Without this,
+  the second daemon's startup wipe erases the first's in-flight queue and the
+  two race to consume requests — so a forgotten `--allow motion` daemon behind
+  a `--allow read` one silently re-arms every op you believe is refused. A lock
+  left by a killed daemon is detected as stale and taken over, so nothing has
+  to be cleaned up by hand
 
 Then, from anywhere:
 
