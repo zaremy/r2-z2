@@ -204,58 +204,71 @@ the ladder honest about what exists today; it does not add the missing rungs.
 ---
 
 ## D-010 — Excitement is choreographed by us; authored animations are not a behavior library
-**2026-08-17**
+**2026-08-17** · *survey complete, 56/56*
 
-The plan in `architecture.md` assumed semantic behaviors could delegate to
-authored animations — `celebrate()` plays `EMOTE_LAUGH`, and so on. The S1d
-survey (#12) measured what those animations actually do to the body.
+`architecture.md` assumed semantic behaviors could delegate to authored
+animations — `celebrate()` plays `EMOTE_LAUGH`, `express_curious()` plays
+`WWM_CURIOUS`. The S1d survey (#12) measured what those animations do to the
+body, across all 56 ids, with R2 free-standing and unassisted.
 
-**Of the first 19 ids classified, 13 emit `WADDLE`.** Not as an outlier: it is
-the norm. Id 14 `EMOTE_SHORT_CIRCUIT` emitted 12 waddles across 9.1 s.
+**36 of 56 emit `WADDLE`.** The survey asserted and **read back** `THREE_LEGS`
+before every id; all 36 retracted the stabiliser themselves. Only **20 of 56**
+are usable on a standing droid, and the 36 include the entire emotional core —
+`EMOTE_*` and most of `WWM_*`, `WWM_CURIOUS` among them.
 
-The survey asserted and **read back** `THREE_LEGS` before every single id.
-All 13 waddlers started from tripod, and all 13 **retracted the leg
-themselves** and ended in bipod:
+**Decision.** Semantic behaviors compose dome + sound + light + explicit stance
+themselves. They do **not** call `play_animation` for anything emotional. The
+authored library remains available for a *seated or supported* R2 and as
+timing reference, but it is not the vocabulary the character is built from.
 
-```
-started from 'three_legs': [2,3,4,5,7,8,9,10,12,13,14,15,21]
-ended in    'two_legs':    [2,3,4,5,7,8,9,10,12,13,14,15,21]
-```
-
-The operator was supporting him and he still went down three times during the
-sweep — twice on ids 14 and 15 consecutively.
-
-**Decision.** Semantic behaviors compose dome + sound + light + explicit
-stance themselves. They do **not** call `play_animation` for anything
-emotional. The authored library stays available for a *supported* or
-*seated* R2 and as a source of timing reference, but it is not the vocabulary
-the character is built from.
-
-Two rules follow, both from the operator's own framing:
+Two rules follow, both from the operator's framing:
 
 1. **Tripod down whenever he is "active".** Any behavior with energy in it
-   deploys the stabiliser first and holds it for the duration. Stability is a
-   precondition of expression, not a reaction to losing it.
+   deploys the stabiliser first and holds it. Stability is a precondition of
+   expression, not a reaction to losing it.
 2. **The mechanical leg sound belongs ON the deployment.** That sound is
    `R2_MOTOR = 2970` (`r2_assets.py:152`, `r2d2.py:315`), surveyed in S1b as
    *"long mechanical lift with clocklike ticking"* and the longest clip in the
-   set — it is literally the sound of a leg coming down. Fire it synchronised
-   with the leg moving, not after speech with the leg already down; the sound
-   is the deployment's own voice. Several authored animations get this
-   ordering wrong, which is part of why they read as canned. Deployment
-   settles in 2.28–2.56 s (#22), so the clip has room to run underneath it.
+   set. Fire it synchronised with the leg moving, not after speech with the leg
+   already down. Deployment settles in 2.28-2.56 s (#22), so the clip has room
+   to run underneath it.
 
-**Pre-deploying the tripod does not make an authored animation safe.** That is
-the finding, and it is the reason this is a decision rather than a guideline:
-an animation overrides whatever stance we set, so the only control available
-is not playing it.
+### Why the boundary is `WADDLE` emission and not observed falls
 
-*Reversed by:* a way to inspect an animation's leg track before playing it,
-or a per-animation stance lock in firmware. Neither is known to exist.
+Seven ids were observed to fell him. **That list is not the safety boundary,
+and building one from observation is not possible.**
 
-*Does not fix:* ids 18-55 are unclassified, so the 13 is a floor, not a total.
-`WWM_*` (31-54) is entirely unmeasured and is the set `architecture.md` leans
-on hardest.
+Repeat trials showed the leg-event sequences are near-deterministic — id 53
+replayed 6 waddles in 3.29 s then 3.16 s; id 54 replayed 2 waddles in 1.86 s
+then 1.69 s — while the **fall outcome did not reproduce**. Falling depends on
+starting pose, residual momentum from the previous item, and the surface. An id
+observed standing three times can fall on the fourth. **A waddler that did not
+fall is lucky, not safe.**
+
+Nor does the event stream predict it: waddle count, longest run and duration
+all overlap between fallers and survivors. Id 24 waddled 10 times with a run of
+8 and stayed up; id 22 waddled 4 times with a run of 2 and went down.
+`leg_action_complete` reports state transitions with **no direction, distance
+or force**, so the quantity that causes a fall is simply not in the signal.
+
+### Neither preemptive nor reactive stance management can save an animation
+
+Pre-deploying fails because the animation retracts the leg itself. Re-deploying
+mid-animation was tested on hardware (id 37) and **refuted**: the command was
+*accepted*, not refused, and still arrived far too late. Detection costs a
+bridge round-trip (~0.3-0.5 s) and deployment settles in 2.28-2.56 s (#22),
+against a fall that completes in well under a second. **Even at zero detection
+latency the leg lands more than a second after he is down.** No polling rate
+fixes it.
+
+The only control available is not playing the animation.
+
+*Reversed by:* a way to inspect an animation's leg track before playing it, a
+per-animation stance lock in firmware, or a stabiliser that deploys in
+materially under a second. None is known to exist.
+
+*Does not fix:* AC4's seven conflict verdicts, AC6 interruption testing, and
+the per-id energy/wear/cooldown fields remain open on #12.
 
 ---
 

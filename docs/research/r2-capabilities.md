@@ -551,58 +551,110 @@ itself. Mode 0 is right for interruptions that *should* cut in.
 
 ## 3. Animation vocabulary — 51 ids
 
-### S1d partial — OBSERVED 2026-08-17 on `D2-6F6B` (issue #12), 19/56 ids
+### S1d animation survey — OBSERVED 2026-08-17 on `D2-6F6B` (issue #12), 56/56 ids
+
+Ran at `--allow stance` with R2 **free-standing on a table, unassisted** — no
+hand catching him. Falls are real falls, and every "did not fall" is a genuine
+unassisted survival. Both directions of the fall column are clean.
 
 > [!danger] Most authored animations retract the stabiliser and waddle
-> **13 of the first 19 ids emit `WADDLE`.** It is the norm, not an outlier.
-> Every one of them was started from a **verified** `THREE_LEGS` baseline and
-> **retracted the leg itself**, ending in bipod:
+> **36 of 56 ids emit `WADDLE`.** It is the norm, not an outlier.
 >
-> ```
-> started from 'three_legs': [2,3,4,5,7,8,9,10,12,13,14,15,21]
-> ended in    'two_legs':    [2,3,4,5,7,8,9,10,12,13,14,15,21]
-> ```
->
-> **Pre-deploying the tripod does not make an animation safe.** The animation
-> overrides it. The only control is not playing it — see D-010.
->
-> R2 went down three times during this sweep *while being supported by hand*.
+> Every one was started from a **verified** `THREE_LEGS` baseline — the driver
+> asserted it and read it back before each id — and every one **retracted the
+> leg itself**. Pre-deploying the tripod does not make an authored animation
+> safe; the animation overrides it. See D-010.
 
 | classification | n | ids |
 |---|---|---|
-| `waddles` — cannot run unsupported | 13 | 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 21 |
-| `leaves_bipod` — stable standing, recoverable | 1 | 11 |
-| `no_leg_activity` — safe anywhere | 5 | 0, 1, 6, 16, 17 |
+| `waddles` — unsafe while standing | 36 | 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 19, 21, 22, 24, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 48, 49, 50, 51, 53, 54 |
+| `leaves_bipod` — stable standing, recoverable | 4 | 11, 18, 20, 28 |
+| `returns_to_tripod` — cleans up after itself | 2 | 29, 30 |
+| `no_leg_activity` — safe anywhere | 14 | 0, 1, 6, 16, 17, 23, 25, 26, 27, 34, 44, 47, 52, 55 |
 
-Worst offenders by waddle count: **id 14 `EMOTE_SHORT_CIRCUIT`** (12 waddles,
-9.11 s) and **id 15 `EMOTE_LAUGH`** (8 waddles, 3.30 s) — consecutive, and
-both felled him.
+**Usable on a standing droid: 20 of 56.** The other 36 are the emotional core
+of the library — `EMOTE_*` and most of `WWM_*`, including `WWM_CURIOUS` (35),
+the animation `architecture.md` names for `express_curious()`.
 
-> [!warning] `may_drive` is refuted as a safety filter, now empirically
-> It flags ids 8/9/11 (`translator.c:101-104`). Measured: **8 and 9 waddle;
-> 11 does not.** One of three, in the wrong direction. It describes driving,
-> not stance, and stance is what topples him.
+#### The fall outcome is stochastic; the event sequence is not
 
-Durations are **event-backed** via `animation_complete`, which carries the id
-and fires with no enable command. Range so far 1.50 s (id 0) to 12.19 s
-(id 11).
+Seven ids were **observed** to fell him: **14, 15, 22, 31, 37, 38, 51**. That
+list is not a safe/unsafe boundary, and this is the most important result here.
 
-> [!info] Leg notifications must be enabled or every id looks safe
-> `leg_action_complete` has an enable command upstream; `animation_complete`
-> does not. A session that forgets `notify --params '{"leg":true}'` still sees
-> completions and still measures durations, and silently sees **zero** leg
-> events. The first run of this survey did exactly that and classified
-> `EMOTE_YES` — the known waddler — as `no_leg_activity`, the safest bucket.
-> Prove the channel live by commanding a leg move and seeing the event, before
-> trusting any silence.
+Repeat trials on ids 53 and 54 replayed their leg-event sequences almost
+exactly — 53 gave 6 waddles in 3.29 s then 3.16 s; 54 gave 2 waddles in 1.86 s
+then 1.69 s — while the **fall outcome did not reproduce**. One fall in the
+52-55 block could not be attributed to either on a repeat and is recorded
+UNATTRIBUTED rather than guessed.
 
-> [!warning] Deploy is stable; retract is not
-> A diagnostic that retracted the stabiliser to test the event channel knocked
-> him over backwards. Deploying pushes him slightly forward and is stable
-> (#22). Any forced leg movement should be a **deploy**, never a retract.
+> [!warning] A per-id empirical safe-list is not achievable
+> Falling depends on starting pose, residual momentum from the previous item,
+> and the surface — none of which the animation id determines. An id observed
+> standing three times can fall on the fourth. **A waddler that did not fall is
+> lucky, not safe.** This is why D-010 treats `WADDLE` emission, not observed
+> falls, as the safety boundary.
 
-Remaining: ids 18-55, including the unnamed gaps 20/23/28/29/30 and the entire
-`WWM_*` set (31-54) that `architecture.md` leans on hardest.
+No feature of the event stream separates fallers from survivors:
+
+| | fell (n=7) | stayed up (n=30) |
+|---|---|---|
+| waddle count | 4 – 12 | 0 – 10 |
+| longest consecutive run | 2 – 5 | 0 – 8 |
+| duration | 3.00 – 9.11 s | 1.51 – 21.30 s |
+
+Every range overlaps. Id 24 has 10 waddles and a run of 8 and stayed up; id 22
+has 4 and a run of 2 and went down. **`leg_action_complete` reports state
+transitions only** — never direction, distance or force — so a two-waddle lurch
+and a six-waddle shuffle are the same symbol. The signal that would predict a
+fall (accelerometer, gyro) is sensor streaming, #29 AC1.
+
+#### A reactive stance guard cannot work — REFUTED on hardware
+
+Tested on id 37: play the animation and re-deploy the stabiliser the moment it
+retracts. The re-deploy was **accepted**, not refused — the firmware permits
+commanding `three_legs` mid-animation. It arrived far too late.
+
+The arithmetic rules it out permanently. Detection costs a bridge round-trip
+(~0.3-0.5 s) and deployment settles in **2.28-2.56 s** (#22). A fall completes
+in well under a second. **Even with zero detection latency the leg lands more
+than a second after he is already down.** No polling rate fixes this.
+
+#### The unnamed gaps are valid — all five
+
+Ids **20, 23, 28, 29, 30** are absent from the `spherov2` enum, and this doc
+previously expected `0x02 bad_command_id`. **All five play normally.** They are
+valid-but-unnamed, not invalid. Two of them (29, 30) are the *only* ids in the
+entire library that touch the legs and put the stabiliser back — behaviourally
+the most valuable class found, and unnamed upstream.
+
+#### Durations are event-backed and free
+
+`animation_complete` fires with no enable command and carries the id, so every
+duration here is measured rather than stopwatched. Range **0.88 s** (id 55
+`MOTOR`) to **21.30 s** (id 27 `IDLE_3`).
+
+> [!warning] Two method traps, both hit in this session
+> **Leg notifications must be enabled or every id looks safe.**
+> `animation_complete` fires unprompted; `leg_action_complete` does **not**. A
+> session that forgets the enable still sees completions and still measures
+> durations, and silently sees zero leg events. The first run of this survey
+> did exactly that and classified `EMOTE_YES` — the known waddler — as
+> `no_leg_activity`, the safest bucket. Prove the channel live by commanding a
+> leg move and seeing the event before trusting any silence.
+>
+> **Deploy is stable; retract is not.** A diagnostic that retracted the
+> stabiliser to prove the channel was live knocked him over backwards. Any
+> forced leg movement must be a deploy.
+
+> [!warning] `may_drive` is refuted as a safety filter, empirically
+> It flags ids 8/9/11 (`translator.c:101-104`). Measured: **8 and 9 waddle; 11
+> does not.** One of three, in the wrong direction. It describes driving, not
+> stance, and stance is what topples him.
+
+**Not covered by this pass:** AC4's seven conflict verdicts (0, 3, 4, 7, 9, 13,
+15) need the epic's conflict-resolution protocol with predeclared predicates
+and media artifacts; AC6 interruption testing; and the per-id
+`energy_cost_class` / `wear_class` / `recommended_cooldown_s` fields.
 
 ### Enum groups
 
