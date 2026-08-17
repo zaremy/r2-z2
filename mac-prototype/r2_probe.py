@@ -726,6 +726,89 @@ async def cmd_animation(args) -> int:
 
 BRIDGE = Path(__file__).parent / ".bridge"
 REQ_DIR, RESP_DIR = BRIDGE / "requests", BRIDGE / "responses"
+# Deliberately NOT `*.json`: startup wipes every .json under requests/ and
+# responses/, and a lock that the wipe could delete is not a lock.
+LOCK = BRIDGE / "daemon.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Does a process with this pid exist?
+
+    Signal 0 runs the permission and existence checks without delivering
+    anything. PermissionError means it exists and belongs to someone else,
+    which still counts as alive — treating "not mine" as "not there" would
+    hand the bridge to a second daemon, the exact outcome being prevented.
+
+    PID reuse can make this wrong on a long-lived stale lock. Accepted: on a
+    single-user Mac the consequence is one refused start with a pid printed,
+    and the operator can see for themselves that nothing is running."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _read_lock() -> dict | None:
+    try:
+        held = json.loads(LOCK.read_text())
+    except (OSError, ValueError):
+        return None
+    return held if isinstance(held, dict) and isinstance(held.get("pid"), int) else None
+
+
+def acquire_daemon_lock(ceiling: str) -> dict | None:
+    """Claim the bridge for this daemon. Returns None on success, else the
+    record of the daemon that already holds it.
+
+    This is a safety fix, not tidiness. Daemon startup unlinks EVERY file in
+    requests/ and responses/, so a second daemon started at a different
+    `--allow` erases the first's in-flight queue, and the two then race to
+    consume each request. Which permission ceiling applies to a given command
+    becomes non-deterministic — a `motion` daemon left running behind a `read`
+    one silently re-arms every op the operator believes is refused.
+
+    O_CREAT|O_EXCL rather than exists()-then-write: the check-then-act version
+    has a window where two daemons both see no lock and both take it, which is
+    the same double-daemon state this exists to prevent."""
+    BRIDGE.mkdir(parents=True, exist_ok=True)
+    record = json.dumps({"pid": os.getpid(), "ceiling": ceiling,
+                         "started": time.time()})
+    for _ in range(2):
+        try:
+            fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            held = _read_lock()
+            if held is not None and _pid_alive(held["pid"]):
+                return held
+            # No readable owner, or the owner is gone. Clear it and retry once.
+            # An unreadable lock is treated as stale on purpose: a truncated
+            # write must not wedge the bridge until someone deletes it by hand.
+            try:
+                LOCK.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w") as f:
+            f.write(record)
+        return None
+    # Lost the retry to another starter. Report whoever won.
+    return _read_lock() or {"pid": -1, "ceiling": "unknown", "started": 0}
+
+
+def release_daemon_lock() -> None:
+    """Drop the lock, but only if it is still ours.
+
+    An unconditional unlink would let a daemon shutting down slowly delete a
+    lock that a newer daemon legitimately holds, re-opening the window this
+    closes at the one moment it looks safest."""
+    held = _read_lock()
+    if held is not None and held.get("pid") == os.getpid():
+        LOCK.unlink(missing_ok=True)
 
 # Permission ladder — mirrors the fixed bring-up order in CLAUDE.md:
 # read-only → LEDs → audio → small dome → stance → locomotion.
@@ -1088,6 +1171,33 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
 
 
 async def cmd_daemon(args) -> int:
+    # BEFORE the wipe below, which is the whole point: that wipe is what makes
+    # a second daemon destructive rather than merely redundant.
+    holder = acquire_daemon_lock(args.allow)
+    if holder is not None:
+        started = holder.get("started") or 0
+        print(f"\nREFUSING TO START — another r2 daemon already holds the bridge.\n"
+              f"  pid     : {holder.get('pid')}\n"
+              f"  ceiling : {holder.get('ceiling')}\n"
+              f"  started : {time.strftime('%H:%M:%S', time.localtime(started)) if started else 'unknown'}\n"
+              f"  queue   : {BRIDGE}\n\n"
+              f"Two daemons wipe each other's queue and race to consume "
+              f"requests,\nso which --allow ceiling applies stops being "
+              f"predictable. Stop the\nrunning one first (Ctrl-C in its "
+              f"terminal, or `kill {holder.get('pid')}`).\n"
+              f"If nothing is actually running, delete {LOCK}.\n")
+        return 1
+
+    try:
+        return await _run_daemon(args)
+    finally:
+        # BaseException-proof by construction: a bare finally also covers the
+        # Ctrl-C that ends most sessions. A lock surviving its daemon would
+        # refuse every future start until deleted by hand.
+        release_daemon_lock()
+
+
+async def _run_daemon(args) -> int:
     for d in (REQ_DIR, RESP_DIR):
         d.mkdir(parents=True, exist_ok=True)
     for stale in list(REQ_DIR.glob("*.json")) + list(RESP_DIR.glob("*.json")):
