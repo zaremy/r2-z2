@@ -339,21 +339,39 @@ motors underneath it. Hosting, wake word and transcription remain open.
 
 ---
 
-## D-012 — Colour carries valence, and we own the LED channel
+## D-012 — The LED base layer is system truth; animations play on top
 
 **Status:** accepted 2026-08-17 · operator ruling, hardware-verified the same
 session
 
-**Decision.** Colour on the front and back RGB channels means one thing:
+**Decision.** The front and back RGB channels are a **two-layer surface**:
 
-| Colour | Meaning |
-|---|---|
-| **green** | happy / good / approved |
-| **blue** | neutral — the default resting register |
-| **red** | impatient / annoyed / negative |
+- **Base layer — system truth.** A persistent colour we set, meaning:
 
-Red is **reserved for negative valence**, not used decoratively. Conversational
-states alternate blue↔green.
+  | Colour | Meaning |
+  |---|---|
+  | **green** | success |
+  | **blue** | neutral / on / waiting |
+  | **red** | issue pending resolution |
+
+- **Animation layer — transient expression.** Authored animations bring their
+  own lights and mask the base while they play. They are theatre; they do not
+  carry state.
+
+Red is **reserved**, never decorative.
+
+**This is a status channel, not an emotional one.** An earlier phrasing of this
+ruling read red as *annoyed* — emotional valence. The accepted version is
+**status**: red means something is unresolved, whether or not R2 feels anything
+about it. Status is checkable and emotion is not, which is what makes the base
+layer trustworthy at a glance.
+
+**Why the layering is the point, not a compromise.** The first draft of this
+decision filed "the semantics are invisible during an animation" as a cost. It
+is not a cost — it is the design. Persistent state lives underneath, transient
+expression plays above, and the hardware already behaves exactly this way
+without being asked to: **the base colour reasserts itself when the animation
+ends, unprompted.**
 
 **Why this is implementable, which was not obvious.** The droid is not dark at
 rest — his front alternates red/blue and his back alternates green/yellow on
@@ -369,21 +387,33 @@ their own. Three things were measured before accepting this (§3,
    afterwards**, unprompted. Our colour is a **base layer**, not a one-shot
    write.
 
-**What this costs.** The semantics are **invisible during an authored
-animation**, which brings its own lights. That is a smaller loss than it
-sounds, because D-010 already ruled authored animations out as the behaviour
-library — only 20 of 56 are usable standing.
+**This pairs with D-010 rather than working around it.** D-010 ruled authored
+animations out as the behaviour library — only 20 of 56 are usable standing,
+and we cannot inspect what one will do before playing it. The base layer is the
+channel we **can** control, so state lives there and the uncontrollable layer is
+demoted to decoration. Losing animations as a state carrier costs nothing once
+state has a home.
 
 **Corroboration from the droid's own authoring:** id 4, adjudicated as
 translator's `ANIM_SAD` ("denied"), **holds red steady** — breaking its own
-baseline alternation to do it. The firmware already uses red for refusal.
+baseline alternation to do it. The firmware already uses red for a refusal.
+
+> [!warning] This puts a service signal on the character's body
+> `CLAUDE.md` draws a hard boundary: R2's body is the character interface, the
+> backpack screen is the service panel. A status light on his dome sits on the
+> character side of that line. Accepted deliberately — R2-D2's lights read as
+> status *in canon*, so this reinforces the character rather than breaking it,
+> and the alternative (status on the screen) puts system state where nobody
+> looks. **The boundary still holds for anything with a face or text.**
 
 *Reversed by:* a playtest where the colour reads as arbitrary rather than
-meaningful, or by finding an animation that does **not** restore the base layer
-(only one id was tested, n=1).
+meaningful; by finding an animation that does **not** restore the base layer
+(only one id was tested, n=1); or by the status reading feeling like a machine
+indicator bolted onto a character.
 
-*Does not decide:* brightness, the logic-display and holo-projector channels,
-what yellow means, or transition timing between states.
+*Does not decide:* brightness, the logic-display and holo-projector channels
+(brightness-only, so they cannot carry this), what yellow means, transition
+timing, or whether the two fixtures show the same colour or different ones.
 
 ---
 
