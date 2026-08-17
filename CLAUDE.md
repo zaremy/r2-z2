@@ -117,6 +117,19 @@ little entity is continuously present in the household.
   safe direction is unavailable from the current state, refuse and say so rather
   than falling back to the unsafe one — a diagnostic must never be the most
   dangerous command in the session.
+- **An LED colour we set is STATE, not a command — it survives the link
+  dropping.** Green set in the afternoon was still lit an hour later, across
+  animations played over it, a daemon kill and a fresh connect. The firmware's
+  own resting alternation does not resume and overwrite it; an animation only
+  masks it and it returns unprompted. So the base layer is storage we own, and
+  the corollary bites: **whatever colour a session leaves him in is what the
+  household sees until something changes it.** Leave him in a defined state.
+- **He never sleeps while we are connected, because our keepalive IS the wake
+  command.** `DID 0x13 / CID 0x0D` every ~3 s (`r2_probe.py:523`). Any `sleep`
+  we send is undone within three seconds, which is why he has no idle timeout in
+  practice and why there is no working "off" — unplugging does nothing on a
+  charged battery. A soft power control is a **session-lifecycle** change, not a
+  new op (#38). Do not read "he stayed awake" as a firmware property; it is us.
 - **Running a survey where a human is the instrument?** Use `/survey-session`.
   Brief before firing, fire within ~3 s of "go", and never suppress stderr on a
   send loop — a silent crash reads exactly like a dead device.
