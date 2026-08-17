@@ -360,11 +360,30 @@ session
 
 Red is **reserved**, never decorative.
 
-**This is a status channel, not an emotional one.** An earlier phrasing of this
-ruling read red as *annoyed* — emotional valence. The accepted version is
-**status**: red means something is unresolved, whether or not R2 feels anything
-about it. Status is checkable and emotion is not, which is what makes the base
-layer trustworthy at a glance.
+**Two axes, and keeping them separate is what makes the surface readable:**
+
+| | **Steady** | **Blinking** |
+|---|---|---|
+| **when** | between interactions | during an interaction |
+| **what it is** | status | expression |
+| **red means** | issue pending resolution | annoyed |
+
+Colour carries the *meaning*; steady-vs-blink carries the *mode*. So red is not
+ambiguous between "annoyed" and "something is unresolved" — steady red is the
+status reading, blinking red is the emotional one, and a glance tells you which
+without knowing what just happened.
+
+This is why the base layer is trustworthy: **status is checkable and emotion is
+not.** A steady colour is a claim about the system that can be verified. Its
+persistence is the whole value, and blinking is what borrows the channel
+temporarily without overwriting that claim.
+
+> [!info] The firmware's own default is semantically wrong for this
+> At rest the front **alternates** red/blue — a blink, which under this scheme
+> would read as "expressing something" while nothing is happening. Our steady
+> set colour overrides it, which is exactly the behaviour measured (§3, *LED
+> colour*). Owning the channel is not optional here; the default actively
+> misreads.
 
 **Why the layering is the point, not a compromise.** The first draft of this
 decision filed "the semantics are invisible during an animation" as a cost. It
@@ -395,8 +414,21 @@ demoted to decoration. Losing animations as a state carrier costs nothing once
 state has a home.
 
 **Corroboration from the droid's own authoring:** id 4, adjudicated as
-translator's `ANIM_SAD` ("denied"), **holds red steady** — breaking its own
-baseline alternation to do it. The firmware already uses red for a refusal.
+translator's `ANIM_SAD` ("denied"), uses red for a refusal — the firmware
+already reaches for red on a negative.
+
+> [!warning] But id 4 holds that red **steady**, and it is an expression
+> Under the two-axis scheme a steady red is a *status* claim, so the droid's own
+> authoring contradicts the axis it corroborates on colour. Not fatal — id 4 is
+> an animation, and animations live on the masking layer where our conventions
+> do not apply. It is a live counterexample to watch, though: if authored
+> animations routinely hold steady colours, the blink/steady distinction will be
+> muddied every time one plays.
+
+**Untested and load-bearing: we have never driven a blink ourselves.** Every
+colour we set held *steady*, which is half the scheme proven. Blinking means
+toggling the channel on a timer from our side, and neither the achievable rate
+nor whether it reads as deliberate rather than glitchy has been measured.
 
 > [!warning] This puts a service signal on the character's body
 > `CLAUDE.md` draws a hard boundary: R2's body is the character interface, the
