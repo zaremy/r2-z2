@@ -430,11 +430,15 @@ colour we set held *steady*, which is half the scheme proven. Blinking means
 toggling the channel on a timer from our side, and neither the achievable rate
 nor whether it reads as deliberate rather than glitchy has been measured.
 
-**How this sits with the character boundary: the LED is an affordance, the
-backpack is the detail view.** `CLAUDE.md` puts character on R2's body and
-service on the backpack screen, and a status light on his dome looks at first
-like service leaking onto the character. It is not, because the two carry
-different *kinds* of thing:
+**The model is a utility panel.** A green or red indicator on the outside tells
+you the state from across the room; you open the panel and there is a small
+screen for diagnostics. Nobody confuses the two, and nobody reads the diagnostic
+screen to find out whether anything is wrong.
+
+That is exactly the split here, and it is why a status light on R2's dome is
+**not** service leaking onto the character. `CLAUDE.md` puts character on the
+body and service on the backpack screen; the LED is an affordance, the screen is
+the detail view, and they carry different *kinds* of thing:
 
 | | **LED** | **Backpack screen** |
 |---|---|---|
