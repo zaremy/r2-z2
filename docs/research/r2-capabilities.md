@@ -15,7 +15,7 @@ emotion.
 
 | Channel | Control | Notes |
 |---|---|---|
-| Dome / head | `set_head_position(float°)`, `get_head_position()` | Range from `extended_sensors`: **-162° … +182°** (`r2d2.py:471`) |
+| Dome / head | `set_head_position(float°)`, `get_head_position()` | Declared **-162° … +182°** (`r2d2.py:471`); **OBSERVED usable -145.2° … +170.2°**. See S1c below |
 | Stance | `perform_leg_action(R2LegActions)` | `STOP/THREE_LEGS/TWO_LEGS/WADDLE` (`animatronic.py:16`) |
 | Leg position | `set_leg_position(float)`, `get_leg_position()` | Finer than the stance enum; semantics UNKNOWN |
 | Locomotion | Drive DID `0x16` | Deliberately untouched until dome/LED/audio pass |
@@ -119,6 +119,65 @@ authored animations may drive several fixtures at once.
 >    Presence means "worth probing", not "supported".
 > 3. Absence is a weaker hint than presence, and neither is evidence. Only a
 >    response from the robot is evidence.
+
+### S1c dome range and settling — OBSERVED 2026-08-16 on `D2-6F6B` (issue #10)
+
+Session at `--allow motion`. Every move via `bounded_head_move`, capped at 45°
+of travel; 30° steps for the sweeps, 15° for the accuracy phase. Human observer
+watching for the stall/strain distinction the log cannot make.
+
+| Measure | Declared | **OBSERVED** |
+|---|---|---|
+| Maximum angle | +182° (`r2d2.py:471`) | **+170.2°** |
+| Minimum angle | −162° (`r2d2.py:471`) | **−145.2°** |
+| Usable span | 344° | **315.4°** |
+| Moves to traverse it | ~16 (epic estimate) | **20** (7 up, 13 down) |
+| `get_head` accuracy | — | **5/5 within 5°** of commanded (AC2 threshold was 4/5) |
+| Settling time | — | **≤1.0 s — NOT resolved**, see below |
+
+> [!warning] AC3 is satisfied on paper and unmeasured in fact
+> The criterion was "time from ACK until two consecutive `head` reads differ by
+> <1°", and that is ~1.0 s. But **every single move settled on sample 2 of 2** —
+> the dome was already within 1° by the first read the bridge could take, which
+> is one BLE round trip after the command. So 1.0 s is *my polling floor, not
+> R2's settling time*. The true figure is somewhere below it and this session
+> did not resolve it. Recording the number without this note would have turned a
+> measurement artifact into an OBSERVED constant. Resolving it needs the
+> event-backed timing in #11, not faster polling.
+
+**Both limits are enforced as a silent refusal, not a mechanical stop.**
+Commanded 12° past the top and 17° past the bottom, R2 moved *exactly* 0.0° —
+byte-identical `get_head` readings before and after — with **no audible motor
+load** at either end (operator observation, asked for specifically and confirmed
+on a deliberate repeat at the +170° limit). The firmware discards an
+out-of-range target rather than driving toward it and stalling. The declared
+range in `r2d2.py:471` is therefore **wrong by 28.6° in total**, and wrong
+asymmetrically.
+
+**The dome has a deadband, and it is a gradient, not a constant.** Every move
+undershoots its commanded target, and the size depends on where in the range
+the dome is — **2.4° near +170°, growing monotonically to 5.7° near −145°**,
+measured across 12 consecutive 30° steps. It does *not* scale with move size:
+a 15° command and a 30° command lose about the same amount at the same part of
+the range. A correction constant fitted at one end will be wrong at the other.
+
+**There is a minimum effective dome increment of roughly 5°.** Discovered by
+accident and worth more than the range numbers: the return-to-start walk
+commanded the same 4.2° gap **21 times in a row and the dome never moved**,
+while every command returned success. A move smaller than the local deadband
+produces no motion and no error.
+
+> [!warning] Consequence for the behavior layer
+> `express_curious()` cannot do a subtle 2° dome tilt — it will do nothing,
+> silently, and report success. **The smallest legible dome gesture is ~5°**,
+> and choreography that chains many small moves loses ~3-5° per command with no
+> feedback that it happened. Prefer fewer, larger moves; re-read the angle
+> rather than integrating commanded deltas.
+
+Raw per-move data (before/commanded/landed, settle samples) is in the vault at
+[[Experiments/Dome Survey]]. **UNKNOWN:** whether the deadband gradient is
+gravity/load related or a control-loop property — distinguishing them needs the
+dome tested on its side, which is not worth a session yet.
 
 ### Sensors in
 
