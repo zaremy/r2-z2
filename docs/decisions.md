@@ -203,6 +203,62 @@ the ladder honest about what exists today; it does not add the missing rungs.
 
 ---
 
+## D-010 — Excitement is choreographed by us; authored animations are not a behavior library
+**2026-08-17**
+
+The plan in `architecture.md` assumed semantic behaviors could delegate to
+authored animations — `celebrate()` plays `EMOTE_LAUGH`, and so on. The S1d
+survey (#12) measured what those animations actually do to the body.
+
+**Of the first 19 ids classified, 13 emit `WADDLE`.** Not as an outlier: it is
+the norm. Id 14 `EMOTE_SHORT_CIRCUIT` emitted 12 waddles across 9.1 s.
+
+The survey asserted and **read back** `THREE_LEGS` before every single id.
+All 13 waddlers started from tripod, and all 13 **retracted the leg
+themselves** and ended in bipod:
+
+```
+started from 'three_legs': [2,3,4,5,7,8,9,10,12,13,14,15,21]
+ended in    'two_legs':    [2,3,4,5,7,8,9,10,12,13,14,15,21]
+```
+
+The operator was supporting him and he still went down three times during the
+sweep — twice on ids 14 and 15 consecutively.
+
+**Decision.** Semantic behaviors compose dome + sound + light + explicit
+stance themselves. They do **not** call `play_animation` for anything
+emotional. The authored library stays available for a *supported* or
+*seated* R2 and as a source of timing reference, but it is not the vocabulary
+the character is built from.
+
+Two rules follow, both from the operator's own framing:
+
+1. **Tripod down whenever he is "active".** Any behavior with energy in it
+   deploys the stabiliser first and holds it for the duration. Stability is a
+   precondition of expression, not a reaction to losing it.
+2. **The mechanical leg sound belongs ON the deployment.** That sound is
+   `R2_MOTOR = 2970` (`r2_assets.py:152`, `r2d2.py:315`), surveyed in S1b as
+   *"long mechanical lift with clocklike ticking"* and the longest clip in the
+   set — it is literally the sound of a leg coming down. Fire it synchronised
+   with the leg moving, not after speech with the leg already down; the sound
+   is the deployment's own voice. Several authored animations get this
+   ordering wrong, which is part of why they read as canned. Deployment
+   settles in 2.28–2.56 s (#22), so the clip has room to run underneath it.
+
+**Pre-deploying the tripod does not make an authored animation safe.** That is
+the finding, and it is the reason this is a decision rather than a guideline:
+an animation overrides whatever stance we set, so the only control available
+is not playing it.
+
+*Reversed by:* a way to inspect an animation's leg track before playing it,
+or a per-animation stance lock in firmware. Neither is known to exist.
+
+*Does not fix:* ids 18-55 are unclassified, so the 13 is a floor, not a total.
+`WWM_*` (31-54) is entirely unmeasured and is the set `architecture.md` leans
+on hardest.
+
+---
+
 ## Open — to be decided on hardware
 
 - **Animation ID table.** `spherov2` and `claude-r2d2-buddy` disagree

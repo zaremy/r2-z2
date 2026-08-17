@@ -551,6 +551,61 @@ itself. Mode 0 is right for interruptions that *should* cut in.
 
 ## 3. Animation vocabulary — 51 ids
 
+### S1d partial — OBSERVED 2026-08-17 on `D2-6F6B` (issue #12), 19/56 ids
+
+> [!danger] Most authored animations retract the stabiliser and waddle
+> **13 of the first 19 ids emit `WADDLE`.** It is the norm, not an outlier.
+> Every one of them was started from a **verified** `THREE_LEGS` baseline and
+> **retracted the leg itself**, ending in bipod:
+>
+> ```
+> started from 'three_legs': [2,3,4,5,7,8,9,10,12,13,14,15,21]
+> ended in    'two_legs':    [2,3,4,5,7,8,9,10,12,13,14,15,21]
+> ```
+>
+> **Pre-deploying the tripod does not make an animation safe.** The animation
+> overrides it. The only control is not playing it — see D-010.
+>
+> R2 went down three times during this sweep *while being supported by hand*.
+
+| classification | n | ids |
+|---|---|---|
+| `waddles` — cannot run unsupported | 13 | 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 21 |
+| `leaves_bipod` — stable standing, recoverable | 1 | 11 |
+| `no_leg_activity` — safe anywhere | 5 | 0, 1, 6, 16, 17 |
+
+Worst offenders by waddle count: **id 14 `EMOTE_SHORT_CIRCUIT`** (12 waddles,
+9.11 s) and **id 15 `EMOTE_LAUGH`** (8 waddles, 3.30 s) — consecutive, and
+both felled him.
+
+> [!warning] `may_drive` is refuted as a safety filter, now empirically
+> It flags ids 8/9/11 (`translator.c:101-104`). Measured: **8 and 9 waddle;
+> 11 does not.** One of three, in the wrong direction. It describes driving,
+> not stance, and stance is what topples him.
+
+Durations are **event-backed** via `animation_complete`, which carries the id
+and fires with no enable command. Range so far 1.50 s (id 0) to 12.19 s
+(id 11).
+
+> [!info] Leg notifications must be enabled or every id looks safe
+> `leg_action_complete` has an enable command upstream; `animation_complete`
+> does not. A session that forgets `notify --params '{"leg":true}'` still sees
+> completions and still measures durations, and silently sees **zero** leg
+> events. The first run of this survey did exactly that and classified
+> `EMOTE_YES` — the known waddler — as `no_leg_activity`, the safest bucket.
+> Prove the channel live by commanding a leg move and seeing the event, before
+> trusting any silence.
+
+> [!warning] Deploy is stable; retract is not
+> A diagnostic that retracted the stabiliser to test the event channel knocked
+> him over backwards. Deploying pushes him slightly forward and is stable
+> (#22). Any forced leg movement should be a **deploy**, never a retract.
+
+Remaining: ids 18-55, including the unnamed gaps 20/23/28/29/30 and the entire
+`WWM_*` set (31-54) that `architecture.md` leans on hardest.
+
+### Enum groups
+
 Four groups (`r2d2.py:417-468`):
 
 | Group | Ids | Meaning |
