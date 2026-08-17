@@ -430,13 +430,22 @@ colour we set held *steady*, which is half the scheme proven. Blinking means
 toggling the channel on a timer from our side, and neither the achievable rate
 nor whether it reads as deliberate rather than glitchy has been measured.
 
-> [!warning] This puts a service signal on the character's body
-> `CLAUDE.md` draws a hard boundary: R2's body is the character interface, the
-> backpack screen is the service panel. A status light on his dome sits on the
-> character side of that line. Accepted deliberately — R2-D2's lights read as
-> status *in canon*, so this reinforces the character rather than breaking it,
-> and the alternative (status on the screen) puts system state where nobody
-> looks. **The boundary still holds for anything with a face or text.**
+**How this sits with the character boundary: the LED is an affordance, the
+backpack is the detail view.** `CLAUDE.md` puts character on R2's body and
+service on the backpack screen, and a status light on his dome looks at first
+like service leaking onto the character. It is not, because the two carry
+different *kinds* of thing:
+
+| | **LED** | **Backpack screen** |
+|---|---|---|
+| carries | affordance — *that* something is up | details, troubleshooting |
+| read at | a glance, across the room | up close, deliberately |
+| in character? | yes — R2-D2's lights read as status in canon | no, and it does not need to be |
+
+The LED never spells anything out; it signals, and the screen is where you go to
+find out what. That keeps the boundary intact rather than bending it: **nothing
+with a face or text goes on the body, and nothing needing a glance goes on the
+screen.**
 
 *Reversed by:* a playtest where the colour reads as arbitrary rather than
 meaningful; by finding an animation that does **not** restore the base layer
