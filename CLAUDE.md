@@ -123,7 +123,11 @@ little entity is continuously present in the household.
   Do not let an INFERRED claim silently graduate to OBSERVED.
 - Prefer current official hardware code over blog/forum assumptions.
 - When two sources disagree, record the disagreement rather than picking
-  silently. Two known live conflicts are tracked in `r2-capabilities.md`.
+  silently. Both conflicts `r2-capabilities.md` once tracked as *live* are now
+  settled — `enable_idle_animations` REFUTED on hardware, and the animation-id
+  table adjudicated id by id. Neither settled cleanly in one source's favour,
+  which is the point: **record the adjudication, including `inconclusive`,
+  rather than retiring the disagreement.**
 - Cross-check protocol constants against at least two independent
   implementations before trusting them. The packet layer in
   `mac-prototype/r2_probe.py` was validated three ways (spherov2, the
