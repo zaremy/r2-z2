@@ -274,12 +274,202 @@ the per-id energy/wear/cooldown fields remain open on #12.
 
 ---
 
+## D-011 — The backpack speaker may carry character audio
+**2026-08-17** · *operator ruling*
+
+`CLAUDE.md` calls the backpack a service/debug/settings panel and forbids
+adding character rendering to the *screen* without an entry here. Audio was
+never named, and the omission mattered once voice was scoped: R2's body can
+emit **only** the 388 factory sound ids in Sphero's firmware — the audio
+command is play-by-id, stop-all and set-volume, with no data-bearing variant
+(`docs/research/r2-protocol.md:207`). There is no upload path and no PCM
+streaming. So any sound this project *authors* — droidspeak, words, anything —
+can only come out of the backpack, a few centimetres behind and above his dome.
+
+**This was never a hardware limit.** The backpack carries an ES8311 codec and
+an NS4150B 3W class-D amplifier gated by GPIO46; it can play arbitrary audio
+today. The only question was whether sound displaced from the body still reads
+as *him*, and that is a taste judgement, not a measurement.
+
+The evidence ran both ways and did not settle it. Sphero shipped BB-8 with its
+audio on the phone, judged that worse, and paid to move the speaker into the
+R2-D2 body for the follow-up. Amazon tested giving Astro a speaking voice, found
+it "strange and creepy", and shipped a non-verbal body with speech demoted to a
+visibly separate character. Against that, no HRI study anywhere establishes how
+far a robot's voice can be displaced before the illusion breaks — the general
+audio-visual literature says the effect survives without semantic congruence and
+is strengthened by gaze, which the dome supplies. Full survey in the vault:
+`Reference/Voice Stack Deep Research.md`.
+
+**Decision.** The backpack speaker **may** carry character audio. Operator
+ruling, 2026-08-17: *"yes, it would read as him."* Displacement is centimetres
+on a 170 mm body, not a phone across the room, and the dome gives a gaze cue the
+literature says reinforces attribution.
+
+Three constraints ride with it, and they are what keep this from reopening the
+whole boundary:
+
+- **R2's own 212 native ids stay primary.** The backpack supplements the voice;
+  it does not replace it. A behaviour that an `R2_*` id can carry uses the id.
+- **Authored audio is co-timed with dome motion.** Firing backpack sound with a
+  still dome is the configuration most likely to break the illusion, and the
+  situational-context research says an isolated sound is the weakest form of
+  expression regardless.
+- **The screen boundary is untouched.** This decision is about audio only. The
+  touchscreen remains a service panel.
+
+**What this does not decide:** whether the authored audio is *droidspeak* or
+*language*. Those are different characters and the second is the larger step —
+Read and Belpaeme, whose work supports the non-verbal position, nonetheless
+titled a 2014 HRI paper "Non-linguistic utterances should be used alongside
+language, rather than on their own or as a replacement." Droidspeak is the
+cheaper and more reversible move: every serious implementation, including the
+professional Human Cyborg Relations vocalizer, is sample concatenation driven by
+a sequencing layer — the same shape as our behaviour layer. Recommend starting
+there and treating speech as a separate decision.
+
+*Reversed by:* a playtest where backpack audio audibly detaches from the
+body — the five-minute version is a sound played with and without a co-timed
+dome turn, asking a listener where it came from.
+
+*Does not fix:* nothing is buildable on this yet. Voice input is gated on a
+capture measurement that has not been taken — one undocumented analog electret,
+no beamforming, no echo cancellation reference signal for R2's own chirps, and
+motors underneath it. Hosting, wake word and transcription remain open.
+
+---
+
+## D-012 — The LED base layer is system truth; animations play on top
+
+**Status:** accepted 2026-08-17 · operator ruling, hardware-verified the same
+session
+
+**Decision.** The front and back RGB channels are a **two-layer surface**:
+
+- **Base layer — system truth.** A persistent colour we set, meaning:
+
+  | Colour | Meaning |
+  |---|---|
+  | **green** | success |
+  | **blue** | neutral / on / waiting |
+  | **red** | issue pending resolution |
+
+- **Animation layer — transient expression.** Authored animations bring their
+  own lights and mask the base while they play. They are theatre; they do not
+  carry state.
+
+Red is **reserved**, never decorative.
+
+**Two axes, and keeping them separate is what makes the surface readable:**
+
+| | **Steady** | **Blinking** |
+|---|---|---|
+| **when** | between interactions | during an interaction |
+| **what it is** | status | expression |
+| **red means** | issue pending resolution | annoyed |
+
+Colour carries the *meaning*; steady-vs-blink carries the *mode*. So red is not
+ambiguous between "annoyed" and "something is unresolved" — steady red is the
+status reading, blinking red is the emotional one, and a glance tells you which
+without knowing what just happened.
+
+This is why the base layer is trustworthy: **status is checkable and emotion is
+not.** A steady colour is a claim about the system that can be verified. Its
+persistence is the whole value, and blinking is what borrows the channel
+temporarily without overwriting that claim.
+
+> [!info] The firmware's own default is semantically wrong for this
+> At rest the front **alternates** red/blue — a blink, which under this scheme
+> would read as "expressing something" while nothing is happening. Our steady
+> set colour overrides it, which is exactly the behaviour measured (§3, *LED
+> colour*). Owning the channel is not optional here; the default actively
+> misreads.
+
+**Why the layering is the point, not a compromise.** The first draft of this
+decision filed "the semantics are invisible during an animation" as a cost. It
+is not a cost — it is the design. Persistent state lives underneath, transient
+expression plays above, and the hardware already behaves exactly this way
+without being asked to: **the base colour reasserts itself when the animation
+ends, unprompted.**
+
+**Why this is implementable, which was not obvious.** The droid is not dark at
+rest — his front alternates red/blue and his back alternates green/yellow on
+their own. Three things were measured before accepting this (§3,
+*LED colour*):
+
+1. **Front and back are true RGB** (bits 0/1/2 and 4/5/6). Logic displays and
+   the holo projector are **brightness only**, so this scheme applies to two
+   fixtures, not four.
+2. **A colour we set HOLDS** — the firmware's baseline alternation does not
+   resume and overwrite it. Without this the whole scheme would be unbuildable.
+3. **An animation transiently overrides it and the set colour returns
+   afterwards**, unprompted. Our colour is a **base layer**, not a one-shot
+   write.
+
+**This pairs with D-010 rather than working around it.** D-010 ruled authored
+animations out as the behaviour library — only 20 of 56 are usable standing,
+and we cannot inspect what one will do before playing it. The base layer is the
+channel we **can** control, so state lives there and the uncontrollable layer is
+demoted to decoration. Losing animations as a state carrier costs nothing once
+state has a home.
+
+**Corroboration from the droid's own authoring:** id 4, adjudicated as
+translator's `ANIM_SAD` ("denied"), uses red for a refusal — the firmware
+already reaches for red on a negative.
+
+> [!warning] But id 4 holds that red **steady**, and it is an expression
+> Under the two-axis scheme a steady red is a *status* claim, so the droid's own
+> authoring contradicts the axis it corroborates on colour. Not fatal — id 4 is
+> an animation, and animations live on the masking layer where our conventions
+> do not apply. It is a live counterexample to watch, though: if authored
+> animations routinely hold steady colours, the blink/steady distinction will be
+> muddied every time one plays.
+
+**Untested and load-bearing: we have never driven a blink ourselves.** Every
+colour we set held *steady*, which is half the scheme proven. Blinking means
+toggling the channel on a timer from our side, and neither the achievable rate
+nor whether it reads as deliberate rather than glitchy has been measured.
+
+**The model is a utility panel.** A green or red indicator on the outside tells
+you the state from across the room; you open the panel and there is a small
+screen for diagnostics. Nobody confuses the two, and nobody reads the diagnostic
+screen to find out whether anything is wrong.
+
+That is exactly the split here, and it is why a status light on R2's dome is
+**not** service leaking onto the character. `CLAUDE.md` puts character on the
+body and service on the backpack screen; the LED is an affordance, the screen is
+the detail view, and they carry different *kinds* of thing:
+
+| | **LED** | **Backpack screen** |
+|---|---|---|
+| carries | affordance — *that* something is up | details, troubleshooting |
+| read at | a glance, across the room | up close, deliberately |
+| in character? | yes — R2-D2's lights read as status in canon | no, and it does not need to be |
+
+The LED never spells anything out; it signals, and the screen is where you go to
+find out what. That keeps the boundary intact rather than bending it: **nothing
+with a face or text goes on the body, and nothing needing a glance goes on the
+screen.**
+
+*Reversed by:* a playtest where the colour reads as arbitrary rather than
+meaningful; by finding an animation that does **not** restore the base layer
+(only one id was tested, n=1); or by the status reading feeling like a machine
+indicator bolted onto a character.
+
+*Does not decide:* brightness, the logic-display and holo-projector channels
+(brightness-only, so they cannot carry this), what yellow means, transition
+timing, or whether the two fixtures show the same colour or different ones.
+
+---
+
 ## Open — to be decided on hardware
 
-- **Animation ID table.** `spherov2` and `claude-r2d2-buddy` disagree
-  (1 of 7 overlapping entries agree). Blocks the semantic behavior library.
-  Resolve by surveying ids 0-55 on our unit. Also probe the gaps: 20, 23, 28,
-  29, 30.
+- ~~**Animation ID table.**~~ **RESOLVED 2026-08-17** — all 56 ids surveyed
+  (S1d) and the 7 disputed ids adjudicated (#12 AC4). Gaps 20, 23, 28, 29, 30
+  are valid and play. Neither source won outright: translator 2, spherov2 1,
+  4 inconclusive. See *Animation ID conflict* in `r2-capabilities.md` §3.
+  It did **not** unblock the semantic behavior library — D-010 did the opposite,
+  ruling authored animations out as the library.
 - **`enable_idle_animations` on or off.** Off during bring-up so every motion is
   attributable in logs; re-evaluate as a feature afterwards.
 - **Board revision — confirm, do not assume.** Record `00_board_check` and

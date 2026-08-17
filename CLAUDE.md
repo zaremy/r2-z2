@@ -14,6 +14,19 @@ little entity is continuously present in the household.
   connectivity, diagnostics, hardware tests, provisioning. It is *not* a face.
   Do not add character rendering to the screen without an explicit decision
   recorded in `docs/decisions.md`.
+- **The model is a utility panel: indicator outside, diagnostics behind the
+  door.** The **LED is an affordance** — glanceable from across the room, says
+  *that* something is up, never spells anything out. The **screen is the detail
+  view** — read up close, deliberately, and it is where you find out *what*.
+  Service signals on the body are therefore fine and expected; it is *rendering*
+  that is forbidden there. Two consequences, and both bind:
+  - **Nothing that needs a glance may live only on the screen.** Nobody reads a
+    diagnostic display to find out whether anything is wrong. If a state is
+    worth noticing without going to look, the LED must carry it.
+  - **Nothing with a face or text goes on the body.**
+
+  Colour carries meaning, steady-vs-blink carries mode (status between
+  interactions, expression during one). Full scheme and its evidence: **D-012**.
 
 ## Architecture rules
 
@@ -123,7 +136,11 @@ little entity is continuously present in the household.
   Do not let an INFERRED claim silently graduate to OBSERVED.
 - Prefer current official hardware code over blog/forum assumptions.
 - When two sources disagree, record the disagreement rather than picking
-  silently. Two known live conflicts are tracked in `r2-capabilities.md`.
+  silently. Both conflicts `r2-capabilities.md` once tracked as *live* are now
+  settled — `enable_idle_animations` REFUTED on hardware, and the animation-id
+  table adjudicated id by id. Neither settled cleanly in one source's favour,
+  which is the point: **record the adjudication, including `inconclusive`,
+  rather than retiring the disagreement.**
 - Cross-check protocol constants against at least two independent
   implementations before trusting them. The packet layer in
   `mac-prototype/r2_probe.py` was validated three ways (spherov2, the

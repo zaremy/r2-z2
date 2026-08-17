@@ -679,6 +679,63 @@ duration here is measured rather than stopwatched. Range **0.88 s** (id 55
 and media artifacts; AC6 interruption testing; and the per-id
 `energy_cost_class` / `wear_class` / `recommended_cooldown_s` fields.
 
+> **RESOLVED 2026-08-17.** AC4 is adjudicated — see *Animation ID conflict* in
+> §3. AC6 is covered below. The three cost fields and `made_sound` remain open.
+
+### S1d AC6 — interruption
+
+Three ids, all from the `no_leg_activity` set so the legs never move and a fall
+cannot confound the reading. `stop` issued at ~40 % of the measured length.
+
+| Id | Full length | Stop sent | Completion | Motion ceased | Sound ceased |
+|---|---|---|---|---|---|
+| 1 | 5.145 s | 2.177 s | 3.587 s | yes | yes |
+| 25 | 14.489 s | 5.857 s | 7.259 s | yes | *no audio* |
+| 27 | 21.300 s | 8.710 s | 9.939 s | yes | *no audio* |
+
+**A mid-play stop works, 3/3.** Every animation emitted `animation_complete`
+early — **1.23, 1.40 and 1.41 s** after the stop went out, against full lengths
+of 5–21 s. That timing is machine evidence and does not depend on anyone
+watching.
+
+**Motion answered on 3/3; sound on only 1/3.** Two of the three ids produce no
+audio at all, so "did the sound cease" was not testable on them. That is a
+shortfall in target selection, not a missed reading: the ids were chosen for
+fall-safety, and **`made_sound` was never captured in S1d**, so there was no
+way to pick sound-producing ids on purpose.
+
+> [!warning] The bridge cannot attribute a sound stop
+> `stop` (`r2_probe.py:1102`) is a **composite**: `stop_animation` +
+> `stop_audio` + a leg stop. So when sound ceases, it cannot be attributed to
+> halting the animation rather than to the audio stop fired alongside it. The
+> question underneath AC6 — animations bundle sound (`translator.c:91`), so
+> does stopping one stop the other? — needs a `stop_animation`-only op that
+> does not exist. **AC6 is met for motion and partially met for sound.**
+
+**OBSERVED — an interrupt leaves the dome wherever it stopped.** Measured at
+**−45.92°** after interrupting id 27. Consistent with the standing fact that
+the dome has no resting position. Consequence for choreography: any interrupt
+must be followed by an explicit dome move if a known orientation is wanted.
+
+### LED colour — the channel is ours to own
+
+Ad-hoc, serving the colour-semantics ruling in D-011; not a #12 criterion.
+
+- **At rest the droid is not dark.** Front alternates **red/blue**, back
+  alternates **green/yellow**. Animation id 0 *speeds up* the front alternation
+  rather than starting it.
+- **Front and back are true RGB** (bits 0/1/2 and 4/5/6, `r2d2.py:17-25`).
+  Logic displays (bit 3) and holo projector (bit 7) are **brightness only — no
+  colour**.
+- **OBSERVED — a colour we set HOLDS.** Front set to `{0:0, 1:255, 2:0}` and
+  back to `{4:0, 5:255, 6:0}` both rendered pure green and stayed; the baseline
+  alternation did not resume and overwrite them.
+- **OBSERVED — an animation transiently overrides a set colour, and the set
+  colour returns when the animation ends.** Green survived a play of id 1
+  without being re-issued. So our colour behaves as a **base layer**: masked
+  during an animation, reasserted after. **n=1, one animation id** — whether
+  every animation behaves this way is UNKNOWN.
+
 ### Enum groups
 
 Four groups (`r2d2.py:417-468`):
@@ -720,28 +777,63 @@ into animations"). **INFERRED consequence:** layering a separate `play_audio`
 on top of an animation will double-talk. Choreography must choose: authored
 animation *or* hand-composed dome+sound+light, not both at once.
 
-### ⚠️ Live conflict: animation IDs
+### Animation ID conflict — ADJUDICATED 2026-08-17 (#12 AC4/AC5)
 
 `claude-r2d2-buddy/main/translator.c:93-108` labels the low ids from
-experimentation and **disagrees with spherov2**:
+experimentation and **disagrees with spherov2** (`r2d2.py:417-468`) on 7 of the
+8 overlapping ids. All seven were played on `D2-6F6B` against predicates
+written down **before** each id was fired.
 
-| Id | spherov2 (`r2d2.py`) | translator.c |
-|---|---|---|
-| 0 | `CHARGER_1` | "blinks red/blue — avoid" |
-| 3 | `CHARGER_4` | `ANIM_ALERT` (impatient) |
-| 4 | `CHARGER_5` | `ANIM_SAD` (denied) |
-| 7 | `EMOTE_ALARM` | `ANIM_HAPPY` (approved) |
-| 9 | `EMOTE_ATTENTION` | `ANIM_WIGGLE` |
-| 13 | `EMOTE_SEARCH` | `ANIM_CHATTY` |
-| 15 | `EMOTE_LAUGH` | `ANIM_HAHAHA` ✓ |
+| Id | spherov2 | translator.c | **Verdict** | What was observed |
+|---|---|---|---|---|
+| 0 | `CHARGER_1` | "blinks red/blue — avoid" | **translator** | front light's red/blue alternation **sped up**; no leg motion, 1.53-1.92 s over 3 fires |
+| 3 | `CHARGER_4` | `ANIM_ALERT` (impatient) | inconclusive | tone read as **neutral** unprompted; `CHARGER_4` predicts nothing observable |
+| 4 | `CHARGER_5` | `ANIM_SAD` (denied) | **translator** | descending tone, read as *"no I don't agree"*; red held **steady** |
+| 7 | `EMOTE_ALARM` | `ANIM_HAPPY` (approved) | **spherov2** | urgent repeating tone **and** red-dominant lights; the cheerful reading failed |
+| 9 | `EMOTE_ATTENTION` | `ANIM_WIGGLE` | inconclusive | **both** held — assertive chirp + dome motion **and** side-to-side rocking |
+| 13 | `EMOTE_SEARCH` | `ANIM_CHATTY` | inconclusive | dome **does** scan **and** he **does** chatter; "longer" is measurably false |
+| 15 | `EMOTE_LAUGH` | `ANIM_HAHAHA` ✓ | inconclusive (**control**) | sources agree, so nothing to separate — the shared laugh prediction **HELD** |
 
-Only id 15 agrees. **Do not resolve this by reasoning.** spherov2's names very
-likely came from the official app's asset table and are more trustworthy, but
-`translator.c` was written by someone watching a real droid. Possible
-explanations: firmware-version differences, an off-by-N in one table, or
-`translator.c` simply guessing. **Resolution requires playing each id on our
-unit and writing down what it does.** That survey is the single highest-value
-first hardware session — see `initial-findings.md`.
+**Neither source wins.** translator takes 2, spherov2 takes 1, four are
+undecidable — and the four are undecidable for two structural reasons, not for
+want of careful watching:
+
+1. **`CHARGER_N` is not a falsifiable label.** It names *where* an animation is
+   used, not what it looks or sounds like, so ids 0/3/4 can never return a
+   `spherov2` verdict from an observational protocol. Those records carry
+   `spherov2_falsifiable: false`, and the rubric refuses to let an untestable
+   side win by default.
+2. **The competing labels are not mutually exclusive.** id 9 genuinely *is*
+   both an attention-getter and a wiggle; id 13 genuinely *is* both a scan and
+   a chatter. The disagreement is partly two people describing the same
+   animation from different angles.
+
+**The control is what makes the undecidables credible.** id 15 is the one id
+where the sources agree; its shared prediction was confirmed, so the four
+`inconclusive` results are a property of the labels, not an artifact of a
+protocol that cannot detect anything.
+
+> [!warning] The differences are small, and that is a finding
+> The operator, unprompted on the first id: *"we're talking about beeps and
+> boops here, the differences are not dramatic on many of the interactions."*
+> An earlier hypothesis that spherov2 owns the `EMOTE_*` block while its
+> `CHARGER_*` block is mislabelled was **refuted** the moment id 9 — an
+> `EMOTE_*` id — failed to go spherov2's way.
+
+**Method, so a verdict can be re-checked.** Predicates were frozen in source
+before the link came up (`conflict_ac4.py`, `PREDICATES`) and copied into each
+record at fire time; `neither` requires **zero** satisfied predicates on both
+sides, with any partial match resolving to `inconclusive` per epic #5's rubric.
+Raw TX was captured for ids 7 and 15 (e.g. `8d0a17057b000757d8`, DID `0x17`
+CID `0x05`, payload `0007`); earlier fires lost it to a buffered `tee`.
+
+**Deliberate deviation from #12 AC4:** the media artifact was **waived** by the
+operator, who is the sole reviewer on this project — the reproducibility it
+buys is for a third party who does not exist here. Records carry
+`evidence_complete: false` and this note stands in place of the video. All
+seven event sequences reproduced their S1d durations and leg-event counts
+closely (e.g. id 7: 5.31 s / 20 events in S1d, 5.33 and 5.14 s / 20 here),
+which is the reproducibility that *is* available without a camera.
 
 ---
 
@@ -750,6 +842,24 @@ first hardware session — see `initial-findings.md`.
 Mapping the target states from the brief onto real capabilities. Status column:
 `READY` = every ingredient traced; `NEEDS-SURVEY` = depends on resolving the
 animation-id conflict; `DEFERRED` = requires locomotion.
+
+> [!warning] The `NEEDS-SURVEY` status in this table is stale as written
+> It means "blocked on the animation-id conflict", and that conflict is
+> **adjudicated** as of 2026-08-17 (§3). Unblocking these rows did not make
+> them ready — it moved the blocker. Two later findings gate them now:
+>
+> - **D-010** — authored animations are not a behavior library. 36 of 56 emit
+>   `WADDLE` and only **20 are usable on a standing droid**, so every row whose
+>   Animation candidate is an authored id needs that id re-checked against the
+>   S1d safe set before it can be built.
+> - **Two of the adjudicated labels are `inconclusive`**, and rows rest on them
+>   directly: `wake()` on `EMOTE_ATTENTION` (id 9) and `look_around()` on
+>   `EMOTE_SEARCH` (id 13). Neither name is confirmed. `celebrate()` is better
+>   off than it looks — id 15's laugh **was** confirmed.
+>
+> This table is a **proposal from source reading**, not a verified plan. It is
+> left standing as the S2 starting point; it should be rebuilt against the S1d
+> safe set rather than trusted row by row.
 
 | Behavior | Animation candidate | Sound family | Dome | Lights | Status |
 |---|---|---|---|---|---|
