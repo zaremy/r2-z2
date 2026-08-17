@@ -107,6 +107,7 @@ Then, from anywhere:
 ./r2 send sound --params '{"id":2813,"volume":80}'
 ./r2 send dome --params '{"delta":20}'
 ./r2 send stance                                   # read the leg state
+./r2 send leg_pos                                  # raw leg float — semantics UNKNOWN
 ./r2 send set_stance --params '{"action":"three_legs"}'   # needs --allow stance
 ./r2 send stop
 ```

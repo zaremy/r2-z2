@@ -86,6 +86,11 @@ CID_ANIM_SET_HEAD = 0x0F       # animatronic.py:41  (CID 15)
 CID_ANIM_GET_HEAD = 0x14       # animatronic.py:47  (CID 20)
 CID_ANIM_GET_LEG_ACTION = 0x25  # animatronic.py:58  (CID 37) — READ, cannot move him
 CID_ANIM_PERFORM_LEG_ACTION = 0x0D  # animatronic.py:36 (CID 13) — WRITE, can fell him
+CID_ANIM_GET_LEG_POSITION = 0x16    # animatronic.py:54 (CID 22) — READ, a float
+# NOTE set_leg_position is CID 21 (0x15) and is deliberately NOT defined here.
+# #22 AC6: understand what the float MEANS from reads before anything writes
+# it. It is finer-grained than the stance enum and documented nowhere, so a
+# write is a guess at an actuator that can fell him.
 CID_ANIM_STOP = 0x2B           # animatronic.py:69  (CID 43)
 CID_IO_PLAY_AUDIO = 0x07       # io.py:60
 CID_IO_SET_VOLUME = 0x08       # io.py:64
@@ -577,6 +582,15 @@ class R2:
         return await self.send(DID_ANIMATRONIC, CID_ANIM_PERFORM_LEG_ACTION,
                                bytes((action,)))
 
+    async def get_leg_position(self) -> float | None:
+        """OBSERVED animatronic.py:54 — CID 22, big-endian float. Semantics
+        UNKNOWN; this exists to find out what the number does, not because we
+        know."""
+        r = await self.send(DID_ANIMATRONIC, CID_ANIM_GET_LEG_POSITION)
+        if r and len(r.data) == 4:
+            return struct.unpack(">f", r.data)[0]
+        return None
+
     async def get_leg_action(self) -> int | None:
         """Current stance, as a raw byte. OBSERVED animatronic.py:58 — CID 37,
         returns `data[0]`.
@@ -1015,6 +1029,17 @@ async def _op_set_stance(r2, p):
     }
 
 
+async def _op_leg_position(r2, p):
+    """Read the raw leg position float. A READ, so tier `read`.
+
+    Reported alongside the stance NAME because the float alone means nothing
+    yet — #22 AC6 is to learn what it corresponds to at each known stance
+    before `set_leg_position` is ever written."""
+    return {"degrees": await r2.get_leg_position(),
+            "stance": _stance_name(await r2.get_leg_action()),
+            "note": "semantics UNKNOWN — see #22 AC6. Do not write until read."}
+
+
 async def _op_read_char(r2, p):
     """Read any GATT characteristic — for chasing 00020004 and the standard
     Battery Service 00002a19, neither of which any upstream repo documents."""
@@ -1251,6 +1276,7 @@ OPS = {
     "battery":    ("read",   _op_battery),
     "head":       ("read",   _op_head),
     "stance":     ("read",   _op_stance),    # get_leg_action — a READ, like head
+    "leg_pos":    ("read",   _op_leg_position),  # get_leg_position — also a READ
     "read_char":  ("read",   _op_read_char),
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
