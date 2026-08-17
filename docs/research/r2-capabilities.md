@@ -179,6 +179,109 @@ Raw per-move data (before/commanded/landed, settle samples) is in the vault at
 gravity/load related or a control-loop property — distinguishing them needs the
 dome tested on its side, which is not worth a session yet.
 
+### S1f notifications — OBSERVED 2026-08-16 on `D2-6F6B` (issue #11)
+
+One animation played: **id 21 `EMOTE_YES`**. Stopped there — see the safety note.
+
+**`play_animation_complete_notify` FIRES, unprompted.** It has no enable command
+anywhere upstream, and it arrived anyway. This was the open question the whole
+sub-stage existed for.
+
+| t from command | Event | `(did, cid)` | Payload |
+|---|---|---|---|
+| +329 ms | `leg_action_complete` | `0x17, 0x26` | `03` |
+| +747 ms | `leg_action_complete` | `0x17, 0x26` | `03` |
+| +778 ms | `leg_action_complete` | `0x17, 0x26` | `03` |
+| +779 ms | `leg_action_complete` | `0x17, 0x26` | **`04`** |
+| **+1112 ms** | **`animation_complete`** | `0x17, 0x11` | **`0015`** |
+| +1171 ms | `leg_action_complete` | `0x17, 0x26` | `02` |
+
+**The notification carries the animation id.** `0x0015` = 21 = the id that was
+requested. A scheduler can match a completion to the specific animation it
+dispatched, rather than assuming the next completion is its own.
+
+> [!warning] `animation_complete` does NOT mean motion has stopped
+> A `leg_action_complete` arrived **59 ms after** `animation_complete`. The
+> animation reported done while a leg action was still finishing. Choreography
+> that chains the next move immediately on `animation_complete` will overlap
+> with residual motion from the previous one. Sequence on it, but do not treat
+> it as "the body is now at rest".
+
+**AC3 verdict: `event_driven_viable`.** Events fire, they are attributable via
+the payload, and latency is ~1.1 s wall-clock for a short animation — usable for
+sequencing. The 59 ms overlap above is a caveat on the scheduler's design, not a
+reason to fall back to fixed sleeps.
+
+**AC4 flips from `untested_by_design` to verified.** `leg_action_complete` fires
+— six of them — **without `perform_leg_action` ever being called.** An authored
+animation drives leg actions on its own.
+
+**The payload is a STANCE STATE, not a command.** It decodes against
+`R2DoLegActions` (`animatronic.py:8-13`: `UNKNOWN`/`THREE_LEGS`/`TWO_LEGS`/
+`WADDLE`/`TRANSITIONING` = 0-4), the enum `get_leg_action` (CID `0x25`) returns
+— **not** `R2LegActions` (`animatronic.py:16-20`), the enum `perform_leg_action`
+takes. The two overlap on 1/2/3 and diverge at 0 and 4, so reading the wrong one
+is silently plausible.
+
+So the sequence is: `WADDLE`, `WADDLE`, `WADDLE`, **`TRANSITIONING`**,
+animation_complete, **`TWO_LEGS`**.
+
+> [!important] It is WADDLE that topples him, not the bipod end-state
+> `EMOTE_YES` ends in `TWO_LEGS` — stabiliser retracted, never restored — and
+> R2 fell during it. The obvious reading is "bipod is unstable". **That reading
+> is wrong**, and was corrected the same session by the cheapest possible test:
+> after the fall he was stood back up and **left standing in bipod, stable and
+> upright, indefinitely** (OBSERVED).
+>
+> So being on two legs is fine. What is in the event sequence besides the
+> end-state is **`WADDLE` ×3** — translation on two tracks with the stabiliser
+> up. **INFERRED:** the tripod is required to *move*, not to *stand*; on two
+> legs he can rotate in place but translating topples him. This matches the
+> operator's independent hypothesis, formed from watching, before the event
+> payloads were decoded.
+>
+> **Consequence for #12: the hazard is an animation that waddles, not one that
+> ends bipod.** A classifier keying on the final stance would pass a
+> waddle-in-the-middle animation as safe. Key on whether `WADDLE` appears in
+> the leg-event sequence at all.
+
+> [!warning] `get_leg_action` does not SENSE the stance
+> **OBSERVED:** R2 standing visibly and definitely in bipod, freshly connected,
+> answered `raw: 0` = `UNKNOWN`. It reports tracked state that a reconnect
+> wipes, not a measurement of where the legs are.
+>
+> **So a stance read cannot establish ground truth at session start.** The
+> obvious safety protocol — "read stance, confirm tripod, then play" — blocks on
+> the first item and never opens, because the honest answer at connect is always
+> `UNKNOWN`. `stable` is correctly `false` there; the op is not lying, it simply
+> cannot bootstrap.
+>
+> Establishing a known stance needs `perform_leg_action` (a write, and stance
+> bring-up — see #22) or a human eye. What the read IS good for: detecting a
+> *change* within a session, once a baseline exists. Same discipline as the
+> dome — read it, do not assume it, and never trust it across handling.
+
+> [!danger] An authored animation knocked the robot over
+> `EMOTE_YES` — a *nod* — commanded `WADDLE` three times and then `TWO_LEGS`,
+> and **R2 fell.** Not damaged, but down.
+>
+> **`may_drive` is not a safety classification.** `r2_survey.py:135` flags ids
+> 8/9/11 from `translator.c:101-104` as able to drive the body. That says
+> nothing about stance transitions, and a stance transition is what put him
+> over. Driving and falling are different failure modes; filtering for one does
+> not filter the other.
+>
+> **Consequence for #12:** the animation survey plays **all 56 ids**. If a nod
+> does this, a sequential sweep repeats it. #12 cannot run as specified. It
+> needs a fall-safe protocol — surface, support, tripod state verified between
+> items, and an abort on stance events rather than after a fall — and **#22
+> stance should land first**.
+>
+> Operator hypothesis worth testing in #22, consistent with the event sequence:
+> the third leg must be down to translate, and on two legs he can only rotate
+> in place (opposite-direction track drive). Three `WADDLE`s followed by
+> `TWO_LEGS` fits a retracted tripod that never came back down.
+
 ### Sensors in
 
 `extended_sensors` (`r2d2.py:470-477`): `r2_head_angle` (-162…182), gyroscope
