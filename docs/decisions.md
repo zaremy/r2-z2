@@ -536,9 +536,11 @@ started.**
 Every dome move undershoots by ~3°, so a gesture built from deltas never
 returns to its origin. Anchoring the correction to each beat's own starting
 angle fails silently: the residual is always ~3°, always below the threshold,
-so the correction never fires and the dome walks anyway (measured −24.58° →
-−41.17° over five beats). A **fixed** home lets error accumulate until it is
-large enough to command, producing a bounded sawtooth instead of a slide.
+so the correction never fires and the dome walks anyway. Measured across five
+successive settled readings: **−24.58° → −32.40° → −34.93° → −37.58° →
+−41.17°** — monotonic, and the correction did not fire once. A **fixed** home
+lets error accumulate until it is large enough to command, producing a bounded
+sawtooth instead of a slide.
 
 **4. Every beat ends on a D-012 status colour.**
 
