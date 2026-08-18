@@ -46,8 +46,39 @@ own ESP-SR detector drops into the same seam at backpack time.
 
 ```bash
 cd mac-prototype
-.venv/bin/pip install sounddevice openwakeword
+.venv/bin/pip install sounddevice openwakeword pywhispercpp
 ```
+
+`pywhispercpp` ships a prebuilt arm64 wheel — no compilation. It downloads
+`base.en` (147 MB) on first use.
+
+## Transcription (V4, #45)
+
+`transcribe.py` turns a captured utterance into text. The model is held
+**resident**: shelling out to whisper.cpp's CLI would reload 147 MB per
+utterance and spend the whole latency budget on process spawn.
+
+```python
+from transcribe import create_transcriber
+tr = create_transcriber("whisper.cpp", warm=True)
+print(tr.backend_report())        # {'metal': True, 'device': 'Apple M3 Pro', ...}
+print(tr.transcribe(pcm).text)
+```
+
+**Check `backend_report()` after any dependency bump.** #45 rules out
+`faster-whisper` because it is CPU-only on Apple Silicon and forfeits the GPU
+silently — a prebuilt wheel can do exactly the same thing, and every functional
+test would still pass. The check reads back what whisper.cpp actually
+initialised.
+
+MEASURED on an M3 Pro, `base.en`, warm, p50 over 10 runs:
+
+| audio | p50 | realtime factor |
+|---|---|---|
+| 5.0 s real quiet-room recording (sparse) | 0.061 s | 0.012x |
+| 7.4 s continuous speech (dense tokens) | 0.125 s | 0.017x |
+
+Against #45's 1.5 s budget that is roughly 12x headroom on the harder case.
 
 ## Get a model to test with, before training anything
 
