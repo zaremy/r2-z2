@@ -14,6 +14,10 @@ All clones live in `reference/` (gitignored). SHAs captured
 | [vthinkxie/claude-desktop-buddy-esp32](https://github.com/vthinkxie/claude-desktop-buddy-esp32) | `main` | `61a0ce9f7410ed87de2032f226e511c9e59abbfe` | 2026-05-08 | MIT (Anthropic, PBC) | **Learn from only** — its 1.8" target is the *V1* board; do not flash |
 | [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy) | `main` | `a280c6421931431ba6905aee9d2b50b2bfd8c103` | 2026-04-16 | MIT (Anthropic, PBC) | **Optional** — Hardware Buddy wire protocol, if we ever add a Claude-activity sensor |
 | [astagi/freer2](https://github.com/astagi/freer2) | `master` | `4920b866ee13685d83aad70febe4e1210567ed11` | 2020-04-04 | MIT (Andrea Stagi) | **Historical corroboration** — original reverse-engineering of the UUIDs/handshake |
+| [dscripka/openWakeWord](https://github.com/dscripka/openWakeWord) | `main` | `368c03716d1e` | 2025-12-30 | Apache-2.0 | **Reuse code** — the wake-word engine we run on the Mac (`voice/wake.py`). Last release v0.6.0, 2024-02-11 |
+| [OHF-Voice/micro-wake-word](https://github.com/OHF-Voice/micro-wake-word) | `main` | `4665173cd35f` | 2026-07-06 | Apache-2.0 | **Learn from / future reuse** — the backpack's on-device detector. `kahrendt/microWakeWord` is a fork of this |
+| [fwartner/home-assistant-wakewords-collection](https://github.com/fwartner/home-assistant-wakewords-collection) | `main` | `8bcd2f20bb7b` | 2026-01-13 | MIT | **Reuse models** — 102 pre-trained English models incl. `r2d2`, as `.onnx` + `.tflite` |
+| [alfiedennen/openwakeword-colab-2026](https://github.com/alfiedennen/openwakeword-colab-2026) | `main` | `da4d92a64fad` | 2026-05-09 | MIT | **Unvetted** — fixes the bit-rotted official training notebook. 1 star, 1 commit; read before running |
 
 ## Per-repo notes
 
