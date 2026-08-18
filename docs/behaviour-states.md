@@ -49,7 +49,7 @@ Front and back PSI unless noted. Sound column is the family, not an id.
 | state | front | back | holo (7) | logic (3) | sound | dome |
 |---|---|---|---|---|---|---|
 | **idle** | blue steady | blue steady | off | off | — | none |
-| **wake** | sweep blue→cyan→green, 0.45 s | blue steady | ramp up | on | `R2_HEY_*` ✅ | see note |
+| **wake** | sweep blue→cyan→green, 0.45 s | blue steady | ramp up | on | `R2_HEY_*` ✅ | **none** |
 | **listen** | cyan steady | cyan steady | breathe 2.2 s | blink | — | small tilt, hold |
 | **thinking** | cyan↔blue alt, 0.9 s | cyan↔blue alt | breathe 1.2 s | blink | `R2_EXCITED_*` ✅ | still |
 | **attention** | yellow blink 2.4 s | yellow blink 2.4 s | off | off | **unassigned** | none |
@@ -69,10 +69,15 @@ lost link (1.0 s). Only one of those means go and pick him up.
 > command (`DID 0x13 / CID 0x0D`, every 3 s), so any sleep is undone within
 > three seconds. Session-lifecycle change before it is a lighting one — #38.
 
-> [!warning] **wake's dome move cannot keep up with its light.** The sweep
-> finishes in 1.35 s; every dome move takes ~2.0-2.2 s regardless of distance
-> (D-013). The dome will still be travelling when the light has settled. Either
-> drop the dome from wake or accept the lag — **unresolved, operator call.**
+> [!info] **wake has no dome move.** Operator ruling, 2026-08-17.
+> The sweep finishes in 1.35 s; every dome move takes ~2.0-2.2 s regardless of
+> distance (D-013), so the dome would still be travelling after the light had
+> settled — the acknowledgement would arrive twice, late the second time.
+> Wake is now **light and sound only**, which is also the cheapest state to
+> enter and the one that fires most often.
+>
+> This drops `EMOTE_ATTENTION` (id 9) from wake, and with it one of the two
+> `inconclusive` animation labels this table was resting on.
 
 ## Expression beats
 
@@ -105,8 +110,9 @@ that must read as *quick* has to come from lights or sound.
   explicit stance step; bipod is a stable standing posture.
 - **Audio onset is slower than the 0.12 s batch spacing**, so sound must be
   queued *before* the dome move it accompanies.
-- **Two animation labels this table leans on are `inconclusive`** — `wake()` on
-  `EMOTE_ATTENTION` (id 9), `look_around()` on `EMOTE_SEARCH` (id 13).
+- **One animation label this table leans on is `inconclusive`** —
+  `look_around()` on `EMOTE_SEARCH` (id 13). `EMOTE_ATTENTION` (id 9) was the
+  other; dropping the dome from wake retired it.
 
 ## What this invalidates in code
 
