@@ -491,5 +491,184 @@ class TestDomeHome(unittest.TestCase):
         self.assertEqual(out["residual_deg"], 6.0)   # vs home, not vs -33
 
 
+
+class TestGuardIsOnTheSendPath(unittest.TestCase):
+    """C1 — the forbidden-op check must be where the packets go.
+
+    It used to live only in `Beat.validate()`. That made the guarantee true of
+    beats and false of the module: any caller holding a Step and a Bridge could
+    reach `animation` with nothing objecting. D-013 claims these ops are
+    "unrepresentable", so the check belongs on the send path.
+    """
+
+    def test_send_batch_refuses_a_forbidden_op(self):
+        bridge = B.FakeBridge()
+        for op in B.FORBIDDEN_OPS:
+            with self.assertRaises(ValueError):
+                bridge.send_batch([B.Step(op, {"id": 21})], timeout=1.0)
+            self.assertEqual(bridge.batches, [],
+                             f"{op!r} must not reach the queue at all")
+
+    def test_send_batch_refuses_an_unknown_op(self):
+        bridge = B.FakeBridge()
+        with self.assertRaises(ValueError):
+            bridge.send_batch([B.Step("selfdestruct", {})], timeout=1.0)
+        self.assertEqual(bridge.batches, [])
+
+    def test_a_legal_step_still_goes_through(self):
+        bridge = B.FakeBridge()
+        out = bridge.send_batch([B.Step("leds", {"channels": {0: 255}})], 1.0)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(len(bridge.batches), 1)
+
+    def test_every_bridge_subclass_guards(self):
+        # The guard is on the base class, so a future Bridge cannot forget it
+        # by overriding the wrong method. `_send` is the extension point.
+        self.assertIs(B.FileBridge.send_batch, B.Bridge.send_batch)
+        self.assertIs(B.FakeBridge.send_batch, B.Bridge.send_batch)
+
+
+class TestPerformStopsOnFailure(unittest.TestCase):
+    """C2 — a failed step must halt the beat, not be sent on top of."""
+
+    def test_a_failed_phrase_aborts_the_remaining_phrases(self):
+        beat = B.express_curious()
+        bridge = B.FakeBridge(fail_on="sound")
+        out = B.perform(beat, bridge, ceiling="dome", home=B.DomeHome(),
+                        sleep=lambda _: None)
+        self.assertFalse(out["ok"])
+        self.assertIsNotNone(out["aborted_at_phrase"],
+                             "a failed step must record where it stopped")
+        # The phrase batches actually sent must stop at the abort, plus the
+        # leading head read and the trailing rest-colour reset.
+        self.assertLess(out["aborted_at_phrase"], len(beat.phrases) - 1,
+                        "fixture must fail before the last phrase to be a test")
+
+    def test_a_clean_run_does_not_report_an_abort(self):
+        out = B.perform(B.express_curious(), B.FakeBridge(), ceiling="dome",
+                        home=B.DomeHome(), sleep=lambda _: None)
+        self.assertIsNone(out["aborted_at_phrase"])
+
+
+class TestEveryBeatLandsOnAStatusColour(unittest.TestCase):
+    """C3 — D-013 point 4, enforced rather than asserted.
+
+    The reset used to sit inside the `return_to_start` block, so `thinking()`
+    ended every run holding PULSE_CYAN — an expression colour, persisted,
+    because a colour we set survives the link dropping.
+    """
+
+    def _last_front(self, bridge):
+        # `front()` stringifies the bit numbers, because the bridge serialises
+        # params to JSON and JSON object keys are strings.
+        keys = (str(B.LED_FRONT_R), str(B.LED_FRONT_G), str(B.LED_FRONT_B))
+        for batch in reversed(bridge.batches):
+            for step in batch:
+                ch = step.params.get("channels", {}) if step.op == "leds" else {}
+                if all(k in ch for k in keys):
+                    return tuple(ch[k] for k in keys)
+        return None
+
+    def test_thinking_ends_on_its_rest_colour(self):
+        beat = B.thinking()
+        bridge = B.FakeBridge()
+        B.perform(beat, bridge, ceiling="audio", sleep=lambda _: None)
+        self.assertEqual(self._last_front(bridge), beat.rest_colour)
+
+    def test_curious_ends_on_its_rest_colour(self):
+        beat = B.express_curious()
+        bridge = B.FakeBridge()
+        B.perform(beat, bridge, ceiling="dome", home=B.DomeHome(),
+                  sleep=lambda _: None)
+        self.assertEqual(self._last_front(bridge), beat.rest_colour)
+
+    def test_the_reset_still_runs_after_an_aborted_beat(self):
+        beat = B.express_curious()
+        bridge = B.FakeBridge(fail_on="sound")
+        B.perform(beat, bridge, ceiling="dome", home=B.DomeHome(),
+                  sleep=lambda _: None)
+        self.assertEqual(self._last_front(bridge), beat.rest_colour,
+                         "an aborted beat must still land on a status colour")
+
+    def test_a_bridge_that_raises_does_not_escape_without_a_reset(self):
+        class Exploding(B.FakeBridge):
+            def _send(self, steps, timeout=12.0):
+                if any(s.op == "dome" for s in steps):
+                    raise RuntimeError("bridge not running")
+                return super()._send(steps, timeout)
+
+        bridge = Exploding()
+        with self.assertRaises(RuntimeError):
+            B.perform(B.express_curious(), bridge, ceiling="dome",
+                      home=B.DomeHome(), sleep=lambda _: None)
+        # The original exception still surfaces, AND the tidy-up ran.
+        self.assertEqual(self._last_front(bridge),
+                         B.express_curious().rest_colour)
+
+
+class TestConstantsMatchTheDaemon(unittest.TestCase):
+    """C4 — this module hand-copies the daemon's authorization table.
+
+    Duplicated on purpose (importing r2_probe drags in bleak, and this suite
+    must run with no BLE stack), which makes drift silent rather than
+    impossible. D-009 has already moved an op between tiers once. Parse the
+    daemon's source instead of importing it.
+    """
+
+    @staticmethod
+    def _probe_ast():
+        import ast
+        src = (Path(__file__).parent / "r2_probe.py").read_text()
+        return ast.parse(src)
+
+    def _assignments(self):
+        import ast
+        out = {}
+        for node in ast.walk(self._probe_ast()):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        out[t.id] = node.value
+                    elif isinstance(t, ast.Tuple):
+                        for i, el in enumerate(t.elts):
+                            if isinstance(el, ast.Name) and isinstance(
+                                    node.value, ast.Tuple):
+                                out[el.id] = node.value.elts[i]
+        return out
+
+    def test_tiers_match(self):
+        import ast
+        node = self._assignments()["TIERS"]
+        self.assertEqual(tuple(ast.literal_eval(node)), B.TIERS)
+
+    def test_op_tiers_match(self):
+        import ast
+        ops_node = self._assignments()["OPS"]
+        daemon = {}
+        for k, v in zip(ops_node.keys, ops_node.values):
+            daemon[ast.literal_eval(k)] = ast.literal_eval(v.elts[0])
+        for op, tier in B.OP_TIER.items():
+            self.assertIn(op, daemon, f"{op!r} no longer exists in the daemon")
+            self.assertEqual(
+                tier, daemon[op],
+                f"{op!r} is tier {tier!r} here and {daemon[op]!r} in the "
+                f"daemon — this module would compute the wrong required_tier")
+        for op in B.FORBIDDEN_OPS:
+            self.assertIn(op, daemon)
+
+    def test_led_bits_match(self):
+        import ast
+        a = self._assignments()
+        for name, ours in (("LED_FRONT_R", B.LED_FRONT_R),
+                           ("LED_FRONT_G", B.LED_FRONT_G),
+                           ("LED_FRONT_B", B.LED_FRONT_B),
+                           ("LED_LOGIC", B.LED_LOGIC),
+                           ("LED_BACK_R", B.LED_BACK_R),
+                           ("LED_BACK_G", B.LED_BACK_G),
+                           ("LED_BACK_B", B.LED_BACK_B),
+                           ("LED_HOLO", B.LED_HOLO)):
+            self.assertEqual(ast.literal_eval(a[name]), ours,
+                             f"{name} disagrees with the daemon")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

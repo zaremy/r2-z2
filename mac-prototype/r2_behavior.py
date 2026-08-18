@@ -378,9 +378,30 @@ class Beat:
 
 class Bridge:
     """Writes request files and reads responses. The real one and the fake one
-    share this interface so a beat can be flown end-to-end with no robot."""
+    share this interface so a beat can be flown end-to-end with no robot.
 
-    def send_batch(self, steps, timeout: float) -> list[dict]:
+    `send_batch` is deliberately CONCRETE and final-ish: it guards, then
+    delegates to `_send`. Subclasses override `_send`, never `send_batch`.
+    """
+
+    def send_batch(self, steps, timeout: float = 12.0) -> list[dict]:
+        """Guard THEN send.
+
+        The forbidden-op check used to live only in `Beat.validate()`, i.e. on
+        the CONSTRUCTION path. A guard on the construction path is bypassed by
+        any caller that skips construction — `bridge.send_batch([Step(
+        "animation", {"id": 21})])` reached the daemon queue with nothing in
+        this module objecting, while D-013 claimed those ops were
+        "unrepresentable". They were merely unrepresentable *in a Beat*.
+
+        Physical safety belongs on the path the packets actually take, so the
+        check is here. `Step.tier()` raises on both forbidden and unknown ops.
+        """
+        for s in steps:
+            s.tier()
+        return self._send(tuple(steps), timeout)
+
+    def _send(self, steps, timeout: float) -> list[dict]:
         raise NotImplementedError
 
 
@@ -396,7 +417,7 @@ class FileBridge(Bridge):
     def running(self) -> bool:
         return self.req.exists()
 
-    def send_batch(self, steps, timeout: float = 12.0) -> list[dict]:
+    def _send(self, steps, timeout: float = 12.0) -> list[dict]:
         if not self.running():
             raise RuntimeError(
                 "bridge not running. Only the operator can start it:\n"
@@ -470,7 +491,7 @@ class FakeBridge(Bridge):
             out["data"] = {"degrees": self.head_deg}
         return out
 
-    def send_batch(self, steps, timeout: float = 12.0) -> list[dict]:
+    def _send(self, steps, timeout: float = 12.0) -> list[dict]:
         self.batches.append(list(steps))
         self.sent.extend(steps)
         return [self._reply(s) for s in steps]
@@ -572,13 +593,43 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
         if start_angle is not None:
             start_angle = anchor_to.anchor(start_angle)
 
-    for i, phrase in enumerate(beat.phrases):
-        responses.extend(bridge.send_batch(phrase.steps, timeout=12.0))
-        if phrase.gap_s and i < len(beat.phrases) - 1:
-            sleep(phrase.gap_s)
+    aborted_at = None
+    try:
+        for i, phrase in enumerate(beat.phrases):
+            out = bridge.send_batch(phrase.steps, timeout=12.0)
+            responses.extend(out)
+            # STOP on a failed step. This loop used to run to completion
+            # regardless, which is the thing this function's own docstring
+            # says it exists to prevent: phrase 3 was sent on top of a dome
+            # position phrase 2 never confirmed reaching.
+            if any(not r.get("ok") for r in out):
+                aborted_at = i
+                break
+            if phrase.gap_s and i < len(beat.phrases) - 1:
+                sleep(phrase.gap_s)
+    finally:
+        # Whatever happened above — clean finish, aborted phrase, or an
+        # exception out of the bridge (FileBridge raises RuntimeError when the
+        # daemon has gone away, and OSError if the queue directory vanished) —
+        # R2 must not be left holding an EXPRESSION colour. An LED colour we
+        # set is state that survives the link dropping, so the last thing we
+        # wrote is what the household sees until something changes it.
+        # CLAUDE.md: "failure must result in stop, not last-command."
+        #
+        # This also fixes a narrower bug: the reset used to live inside the
+        # `return_to_start` block, so `thinking()` — which does not set it —
+        # ended every run holding PULSE_CYAN.
+        try:
+            responses.extend(bridge.send_batch((
+                Step("leds", {"channels": front(beat.rest_colour)}),
+            ), timeout=12.0))
+        except Exception:
+            # Best effort only. Never mask the original failure with a
+            # secondary one raised while tidying up.
+            pass
 
     residual = None
-    if beat.return_to_start and start_angle is not None:
+    if aborted_at is None and beat.return_to_start and start_angle is not None:
         sleep(DOME_MOVE_S)
         here = (bridge.send_batch([Step("head", {})], timeout=12.0)[0]
                 .get("data") or {}).get("degrees")
@@ -604,13 +655,11 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
             # unachievable. Say so rather than emitting a command that would
             # report success and do nothing. Residual under ~12 deg is the
             # floor of what this hardware can hold, not a bug to fix.
-        responses.extend(bridge.send_batch((
-            Step("leds", {"channels": front(beat.rest_colour)}),
-        ), timeout=12.0))
 
     failed = [r for r in responses if not r.get("ok")]
     return {"ok": not failed, "beat": beat.name, "refused": False,
             "tier": need, "steps": len(responses),
+            "aborted_at_phrase": aborted_at,
             "start_angle": start_angle,
             "residual_deg": residual,
             "elapsed_s": round(time.monotonic() - started, 3),
