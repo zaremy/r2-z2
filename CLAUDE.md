@@ -140,6 +140,32 @@ little entity is continuously present in the household.
   `CLAUDE.md` is loaded every session and skill descriptions evidently are not
   matched reliably. If the next instruction will move the robot, the skill
   applies.
+- **Run the case that must NOT fire, BEFORE any real trial — and again at the
+  end.** A detector that is stuck ON is invisible to a positive control: it
+  produces the *loud* answer, and loud reads as success. The S1e touch survey
+  returned a unanimous **10/10** and every one of those trials was void. Four
+  separate bugs each produced that same confident result — a 6σ threshold
+  applied to the max across a window (the max of 85-220 draws clears 6σ by
+  chance), a statistic that fired when a channel merely sat somewhere new, an
+  event ring never flushed so a 5 s window swept in minutes of history, and
+  single-channel firing that one encoder blip could trip. One no-touch control
+  exposed all four — run after ten trials instead of before, which cost the
+  operator ten wasted pets before they stopped it themselves. **A clean sweep
+  is a prompt to check the null case, not a result.** Interleave controls with
+  trials so specificity drift cannot hide inside a run, and store raw samples
+  with every trial so a rubric that turns out wrong can be re-scored offline
+  instead of re-run on the operator's patience.
+- **The dome cannot make small movements, and it lies about it.** Commanded
+  travel below ~10.5° is SILENTLY IGNORED and still returns `ok: true`
+  (4°/6°/8°/10° all moved ≤0.11°; 10.5° moved). **The smallest legible dome
+  gesture is 12°**, not the ~5° S1c inferred from a single failing 4.2°
+  command. A move also takes **~2.0-2.2 s regardless of distance** — 8.35° took
+  2.19 s and 22.61° took 2.07 s — so it is a fixed-duration move, not a slew
+  rate, and anything that must feel quick cannot move the dome. This has now
+  produced two wrong designs: a drift correction that never executed, and
+  issue #29's own AC5 text telling us to probe resistance with "a much smaller
+  delta", which would have moved nothing and read as total resistance. Full
+  evidence in **D-013**.
 
 ## Research discipline
 
