@@ -690,3 +690,75 @@ is not a colour reset to one of the three status colours.
 - **A correction constant for undershoot.** S1c already showed the deadband is a
   gradient across the range (2.4° at +170°, 5.7° at −145°), so a constant fitted
   at one end is wrong at the other. Re-reading the angle beats modelling it.
+
+## D-014 — A service-state signal must be a transition, not a colour
+
+**Date:** 2026-08-18 · **Status:** accepted · **Extends:** D-012 ·
+**Implements:** `mac-prototype/r2_reactive.py`
+
+### Context
+
+D-012 settled *what* the LEDs mean: colour carries meaning, steady-vs-blink
+carries mode, and the LED is the affordance that says *something is up* from
+across the room. It did not settle how a signal gets **noticed**, and the first
+feature that needed the operator to act on one exposed the gap.
+
+`r2_reactive.py` runs a hands-off calibration and a negative control before it
+starts listening. The operator has to know the moment listening begins, because
+their hand is the input device. The arming signal was `BASE_NEUTRAL` blue —
+correct by D-012's table, since blue is "on / waiting / neutral".
+
+It was invisible. The previous session's own teardown leaves R2 on
+`BASE_NEUTRAL`, so arming him blue changed nothing at all. The operator was
+told to wait for a cue that had already happened, waited through the whole
+120 s armed window, and the run returned zero reactions with no touch in it.
+The console said `ARMED` and the console is not something they can see.
+
+### Decision
+
+**A state the operator must ACT on is signalled by a change they can see, not
+by a colour they have to have been told to expect.**
+
+Concretely, and bindingly:
+
+1. **Establish a contrasting state first.** `r2_reactive` drives the LEDs
+   **dark** for the entire hands-off stretch, then to blue at the instant it
+   arms. The edge is the signal; the colour only says *which* state was
+   entered.
+2. **Never assume the prior state.** An LED colour we set is storage we own and
+   survives the link dropping, so the state before a signal is whatever some
+   earlier session left. A signal defined only by its destination is a no-op
+   whenever the destination is already current — which is exactly the case
+   after a clean teardown, i.e. the *normal* case.
+3. **This is a service signal, and service signals on the body are fine.** The
+   character boundary forbids *rendering* on the body, not signalling. Dark →
+   blue spells nothing and shows no face.
+
+### Consequences
+
+- Any future affordance meaning "act now" must define its **before** state, not
+  just its after. That is a new obligation on every such signal.
+- Dark is not a new entry in D-012's colour language. It is the absence of one,
+  used to make the next entry legible.
+- The rule generalises past LEDs: it applies to any signal whose whole job is to
+  tell a human that their turn has started.
+
+### Evidence
+
+- Live run 2026-08-18, R2 on the floor: 120 s armed, **0 reactions, 0 touches**.
+  The operator confirmed they never petted him — they were waiting for a cue
+  that was indistinguishable from the state before it.
+- Verified in the test suite by asserting the *ordering* of LED writes, not
+  their presence: `test_the_arm_cue_is_a_visible_edge_not_a_colour` fails when
+  the dark phase is removed, which the presence-only assertion did not.
+
+### Rejected
+
+- **A chirp as the arming cue.** Unmissable, and available under the `dome`
+  ceiling. Rejected because sound is the loudest character channel R2 has, and
+  a service event that sounds like him talking blurs exactly the boundary
+  CLAUDE.md draws. Light is the sanctioned affordance; use it properly instead
+  of reaching past it.
+- **Printing `ARMED` more loudly.** This was the original failure. The observer
+  cannot see the console — the whole premise of `/survey-session` — and no
+  amount of console formatting reaches a person whose hands are on the robot.

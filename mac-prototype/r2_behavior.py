@@ -38,6 +38,7 @@ WHAT THIS DELIBERATELY DOES NOT DO
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -426,11 +427,43 @@ class FileBridge(Bridge):
 
     def __init__(self, bridge_dir: Path | None = None):
         base = bridge_dir or (Path(__file__).parent / ".bridge")
+        self.base = base
         self.req = base / "requests"
         self.resp = base / "responses"
 
+    def daemon(self) -> dict | None:
+        """The live daemon's lock record, or None if nothing holds the bridge.
+
+        `self.req.exists()` used to stand in for this, and it is not the same
+        question: the queue directories SURVIVE the daemon that made them, so
+        a dead daemon reads as running. A session then starts, briefs the
+        operator, and only discovers the truth ~15 s later when the first op
+        times out with "no response" -- which reads as a protocol bug rather
+        than as "nothing is listening". Cost one live run when the link
+        dropped as R2 was carried to another room.
+
+        The lock is the daemon's own liveness record (r2_probe.py:921) and it
+        carries the CEILING too, which is why this returns the record rather
+        than a bool: what the daemon will actually permit is knowable, and
+        should never be taken on trust from a command-line flag.
+        """
+        try:
+            held = json.loads((self.base / "daemon.lock").read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(held, dict) or not isinstance(held.get("pid"), int):
+            return None
+        try:
+            os.kill(held["pid"], 0)
+        except ProcessLookupError:
+            return None
+        except OSError:
+            # Alive but not ours to signal. Still alive.
+            pass
+        return held
+
     def running(self) -> bool:
-        return self.req.exists()
+        return self.daemon() is not None
 
     def _send(self, steps, timeout: float = 12.0) -> list[dict]:
         if not self.running():
