@@ -158,6 +158,49 @@ misses) until AC1 still passes at 9/10 and the false-accept rate is liveable.
 **That** is the number that goes in the issue — sensitivity set from a
 measurement, not chosen in the abstract.
 
+## Reasoning (V5, #46)
+
+`reason(heard) -> Behaviour`, which composes a `Beat` from the choreography
+layer. Provider is config, not code:
+
+```bash
+python3 voice/reason.py "Hey R2, good morning!"
+```
+
+**The model never names an op.** The tool schema offers three closed choices —
+a sound name from `R2_SOUNDS`, a dome angle, a mood — and this module composes
+the beat from primitives. So `animation` and `set_stance` are not filtered out
+of model output; they are *unreachable from it*. A confused or hostile response
+cannot express them because the vocabulary has no word for them.
+
+**The prompt is not enforcement.** MEASURED across five models with
+"under 12 degrees does not move" written into the parameter description, they
+returned **0, 8, 12 and 20 degrees**. Two of four sit below
+`MIN_DOME_TRAVEL_DEG`, where the dome silently ignores the command and reports
+success anyway. Every number is re-checked in `_validate` and every correction
+is logged onto the `Behaviour`.
+
+**Mood does not pick a colour.** All six reachable RGB corners already carry a
+status meaning (D-012 Amendment A), so hue is not available for expression.
+Mood selects a sound and a gesture; the rest colour stays a status claim.
+
+**Failure lands on yellow, not red.** `BASE_DANGER` is "danger and stop, ONLY";
+a timed-out API call is "needs monitoring". `error_beat()` shows PENDING and
+then hands him back neutral, so he is never left lit on a warning.
+
+Model latency measured on this task, p50 of 3 calls:
+
+| model | p50 | valid sound id |
+|---|---|---|
+| gpt-5.4-mini | **0.63 s** | 3/3 |
+| gpt-5.4-nano | 0.74 s | 3/3 |
+| gpt-4o-mini | 1.62 s | 3/3 |
+| gpt-5-mini | 14.37 s | 3/3 |
+| gpt-5-nano | 14.73 s | 3/3 |
+
+All five pick valid ids, so latency is the discriminator — and R2 stands lit in
+Processing for that whole time. Note "nano" is not the fast one.
+
 ## Microphone permission — the agent CAN open it
 
 **OBSERVED 2026-08-17.** The BLE restriction does **not** extend to the
