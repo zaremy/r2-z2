@@ -60,10 +60,13 @@ class TestBeatsAreWellFormed(unittest.TestCase):
         # thinking() uses no dome at all, so it runs a whole rung lower.
         self.assertEqual(B.thinking().required_tier(), "audio")
 
-    def test_dome_moves_are_relative_never_absolute(self):
+    def test_authored_dome_moves_are_relative_never_absolute(self):
+        # Scoped to AUTHORED phrases on purpose. perform() does emit one
+        # absolute angle for the drift correction, and that is correct --
+        # see test_a_large_residual_is_corrected_with_an_absolute_angle.
         # The dome has no resting position (observed at 103, 3.3 and -0.06
-        # degrees). An absolute target is meaningless; travel is bounded from
-        # a freshly read position by the daemon.
+        # degrees), so a destination inside a gesture is meaningless; travel
+        # is bounded from a freshly read position by the daemon.
         for name, make in B.VOCABULARY.items():
             for phrase in make().phrases:
                 for step in phrase.steps:
@@ -125,6 +128,14 @@ class TestGuardsRejectBadBeats(unittest.TestCase):
 
 
 class TestPerform(unittest.TestCase):
+
+    def setUp(self):
+        # perform() falls back to a PROCESS-WIDE home. Without this reset the
+        # first test to run anchors it and every later test inherits that
+        # angle -- which is exactly how two of these started failing.
+        B.reset_default_home()
+
+    tearDown = setUp
 
     def test_refuses_below_ceiling_and_sends_nothing(self):
         # The important half is "sends nothing". A beat half-executed leaves
@@ -374,6 +385,15 @@ class TestDurationEstimate(unittest.TestCase):
         gaps = sum(p.gap_s for p in beat.phrases)
         self.assertGreaterEqual(beat.estimated_duration_s(), gaps)
 
+    def test_estimate_does_not_exceed_measured_runtime(self):
+        # The contract is "not shorter than", so an OVER-estimate is a bug,
+        # not a rounding quirk. An earlier version double-counted the closing
+        # settle and assumed the drift correction always fires, giving
+        # 12.47 s against two measured runs of 9.978 s and 10.337 s.
+        MEASURED_FASTEST = 9.978
+        self.assertLess(B.express_curious().estimated_duration_s(),
+                        MEASURED_FASTEST)
+
     def test_both_beats_are_bounded(self):
         for name, make in B.VOCABULARY.items():
             with self.subTest(beat=name):
@@ -383,6 +403,14 @@ class TestDurationEstimate(unittest.TestCase):
 
 
 class TestDomeHome(unittest.TestCase):
+
+    def setUp(self):
+        # perform() falls back to a PROCESS-WIDE home. Without this reset the
+        # first test to run anchors it and every later test inherits that
+        # angle -- which is exactly how two of these started failing.
+        B.reset_default_home()
+
+    tearDown = setUp
     """The persistent drift anchor. A per-beat anchor measured the last beat's
     error and forgot it, so the correction never fired across five real runs
     while the dome walked -24.58 -> -41.17."""
@@ -417,6 +445,36 @@ class TestDomeHome(unittest.TestCase):
 
     def test_unanchored_home_never_commands(self):
         self.assertIsNone(B.DomeHome().correction(-99.0))
+
+    def test_reset_clears_the_process_wide_home(self):
+        # The default home holds the FIRST angle this process ever read, for
+        # the life of the process. That is right within one session and wrong
+        # across sessions or after the robot is physically moved -- and it is
+        # what made two tests in this file fail by inheriting each other's
+        # anchor.
+        b = B.FakeBridge(head_seq=[-30.0, -31.0])
+        B.perform(B.express_curious(), b, ceiling="dome", sleep=lambda _: None)
+        self.assertEqual(B._DEFAULT_HOME.angle, -30.0)
+        B.reset_default_home()
+        self.assertIsNone(B._DEFAULT_HOME.angle)
+        b2 = B.FakeBridge(head_seq=[-88.0, -89.0])
+        out = B.perform(B.express_curious(), b2, ceiling="dome",
+                        sleep=lambda _: None)
+        self.assertEqual(out["start_angle"], -88.0)   # re-anchored, not -30
+
+    def test_default_home_is_used_when_the_caller_passes_none(self):
+        # The whole point of the default: a caller that knows nothing about
+        # DomeHome still gets bounded drift. Shipping this as opt-in made the
+        # fix inert, because no call site passed it.
+        b1 = B.FakeBridge(head_seq=[-30.0, -33.0])
+        B.perform(B.express_curious(), b1, ceiling="dome", sleep=lambda _: None)
+        self.assertEqual(B._DEFAULT_HOME.angle, -30.0)
+        # Second beat starts elsewhere; the default home must NOT follow it.
+        b2 = B.FakeBridge(head_seq=[-33.0, -36.0])
+        out = B.perform(B.express_curious(), b2, ceiling="dome",
+                        sleep=lambda _: None)
+        self.assertEqual(out["start_angle"], -30.0)
+        self.assertEqual(out["residual_deg"], 6.0)
 
     def test_perform_anchors_to_home_not_to_this_beat(self):
         home = B.DomeHome()

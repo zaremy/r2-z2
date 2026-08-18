@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from r2_assets import R2_SOUNDS
@@ -284,7 +284,6 @@ class Beat:
     # resting position. Measured drift before this existed: ~7.5 deg per
     # invocation, i.e. 150 deg after twenty curious beats.
     return_to_start: bool = False
-    _resolved: list = field(default_factory=list, repr=False)
 
     def required_tier(self) -> str:
         """The lowest daemon ceiling that can run this beat. Computed from the
@@ -299,7 +298,20 @@ class Beat:
         found id-gap spacing predicts duration only as a bucket, not a value.
         Treat this as "not shorter than", never as a schedule."""
         steps = sum(len(p.steps) for p in self.phrases)
-        return round(steps * 0.12 + sum(p.gap_s for p in self.phrases), 3)
+        gaps = sum(p.gap_s for p in self.phrases)
+        # The LAST dome move has no gap after it inside the phrase list, and
+        # return_to_start adds two more DOME_MOVE_S waits plus three head
+        # reads. Ignoring both under-reported express_curious as 5.51 s
+        # against a measured 9.98 s, which is not a lower bound anyone can
+        # plan against.
+        # Count ONLY what always happens: one settle wait and two head reads.
+        # Do NOT add a separate tail for the last dome move -- that wait IS
+        # the closing settle -- and do NOT assume the correction fires, since
+        # it usually does not. Counting both produced 12.47 s against a
+        # measured 9.98 s, i.e. an over-estimate, which breaks the lower-bound
+        # contract this method exists to keep.
+        closing = (DOME_MOVE_S + 2 * 0.12) if self.return_to_start else 0.0
+        return round(steps * 0.12 + gaps + closing, 3)
 
     def validate(self) -> None:
         """Every structural guarantee this layer makes, asserted in one place.
@@ -503,6 +515,26 @@ class DomeHome:
         return delta if abs(delta) >= MIN_DOME_TRAVEL_DEG else None
 
 
+# One robot, one dome, therefore one home. A process-wide default so the
+# CORRECTED drift behaviour is what a caller gets without knowing to ask for
+# it. The opt-in version shipped first and every call site forgot it, which
+# made the fix inert: the anchor moved with the dome, the residual stayed
+# ~3 deg, and the correction never fired. A fix that depends on remembering an
+# optional keyword is not a fix.
+_DEFAULT_HOME = DomeHome()
+
+
+def reset_default_home() -> None:
+    """Forget the process-wide home so the next beat re-anchors.
+
+    Needed because the default anchors to the FIRST reading this process ever
+    took and then holds it forever. That is right for one continuous session
+    and wrong the moment the premise breaks: someone lifts him onto a shelf,
+    a new session inherits a dome parked 90 deg from yesterday's home, or a
+    test suite runs many beats in one process. Call it at session start."""
+    _DEFAULT_HOME.angle = None
+
+
 def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
             home: "DomeHome | None" = None, sleep=time.sleep) -> dict:
     """Run one beat. Returns a record of what happened.
@@ -533,11 +565,12 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
         r = bridge.send_batch([Step("head", {})], timeout=12.0)[0]
         responses.append(r)
         start_angle = (r.get("data") or {}).get("degrees")
-        # Anchor to a PERSISTENT home, not to this beat's start. Passing no
-        # DomeHome keeps the old per-beat behaviour, which is why the caller
-        # has to opt in deliberately.
-        if home is not None and start_angle is not None:
-            start_angle = home.anchor(start_angle)
+        # Anchor to a PERSISTENT home, not to this beat's start. Defaults to
+        # the process-wide home so drift is bounded even when the caller
+        # passes nothing; tests inject their own to stay isolated.
+        anchor_to = home if home is not None else _DEFAULT_HOME
+        if start_angle is not None:
+            start_angle = anchor_to.anchor(start_angle)
 
     for i, phrase in enumerate(beat.phrases):
         responses.extend(bridge.send_batch(phrase.steps, timeout=12.0))
@@ -562,7 +595,11 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
                 sleep(DOME_MOVE_S)
                 here = (bridge.send_batch([Step("head", {})], timeout=12.0)[0]
                         .get("data") or {}).get("degrees")
-                residual = round(start_angle - here, 2) if here else residual
+                # `is not None`, NOT truthiness: 0.0 deg is a real position
+                # inside the usable range, and `if here` would discard it and
+                # silently report the PRE-correction residual as the final one.
+                if here is not None:
+                    residual = round(start_angle - here, 2)
             # else: the correction is BELOW the threshold and therefore
             # unachievable. Say so rather than emitting a command that would
             # report success and do nothing. Residual under ~12 deg is the
