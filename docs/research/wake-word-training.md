@@ -235,24 +235,63 @@ Instrument was validated before each phase against synthetic `say`-generated
 speech: 8 of 9 clips fired at ~0.999, and a `hey_jarvis` control on its own
 phrase scored 0.9994, separating "model is weak" from "pipeline is wrong".
 
-### Finding 1 — the model's output is binary, so sensitivity is not a dial
+### Finding 1 — the score distribution is near-binary, and the threshold is nearly inert
 
-`OBSERVED`, run 0b: of 351 frames, **323 scored below 0.001 and 19 above 0.9.
-Exactly 3 landed anywhere in between** (0.022, 0.402, 0.014). Sweeping the
-detection threshold changes nothing:
+> **AMENDED 2026-08-17, same day.** The first version of this section said
+> "sensitivity is not a dial" and "there is no sensitivity that trades recall
+> against false accepts". **That was too strong**, and the full sweep below
+> refutes it. The threshold is inert on clean speech and moves exactly one
+> marginal utterance under noise. The original coarse sweep only sampled
+> 0.1/0.3/0.5/0.7/0.9 on the one run where the answer happens to be flat
+> everywhere; a 999-point sweep across all three runs found the transition.
+> The headline — the distribution is overwhelmingly bimodal — survives. The
+> absolute claim does not.
 
-| threshold | 0.1 | 0.3 | 0.5 | 0.7 | 0.9 |
+`OBSERVED`, all three runs pooled: of **902 frames, 818 scored below 0.001 and
+56 above 0.9. Five landed anywhere in 0.01-0.9** (0.014, 0.022, 0.329, 0.402,
+0.670) — 0.55 %. Between the highest non-firing frame (0.0062) and the lowest
+firing one (0.9350) there is an **empty gap of 152x in score**.
+
+Full sweep, 999 thresholds from 0.001 to 0.999, showing the largest
+**contiguous** interval containing the 0.5 operating point over which the
+detection count does not change:
+
+| run | condition | said | count @0.5 | stable interval | transitions |
 |---|---|---|---|---|---|
-| detections | 4 | 4 | 4 | 4 | 4 |
+| 0 | noisy + distance change | 5 | 2 | **[0.330, 0.999]** (67 %) | 0.002: 5→3, **0.330: 3→2** |
+| 0b | quiet, built-in mic | 5 | 4 | [0.002, 0.999] (100 %) | 0.002: 5→4 |
+| 0c | quiet, BRIO | 6 | 6 | [0.001, 0.999] (100 %) | none |
 
-**This contradicts an assumption written into #42 AC3**, which requires false
-accepts to be recorded "with the sensitivity value that produced them" and the
-sensitivity to be "set from that measurement". For this model there is no
-sensitivity that trades recall against false accepts — there is nothing in the
-middle of the distribution for a threshold to move through.
+**The one transition that matters is 0.330 in the noisy run**, and it is worth
+one detection: **2/5 at threshold 0.5, 3/5 at 0.3.** A single utterance scored
+0.3294 and sits alone in the middle of the distribution.
 
-Consequence: a `z2` model that fires too often **cannot be dialled back at
-runtime, only retrained.** That is what `false_activation_penalty = 5000` in
+So the honest statement: the threshold does nothing on clean close speech, and
+the only place it does anything is on **marginal utterances under noise** —
+which are exactly the ones AC1 is about. `INFERRED`: **0.3 is a better
+operating point than 0.5** for this model. The false-accept cost of that choice
+is `UNKNOWN` and needs AC3's ambient sample; on one marginal utterance it is
+not a general recommendation.
+
+> **Methodological note, because the first attempt got it wrong.** Detection
+> count is **not monotonic** in threshold. A *lower* threshold passes more
+> frames, which extends the refractory window and merges two adjacent
+> utterances into one detection — so lowering the threshold can *reduce* the
+> count (visible above at 0.002, where all three runs drop). Taking min/max
+> over the set of thresholds yielding N detections is therefore meaningless;
+> the set is not contiguous. The first sweep did exactly that and reported a
+> fictitious "1075x stable span" for a run that visibly changes at 0.33.
+
+**This still contradicts an assumption written into #42 AC3** as originally
+worded, which required false accepts to be recorded "with the sensitivity value
+that produced them" and the sensitivity "set from that measurement". With
+0.55 % of frames in the entire middle of the range, there is almost nothing for
+a threshold to move through, and no meaningful recall/false-accept curve to
+pick a point on. AC3 has since been reworded to require this sweep and branch
+on its result rather than assume one.
+
+Consequence: a `z2` model that fires too often **can be dialled back at runtime
+only marginally, and mainly by retraining.** That is what `false_activation_penalty = 5000` in
 `r2d2`'s published profile is for, and it makes that parameter the primary
 tuning surface rather than an afterthought. AC3 needs rewording before it can
 be met as written.
