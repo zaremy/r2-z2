@@ -1226,6 +1226,18 @@ step is not another blind trial but `r2_reactive.py monitor`, which records how
 close every window came to firing and decides nothing — a threshold set from
 ratios instead of from a boolean.
 
+#### The armed state is `listen`, not `idle`
+
+The loop arms with **cyan on both PSIs** — the `listen` row of
+`docs/behaviour-states.md`. It shipped as blue (`BASE_NEUTRAL`), correct under
+D-012's original table, and that table's replacement reassigned blue steady to
+`idle — nothing engaged`. An armed loop painted `idle` is unreadable against a
+genuinely idle robot, which is D-014's own failure mode arriving by a different
+route: the rule held, the colour moved. See **D-014 Amendment A**.
+
+The disarm edge comes free of it — `_tidy` ends on `BASE_NEUTRAL`, so exiting
+reads cyan → blue, `listen` → `idle`.
+
 #### Method note
 
 `--window` defaults to 1.5 s (6 samples at 4 Hz), which is **half** the 3.0 s

@@ -722,17 +722,38 @@ by a colour they have to have been told to expect.**
 Concretely, and bindingly:
 
 1. **Establish a contrasting state first.** `r2_reactive` drives the LEDs
-   **dark** for the entire hands-off stretch, then to blue at the instant it
-   arms. The edge is the signal; the colour only says *which* state was
-   entered.
+   **dark** for the entire hands-off stretch, then to the armed colour at the
+   instant it arms. The edge is the signal; the colour only says *which*
+   state was entered.
 2. **Never assume the prior state.** An LED colour we set is storage we own and
    survives the link dropping, so the state before a signal is whatever some
    earlier session left. A signal defined only by its destination is a no-op
    whenever the destination is already current — which is exactly the case
    after a clean teardown, i.e. the *normal* case.
 3. **This is a service signal, and service signals on the body are fine.** The
-   character boundary forbids *rendering* on the body, not signalling. Dark →
-   blue spells nothing and shows no face.
+   character boundary forbids *rendering* on the body, not signalling. A
+   colour change spells nothing and shows no face.
+
+### Amendment A — 2026-08-18: the armed colour is cyan, not blue
+
+Shipped as dark → **blue** (`BASE_NEUTRAL`), which was correct under D-012's
+original table where blue read "on / waiting / neutral". `docs/behaviour-states.md`
+landed the same day and reassigned it: **blue steady is now `idle` — nothing
+engaged**, and **`listen` is cyan steady, front and back**. An armed loop
+painted `idle` is the opposite of what it is doing, and unreadable against a
+genuinely idle robot from across the room — which is this decision's own
+failure mode, reintroduced by a colour that got redefined underneath it.
+
+`r2_reactive` now arms with `BASE_ENGAGED` on both PSIs, matching the `listen`
+row. Two consequences worth stating:
+
+- **The disarm edge is now free.** `_tidy` ends on `BASE_NEUTRAL`, so exiting
+  reads cyan → blue: `listen` → `idle`, two hues and two rows of one table.
+  The explicit dark frame that used to mark the disarm is gone — it existed
+  only because armed and session-over were both blue.
+- **The general rule survives the specific colour.** This decision was never
+  about blue. It is about defining the *before* state, and it now has a worked
+  example of the colour itself moving while the rule held.
 
 ### Consequences
 
