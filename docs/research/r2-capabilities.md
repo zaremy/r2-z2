@@ -379,6 +379,117 @@ battery-state-changed.
 "something happened to me" sense (picked up, bumped, tipped) without any
 camera. That is the right first perception layer for a pet.
 
+### S1e sensor streaming — OBSERVED 2026-08-18 on `D2-6F6B` (issue #29)
+
+**R2 has proprioception, and it answers the question this project is pointed
+at: he can tell when you touch him.** `DID 0x18` has been in our constants
+since the start and had never once been switched on.
+
+Driver: `mac-prototype/sensor_probe.py`, rubric dry-tested (22 cases) before
+the link came up. Session at `--allow dome`.
+
+#### AC1 — the stream enables
+
+`set_sensor_streaming_mask` is **DID 0x18 / CID 0x00**, payload
+`>HBI` = interval(2) + count(1) + mask(4) (`sensor.py:84-85`); the extended
+mask is **CID 0x0C**, a bare 4-byte mask (`sensor.py:95-96`). The notify is
+`(24, 2, 0xff)`, which our `CID_SENSOR_STREAM_NOTIFY` already matched.
+
+All three commands returned `success`, and the read-back
+(`CID 0x01`) confirmed the mask. **Unlike `enable_idle_animations`, this
+library-exposed capability is real.**
+
+> [!important] The enable is a THREE-call sequence and the order matters
+> Copied from spherov2's `SensorControl.__update` (`controls/v2.py`), not
+> invented: **interval 0 first**, then the extended mask, then the real
+> interval. Setting the extended mask while a stream is already running does
+> not reliably take. Nothing in the packet spec implies this.
+
+#### AC2 — what arrives
+
+| Property | **OBSERVED** |
+|---|---|
+| Wire format | big-endian **float32 per enabled component**, `struct.unpack('>Nf')` |
+| Scaling | none — values arrive as floats. Only `locator`/`velocity` carry a x100 modifier |
+| Rate | **4.00 Hz**, exactly the requested 250 ms interval |
+| Channels confirmed | accelerometer x/y/z, attitude pitch/roll/yaw, gyroscope x/y/z, `r2_head_angle` |
+| Decode errors | **0** across 240 baseline samples |
+
+**Field order is load-bearing and is NOT the order you request.** The payload
+is decoded by walking `sensors` (bb9e.py:80-112, inherited) then
+`extended_sensors` (r2d2.py:470-477, R2D2's own) in **declaration** order,
+taking one float per enabled component. `attitude` precedes `accelerometer`
+even when the caller names accelerometer first. A wrong order yields plausible
+numbers under wrong names with no error anywhere.
+
+> [!tip] The decode was validated against three independent knowns
+> Not "it parsed", but "it agrees with physics and with another command path":
+> `accelerometer.z` = **0.9988 g** (gravity, upright); stream `r2_head_angle`
+> = **23.61°** against a `get_head` read of **23.72°** on a completely
+> separate command path, **0.11° apart**; max gyro at rest **0.17**.
+
+#### AC3 — the rest baseline is very quiet
+
+240 samples over 60 s. Per-channel standard deviation
+at rest: `accelerometer.z` **0.0036 g**,
+`attitude.pitch` **0.0340°**,
+`r2_head_angle` **0.0193°**,
+`gyroscope.x` **0.2548**.
+
+> [!note] Three baselines were taken; these are the numbers from the LAST one
+> The first was voided with the 6-sigma rubric, the second predates the
+> event-ring flush fix and so over-counts. Every figure above and every
+> threshold used to score the trials comes from the third, and the trials were
+> re-scored against it from stored raw. Mixing figures across the three is
+> exactly the error a mechanical re-derivation caught here.
+
+#### AC4 / AC6 — touch is detectable, on the dome AND the body
+
+**Verdict: `touch_detectable`.**
+
+| | result |
+|---|---|
+| Sensitivity | **10/10** (5 dome, 5 body) |
+| Specificity, settled | **0/6** false positives |
+| Specificity, immediately after handling | **2/2 fired** |
+| Discriminating channels | `gyroscope.x`, `gyroscope.z`, `attitude.yaw`, `accelerometer.z` |
+
+Detection rule: **peak-to-peak within a 5 s window exceeding what rest produces
+in an equal-length window x1.5, corroborated across at least two channels.**
+
+> [!warning] "No touch" cannot be asserted until he settles
+> Both specificity failures were fired IMMEDIATELY after a touch trial.
+> **R2 keeps moving after contact stops**, so a detector needs a settle delay,
+> not merely a threshold. This is not in #29's acceptance criteria; it came out
+> of running negative controls at two different times.
+>
+> A tidier hypothesis — *"the rest baseline goes stale"* — was proposed when
+> controls ran 0/6 before the block and 2/2 after, and is **REFUTED**:
+> re-scoring the stored raw against a fresh baseline fires the same two
+> windows. It was residual motion, not calibration drift.
+
+#### The instrument was wrong four times before it was right
+
+Recorded because each bug produced a **confident, unanimous 10/10**, and
+because one control run would have caught any of them:
+
+| Bug | What it did |
+|---|---|
+| 6-sigma threshold on max-over-window | max of 85–220 draws clears 6σ by chance; every trial fired regardless of touch |
+| statistic measured deviation from the baseline MEAN | a channel merely parked somewhere new fired; killed by switching to peak-to-peak |
+| event ring never flushed | a 5 s window swept in minutes of history — 220 samples against ~20 real ones. **This also inflated the apparent sample rate to 7.3 Hz; the true rate is 4.00 Hz, exactly as requested.** A harness artifact was nearly published as a device property |
+| single-channel firing | one spurious encoder blip was enough; fixed by requiring 2 channels |
+
+**The generalisable lesson: the instrument was only ever validated against a
+known positive.** It was never asked to say *no* until ten trials had already
+been collected and thrown away. A negative control belongs BEFORE the first
+real trial, not after the last.
+
+**NOT covered:** whether touch can be localised (dome vs body were both
+detected, never distinguished); the settle delay was observed but not
+measured; no
+sustained-contact vs tap distinction was attempted.
+
 ### S1e dome as a force sensor — OBSERVED 2026-08-17 on `D2-6F6B` (issue #29 AC5)
 
 There is no force, torque, current or touch sensor in the protocol. The test
