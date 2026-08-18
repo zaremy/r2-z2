@@ -120,22 +120,32 @@ def tier_rank(tier: str) -> int:
 # Colour
 # ---------------------------------------------------------------------------
 
-# D-012: the LED base layer is system truth. Colour carries meaning,
-# steady-vs-blink carries mode (status between interactions, expression during
-# one). These are the three status colours, and they are the ONLY colours a
-# beat may come to rest on.
-BASE_NEUTRAL = (0, 0, 255)      # blue  — on / waiting / neutral
-BASE_SUCCESS = (0, 255, 0)      # green — success
-BASE_PENDING = (255, 0, 0)      # red   — issue pending resolution
+# D-012 Amendment A: the LED base layer is system truth, and the palette is the
+# SEVEN CORNERS OF THE RGB CUBE. There is no eighth colour and no shade
+# variant: low saturation reads grey, and blending would need 24-30 Hz against
+# a 8.3 writes/s ceiling. Six of the corners are spent on status.
+BASE_NEUTRAL = (0, 0, 255)      # blue    — idle, nothing engaged
+BASE_ENGAGED = (0, 255, 255)    # cyan    — engaged with you
+BASE_SUCCESS = (0, 255, 0)      # green   — wake-sweep terminus, success
+BASE_PENDING = (255, 255, 0)    # yellow  — needs monitoring
+BASE_DANGER  = (255, 0, 0)      # red     — danger and stop, ONLY
+BASE_REST    = (255, 0, 255)    # magenta — rest, low power
 
-# Expression colours. Reachable mid-beat, never at rest.
+# The colours a beat may come to rest on. Every one of them is a status claim,
+# because rest IS the status layer showing through.
+STATUS_COLOURS = (BASE_NEUTRAL, BASE_ENGAGED, BASE_SUCCESS,
+                  BASE_PENDING, BASE_DANGER, BASE_REST)
+
+# There is no expression palette, and that is a finding rather than an
+# omission. All six reachable corners carry status, so a beat that invented a
+# seventh meaning would be overloading one that already has one. **Expression
+# is carried by motion, sound, the holo (bit 7) and the logic panel (bit 3) —
+# never by hue.** See docs/behaviour-states.md.
 #
-# OBSERVED, S1e: low saturation reads as grey on this hardware — (120,190,255)
-# rendered genuinely pale but could not be told apart from other pastels. So
-# an expression palette must CONTRAST, not shade. These two are far enough
-# apart in hue to read as a change rather than a flicker.
-PULSE_PALE = (120, 190, 255)
-PULSE_CYAN = (0, 255, 255)
+# The deleted `PULSE_PALE = (120,190,255)` is why this rule is stated so
+# flatly: it was the expression colour, and it is the exact pale blue
+# Amendment A cites as its evidence that low saturation reads grey. The one
+# beat ever built painted the one colour measured not to work.
 
 
 def front(rgb: tuple[int, int, int]) -> dict[str, int]:
@@ -353,7 +363,7 @@ class Beat:
                             f"the firmware and still reports ok")
         if tier_rank(self.required_tier()) >= tier_rank("stance"):
             raise ValueError(f"beat {self.name!r} reaches the stance tier")
-        if self.rest_colour not in (BASE_NEUTRAL, BASE_SUCCESS, BASE_PENDING):
+        if self.rest_colour not in STATUS_COLOURS:
             raise ValueError(
                 f"beat {self.name!r} rests on {self.rest_colour}, which is not "
                 f"a D-012 status colour. The colour we leave him in is what "
@@ -623,7 +633,7 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
         #
         # This also fixes a narrower bug: the reset used to live inside the
         # `return_to_start` block, so `thinking()` — which does not set it —
-        # ended every run holding PULSE_CYAN.
+        # ended every run holding an expression colour.
         try:
             responses.extend(bridge.send_batch((
                 Step("leds", {"channels": front(beat.rest_colour)}),
@@ -683,6 +693,10 @@ def express_curious(*, rest=BASE_NEUTRAL, travel: float = 15.0) -> Beat:
     docs/research/r2-capabilities.md: sound rising from the CHATTY family,
     dome +/-15 degrees alternating with a pause between, holo flicker.
 
+    NO PSI COLOUR CHANGE. Every reachable corner is spent on status
+    (D-012 Amendment A), so expression rides on motion, sound and the holo.
+    The front PSI moves exactly once, at the end, restoring the rest colour.
+
     Reading of the gesture, which is what the phrasing encodes:
       1. Light shifts first  — attention lands before the body moves.
       2. Dome turns AND the chirp fires 0.12 s later, while it is still
@@ -699,9 +713,12 @@ def express_curious(*, rest=BASE_NEUTRAL, travel: float = 15.0) -> Beat:
     beat = Beat(
         name="express_curious",
         phrases=(
-            # 1. Attention. Holo up, front to the pale expression colour.
+            # 1. Attention — carried by the HOLO, not by hue. The front PSI
+            #    is left alone for the whole gesture: it is the status layer,
+            #    and curiosity is not a status claim. This phrase used to
+            #    paint PULSE_PALE here.
             Phrase((
-                Step("leds", {"channels": {**front(PULSE_PALE), **holo(180)}}),
+                Step("leds", {"channels": holo(180)}),
             ), gap_s=0.15),
             # 2. Sound FIRST, then the turn. The original order was
             #    dome-then-sound on the theory that 0.12 s of head start would
@@ -719,7 +736,7 @@ def express_curious(*, rest=BASE_NEUTRAL, travel: float = 15.0) -> Beat:
             #    floor on its own.
             Phrase((
                 Step("dome", {"delta": -travel * 2, "settle": 0}),
-                Step("leds", {"channels": {**front(PULSE_CYAN), **holo(120)}}),
+                Step("leds", {"channels": holo(120)}),
             ), gap_s=DOME_MOVE_S),
             # 4. The return is AUTHORED, not left to a correction. A gesture
             #    that ends near where it began needs a final move under 12 deg
@@ -756,9 +773,12 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
     reading this behaviour had no sound at all.
 
     Dome is still by design — thinking is not motion. The light does the work:
-    a pale-blue / cyan pulse, which is the modulation the operator specified
-    after ruling that low-saturation pastels read as grey and that hues must
-    contrast. Blinking rather than steady because this happens DURING an
+    a CYAN <-> BLUE alternation, which is exactly what docs/behaviour-states.md
+    specifies for this state. Both are status corners — cyan is "engaged with
+    you", blue is idle — so the pulse reads as attention coming and going
+    rather than as a colour nobody has a meaning for. It used to alternate
+    PULSE_PALE against cyan; PULSE_PALE was the pale blue measured to read
+    grey. Blinking rather than steady because this happens DURING an
     interaction (D-012).
 
     OBSERVED, S1e: every LED value change flickers on this hardware. That is
@@ -769,15 +789,15 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
     phrases = [
         Phrase((
             Step("sound", {"id": THINKING_SOUNDS.pick(), "volume": 200}),
-            Step("leds", {"channels": {**front(PULSE_PALE), **logic(255)}}),
+            Step("leds", {"channels": {**front(BASE_NEUTRAL), **logic(255)}}),
         ), gap_s=0.45),
     ]
     for i in range(pulses):
         phrases.append(Phrase((
-            Step("leds", {"channels": front(PULSE_CYAN)}),
+            Step("leds", {"channels": front(BASE_ENGAGED)}),
         ), gap_s=0.45))
         phrases.append(Phrase((
-            Step("leds", {"channels": front(PULSE_PALE)}),
+            Step("leds", {"channels": front(BASE_NEUTRAL)}),
         ), gap_s=0.45))
     # Rest. Logic displays back down and the base colour restored, so what the
     # household sees afterwards is a defined status and not the tail of a wait.
@@ -792,9 +812,9 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
         interruptible=True,
         energy="low",
         cooldown_s=0.0,          # it is a wait state; it may repeat immediately
-        evidence="COMPOSED. Sound OBSERVED (S1b). Pulse palette OBSERVED "
-                 "(S1e: pastels read grey, value changes flicker). Dome "
-                 "intentionally unused.",
+        evidence="COMPOSED. Sound OBSERVED (S1b). Pulse palette follows "
+                 "D-012 Amendment A (seven corners; pastels read grey, value "
+                 "changes flicker). Dome intentionally unused.",
         notes="No dome and no stance — runs at the `audio` ceiling.",
     )
     beat.validate()

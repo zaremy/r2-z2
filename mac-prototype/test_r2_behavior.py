@@ -16,6 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import r2_behavior as B
 
+# The pale blue that used to BE the expression palette. D-012 Amendment A cites
+# this exact triple as its evidence that low saturation reads grey on this
+# hardware, which is why it is now the canonical example of a colour no beat
+# may rest on.
+NOT_A_STATUS_COLOUR = (120, 190, 255)
+
 
 class TestBeatsAreWellFormed(unittest.TestCase):
     """Every beat in the vocabulary, against every structural guarantee."""
@@ -32,6 +38,69 @@ class TestBeatsAreWellFormed(unittest.TestCase):
             with self.subTest(beat=name):
                 self.assertLess(B.tier_rank(make().required_tier()),
                                 B.tier_rank("stance"))
+
+    def test_the_palette_is_the_corners_of_the_rgb_cube(self):
+        # D-012 Amendment A section 1. Low saturation reads grey and there is
+        # no eighth colour, so every status colour must be a CORNER -- each
+        # channel fully on or fully off. A shade would be unreadable at lamp
+        # size and a blend would need 24-30 Hz against a 8.3 writes/s ceiling.
+        for colour in B.STATUS_COLOURS:
+            with self.subTest(colour=colour):
+                for channel in colour:
+                    self.assertIn(channel, (0, 255))
+
+    def test_every_status_colour_means_exactly_one_thing(self):
+        # Six corners, six meanings. Two names sharing a triple is not a tidy
+        # alias -- it is one colour carrying two claims, which is the failure
+        # the seven-corner palette is small enough to make likely.
+        self.assertEqual(len(set(B.STATUS_COLOURS)), len(B.STATUS_COLOURS))
+
+    def test_red_is_danger_only_and_pending_is_yellow(self):
+        # D-012 Amendment A section 5, and the reason this test is spelled out
+        # rather than folded into the one above: the original code had
+        # BASE_PENDING = red, following D-012 BEFORE the amendment narrowed it.
+        # Reverting that one line passed the entire suite, so nothing here
+        # actually held the ruling -- the doc did, silently.
+        #
+        # Both IEC 60073 and every shipping consumer device put
+        # pending-attention on yellow and reserve red for danger. Amber, which
+        # the original scheme would have wanted, is not a corner and so is not
+        # reachable at all.
+        self.assertEqual(B.BASE_DANGER, (255, 0, 0))
+        self.assertEqual(B.BASE_PENDING, (255, 255, 0))
+        self.assertNotEqual(B.BASE_PENDING, B.BASE_DANGER)
+
+    def test_no_beat_paints_a_non_status_colour(self):
+        # The guard that the old code did not have, and the reason the one
+        # built beat shipped painting a colour measured not to work.
+        # `test_every_beat_ends_on_a_status_colour` below checks only the LAST
+        # step, so a beat could paint anything it liked mid-gesture --
+        # express_curious() painted PULSE_PALE = (120,190,255), the exact pale
+        # blue D-012 Amendment A cites as evidence that low saturation reads
+        # grey. Every reachable corner is spent on status, so there is nothing
+        # else a PSI is allowed to show.
+        for name, make in B.VOCABULARY.items():
+            for i, phrase in enumerate(make().phrases):
+                for step in phrase.steps:
+                    if step.op != "leds":
+                        continue
+                    ch = step.params["channels"]
+                    for label, bits in (("front", (B.LED_FRONT_R, B.LED_FRONT_G,
+                                                   B.LED_FRONT_B)),
+                                        ("back", (B.LED_BACK_R, B.LED_BACK_G,
+                                                  B.LED_BACK_B))):
+                        keys = [str(bit) for bit in bits]
+                        if not any(k in ch for k in keys):
+                            continue          # this step does not touch it
+                        with self.subTest(beat=name, phrase=i, psi=label):
+                            self.assertEqual(
+                                len([k for k in keys if k in ch]), 3,
+                                f"{name} phrase {i} writes a partial {label} "
+                                f"PSI, which leaves one channel stale")
+                            self.assertIn(
+                                tuple(ch[k] for k in keys), B.STATUS_COLOURS,
+                                f"{name} phrase {i} paints a {label} colour "
+                                f"that carries no status meaning")
 
     def test_every_beat_ends_on_a_status_colour(self):
         # An LED colour we set is STATE and survives the link dropping, so
@@ -106,15 +175,15 @@ class TestGuardsRejectBadBeats(unittest.TestCase):
     def test_beat_resting_on_an_expression_colour_is_rejected(self):
         # Cyan is reachable mid-beat and forbidden at rest: it is not one of
         # the three D-012 status colours, so it would say nothing.
-        bad = self._beat(rest_colour=B.PULSE_CYAN,
+        bad = self._beat(rest_colour=NOT_A_STATUS_COLOUR,
                          phrases=(B.Phrase((B.Step(
-                             "leds", {"channels": B.front(B.PULSE_CYAN)}),)),))
+                             "leds", {"channels": B.front(NOT_A_STATUS_COLOUR)}),)),))
         with self.assertRaises(ValueError):
             bad.validate()
 
     def test_beat_that_never_returns_to_rest_is_rejected(self):
         bad = self._beat(phrases=(B.Phrase((B.Step(
-            "leds", {"channels": B.front(B.PULSE_CYAN)}),)),))
+            "leds", {"channels": B.front(NOT_A_STATUS_COLOUR)}),)),))
         with self.assertRaises(ValueError):
             bad.validate()
 
@@ -554,7 +623,7 @@ class TestEveryBeatLandsOnAStatusColour(unittest.TestCase):
     """C3 — D-013 point 4, enforced rather than asserted.
 
     The reset used to sit inside the `return_to_start` block, so `thinking()`
-    ended every run holding PULSE_CYAN — an expression colour, persisted,
+    ended every run holding an expression colour — persisted,
     because a colour we set survives the link dropping.
     """
 
