@@ -369,19 +369,22 @@ class Reactive:
         than a session that runs long. The overrun is bounded, and the
         cooldown is the last thing in it, so nothing is moving during it.
         """
-        # Blue steady: "on / waiting / neutral" (D-012). The operator needs to
-        # know from across the room that he is listening -- a state that lived
-        # only in my console would be invisible to the person whose hand is
-        # the input device.
+        # CYAN, front and back: the `listen` row of docs/behaviour-states.md.
+        # This armed with BASE_NEUTRAL blue until that table landed and made
+        # blue steady mean *idle, nothing engaged* -- the exact opposite of
+        # what an armed loop is doing, and unreadable against it from across
+        # the room. The operator's hand is the input device; they have to be
+        # able to tell "listening" from "not" without walking over.
         #
-        # And it must be a TRANSITION, not a colour. The first live run armed
-        # him blue while he was ALREADY blue -- the previous session's own
-        # teardown had left him there -- so the one signal telling the
-        # operator "now" was indistinguishable from the state before it. They
-        # waited for a cue that had already happened. `dark()` below is what
-        # makes this edge visible; neither half works alone.
-        self.bridge.send_batch([Step("leds", {"channels":
-                                              B.front(B.BASE_NEUTRAL)})])
+        # It must also be a TRANSITION, not a colour (D-014). The first live
+        # run armed him blue while he was ALREADY blue -- the previous
+        # session's teardown had left him there -- so the one signal saying
+        # "now" was indistinguishable from the state before it, and the
+        # operator waited out a whole window for a cue that had already
+        # happened. Dark through the hands-off phases is what makes this edge
+        # visible; neither half works alone.
+        self.bridge.send_batch([Step("leds", {"channels": {
+            **B.front(B.BASE_ENGAGED), **B.back(B.BASE_ENGAGED)}})])
         end = self.now() + max_s
         while self.now() < end and len(self.reactions) < max_reactions:
             # FLUSH ON EVERY ARM, not once before the loop. Recovery can end
@@ -402,14 +405,12 @@ class Reactive:
             rec["trigger_channel"] = chan
             rec["at_s"] = round(max_s - (end - self.now()), 2)
             self.reactions.append(rec)
-        # DISARM IS AN EDGE TOO. `_tidy` also ends on BASE_NEUTRAL, so
-        # "listening" and "session over" were the same blue -- the operator is
-        # across the room, cannot see the console, and would keep petting a
-        # robot that had stopped listening. D-014's own consequence clause:
-        # any affordance meaning "act now" must define its before state, and
-        # that applies to the moment it stops meaning it.
-        self.bridge.send_batch([Step("leds", {"channels":
-                                              B.front((0, 0, 0))})])
+        # DISARM IS AN EDGE TOO -- and now it is one for free. `_tidy` ends on
+        # BASE_NEUTRAL, so the exit reads cyan -> blue: `listen` -> `idle`,
+        # two different hues and two rows of the same table. This used to
+        # paint an explicit dark frame here because armed and session-over
+        # were both blue and nothing else separated them; that frame is now a
+        # flicker between two states that already differ, so it is gone.
         return {"reactions": self.reactions,
                 "count": len(self.reactions),
                 "stalled": self.stalled,
@@ -697,7 +698,7 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
                       f"{S1E_VALIDATED_WINDOW_S}")
             return 5
 
-        print(f"\nARMED for {args.max_s:.0f}s (blue = listening). "
+        print(f"\nARMED for {args.max_s:.0f}s (cyan = listening). "
               f"Pet him whenever — up to {args.max_reactions} reactions.\n")
         out = loop.run(args.max_s, args.max_reactions)
         log["run"] = out

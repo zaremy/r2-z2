@@ -494,9 +494,13 @@ class TestRunBounds(unittest.TestCase):
         self.assertEqual(out["stopped"], "time")
         self.assertLessEqual(c.now(), 20.0 + R.POLL_S)
 
-    def test_arming_lights_him_blue_so_the_state_is_glanceable(self):
-        # Nothing that needs a glance may live only on my console -- the
-        # operator's hand is the input device and they are across the room.
+    def test_arming_shows_the_listen_state_front_and_back(self):
+        """Nothing that needs a glance may live only on my console -- the
+        operator's hand is the input device and they are across the room.
+
+        Cyan, not blue: docs/behaviour-states.md gives blue steady to *idle,
+        nothing engaged*, which is the opposite of what an armed loop is
+        doing. Both PSIs, because that is what the `listen` row specifies."""
         c = Clock()
         b = ScriptedBridge(noisy=False)
         loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
@@ -505,7 +509,22 @@ class TestRunBounds(unittest.TestCase):
         loop.run(max_s=1.0, max_reactions=1)
         first = b.batches[mark][0]
         self.assertEqual(first.op, "leds")
-        self.assertEqual(first.params["channels"], B.front(B.BASE_NEUTRAL))
+        self.assertEqual(first.params["channels"],
+                         {**B.front(B.BASE_ENGAGED), **B.back(B.BASE_ENGAGED)})
+
+    def test_arming_is_not_the_colour_the_session_ends_on(self):
+        """The whole point of D-014: a signal defined only by its destination
+        is a no-op whenever the destination is already current. `_tidy` ends
+        on BASE_NEUTRAL, so arming must not BE BASE_NEUTRAL."""
+        self.assertNotEqual(B.BASE_ENGAGED, B.BASE_NEUTRAL)
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        mark = len(b.batches)
+        loop.run(max_s=1.0, max_reactions=1)
+        armed = b.batches[mark][0].params["channels"]
+        self.assertNotEqual(armed, B.front(B.BASE_NEUTRAL))
 
     def test_dropped_events_and_decode_errors_are_reported(self):
         c = Clock()
