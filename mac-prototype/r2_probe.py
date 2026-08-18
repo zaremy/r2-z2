@@ -115,7 +115,100 @@ CID_ANIM_COMPLETE_NOTIFY = 0x11     # animatronic.py:43 — (23, 17, 0xff)
 CID_ANIM_LEG_COMPLETE_NOTIFY = 0x26  # animatronic.py:61 — (23, 38, 0xff)
 CID_ANIM_HEAD_RESET_NOTIFY = 0x3A   # animatronic.py:87 — (23, 58, 0xff)
 DID_SENSOR = 0x18                   # sensor.py:81
+CID_SENSOR_MASK = 0x00              # sensor.py:84  set_sensor_streaming_mask
+CID_SENSOR_MASK_GET = 0x01          # sensor.py:88  get_sensor_streaming_mask
 CID_SENSOR_STREAM_NOTIFY = 0x02     # sensor.py:92 — (24, 2, 0xff)
+CID_SENSOR_EXT_MASK = 0x0C          # sensor.py:95  set_extended_..._mask
+
+# The sensor tables, transcribed from the class bodies rather than guessed.
+# ORDER IS LOAD-BEARING: the stream is a flat array of big-endian float32s and
+# the only way to know which value is which is to walk these OrderedDicts in
+# declaration order, taking one float per ENABLED component. Get the order
+# wrong and every field is silently mis-assigned -- gyro read as attitude,
+# with no error anywhere.
+#
+# `class R2D2(BB9E)`, so `sensors` is inherited from bb9e.py:80-112 while
+# `extended_sensors` is R2D2's OWN (r2d2.py:470-477) and REPLACES BB9E's.
+# Grepping r2d2.py alone would miss the whole normal-sensor table.
+SENSORS = (                          # bb9e.py:80-112, inherited by R2D2
+    ("quaternion",    (("x", 0x2000000), ("y", 0x1000000),
+                       ("z", 0x800000),  ("w", 0x400000))),
+    ("attitude",      (("pitch", 0x40000), ("roll", 0x20000),
+                       ("yaw", 0x10000))),
+    ("accelerometer", (("x", 0x8000), ("y", 0x4000), ("z", 0x2000))),
+    ("accel_one",     (("accel_one", 0x200),)),
+    ("locator",       (("x", 0x40), ("y", 0x20))),      # modifier: x100
+    ("velocity",      (("x", 0x10), ("y", 0x8))),       # modifier: x100
+    ("speed",         (("speed", 0x4),)),
+    ("core_time",     (("core_time", 0x2),)),
+)
+EXT_SENSORS = (                      # r2d2.py:470-477 — R2D2's own
+    ("r2_head_angle", (("r2_head_angle", 0x4000000),)),
+    ("gyroscope",     (("x", 0x2000000), ("y", 0x1000000), ("z", 0x800000))),
+)
+# locator and velocity arrive scaled down by 100 (bb9e.py:99-105).
+SENSOR_MODIFIERS = {("locator", "x"), ("locator", "y"),
+                    ("velocity", "x"), ("velocity", "y")}
+
+
+def _mask_of(table, groups) -> int:
+    """OR together every component bit of the named groups.
+
+    `|=`, not `sum()`. Every bit in both tables is currently distinct, so a sum
+    happens to give the same answer -- but a group added later with an
+    overlapping bit would make sum CARRY into a neighbouring bit and quietly
+    request the wrong sensors. The bug would surface as a length mismatch in
+    decode_sensor_stream, one layer away from the cause."""
+    want = set(groups)
+    mask = 0
+    for name, comps in table:
+        if name in want:
+            for _, bit in comps:
+                mask |= bit
+    return mask
+
+
+def sensor_mask(groups) -> int:
+    return _mask_of(SENSORS, groups)
+
+
+def ext_sensor_mask(groups) -> int:
+    return _mask_of(EXT_SENSORS, groups)
+
+
+def decode_sensor_stream(payload: bytes, mask: int, ext_mask: int) -> dict:
+    """Decode one sensor_stream packet into {group: {component: value}}.
+
+    The wire format is `struct.unpack('>%df' % (len(data)//4), data)`
+    (sensor.py:92-93) -- already floats, so there is NO int scaling to apply.
+    Only locator and velocity carry a modifier, and it is a plain x100.
+
+    Raises on a length mismatch rather than returning a partial decode: a
+    short packet means our idea of the enabled mask disagrees with the
+    robot's, and silently decoding the first N fields would produce
+    plausible, wrongly-labelled numbers -- the worst possible outcome for a
+    survey whose entire job is to characterise a signal.
+    """
+    n = len(payload) // 4
+    if len(payload) % 4:
+        raise ValueError(f"sensor payload {len(payload)} bytes is not a "
+                         f"whole number of float32s")
+    values = list(struct.unpack(f">{n}f", payload))
+    enabled = [(g, c, bit) for g, comps in SENSORS for c, bit in comps
+               if mask & bit]
+    enabled += [(g, c, bit) for g, comps in EXT_SENSORS for c, bit in comps
+                if ext_mask & bit]
+    if len(enabled) != n:
+        raise ValueError(
+            f"sensor stream carried {n} floats but the masks "
+            f"(0x{mask:X}/0x{ext_mask:X}) describe {len(enabled)} components; "
+            f"refusing to guess which is which")
+    out: dict = {}
+    for (group, comp, _), value in zip(enabled, values):
+        if (group, comp) in SENSOR_MODIFIERS:
+            value *= 100.0
+        out.setdefault(group, {})[comp] = value
+    return out
 
 # Longest V2 frame we will reassemble before giving up and resyncing on the
 # next SOP. Real frames are header + payload + checksum, well under 100 bytes
@@ -292,6 +385,10 @@ class R2:
         self._framing_reported = 0
         # None = never touched this session; True = we disabled native idle.
         self.idle_disabled: bool | None = None
+        # Set by `_op_sensors`. Tracked for the SAME reason idle_disabled is:
+        # the exit path has to know what THIS session turned on, so it can put
+        # it back without clobbering state some other process owns.
+        self.sensor_streaming: bool = False
 
     async def __aenter__(self) -> "R2":
         if self.client is None:
@@ -624,6 +721,30 @@ class R2:
         question. See docs/research/r2-capabilities.md."""
         return await self.send(DID_ANIMATRONIC, CID_ANIM_ENABLE_IDLE,
                                bytes((1 if enable else 0,)))
+
+    async def set_sensor_mask(self, interval: int, count: int,
+                              mask: int) -> Response | None:
+        """OBSERVED sensor.py:84-85 — `>HBI`: interval(2), count(1), mask(4)."""
+        return await self.send(DID_SENSOR, CID_SENSOR_MASK,
+                               struct.pack(">HBI", int(interval), int(count),
+                                           int(mask)))
+
+    async def set_extended_sensor_mask(self, mask: int) -> Response | None:
+        """OBSERVED sensor.py:95-96 — CID 12, a bare 4-byte mask."""
+        return await self.send(DID_SENSOR, CID_SENSOR_EXT_MASK,
+                               struct.pack(">I", int(mask)))
+
+    async def get_sensor_mask(self) -> tuple[int, int, int] | None:
+        """Read back what the robot thinks is enabled (sensor.py:88-89).
+
+        This is the instrument check: it is the only way to tell "the stream
+        is off" from "the stream is on and nothing is moving", and those two
+        produce identical silence.
+        """
+        r = await self.send(DID_SENSOR, CID_SENSOR_MASK_GET)
+        if r and len(r.data) == 7:
+            return struct.unpack(">HBI", r.data)
+        return None
 
     async def enable_leg_action_notify(self, enable: bool) -> Response | None:
         """OBSERVED in spherov2 source: animatronic.py:64 — CID 42, payload
@@ -1156,6 +1277,71 @@ async def _op_stop(r2, p):
         raise RuntimeError(f"{result['warning']} (results: {result['results']})")
     return result
 
+async def _op_sensors(r2, p):
+    """Turn the sensor stream on or off, and read back what actually took.
+
+    Sits at `read`: DID_SENSOR cannot move him. It configures a notification
+    stream, nothing else -- the same reasoning that puts `stop` at `read`.
+
+    The three-call enable sequence is copied from spherov2's SensorControl
+    (`controls/v2.py`), NOT invented: interval is set to 0 FIRST, then the
+    extended mask, then the real interval. Setting the extended mask while a
+    stream is already running at a live interval does not reliably take. This
+    is exactly the kind of ordering nobody would guess from the packet spec,
+    which is why it is copied verbatim and cited.
+    """
+    enable = _strict_bool(p.get("enable", True), "enable")
+    if enable:
+        groups = p.get("groups", ["accelerometer", "attitude"])
+        ext_groups = p.get("ext_groups", ["r2_head_angle", "gyroscope"])
+        mask, ext = sensor_mask(groups), ext_sensor_mask(ext_groups)
+        if not mask and not ext:
+            raise ValueError(
+                f"no sensors selected. groups={groups!r} ext_groups="
+                f"{ext_groups!r} matched nothing; valid names are "
+                f"{[g for g, _ in SENSORS]} and {[g for g, _ in EXT_SENSORS]}")
+        interval = max(10, min(int(p.get("interval", 250)), 10_000))
+        count = max(0, min(int(p.get("count", 0)), 255))
+    else:
+        mask = ext = interval = count = 0
+    errs = {
+        "quiesce": _err_of(await r2.set_sensor_mask(0, count, mask)),
+        "ext":     _err_of(await r2.set_extended_sensor_mask(ext)),
+        "start":   _err_of(await r2.set_sensor_mask(interval, count, mask)),
+    }
+    # Read back rather than trust. A capability the library exposes is a claim
+    # (`enable_idle_animations` is the standing counterexample), and silence on
+    # a stream that was never enabled is indistinguishable from a robot that
+    # feels nothing.
+    readback = await r2.get_sensor_mask()
+    ok = all(e == "success" for e in errs.values())
+    # Assume a command we SENT may have taken effect, even unconfirmed.
+    #
+    # Keying this on `ok` was wrong in the dangerous direction: an enable
+    # whose reply is lost (`send` returns None, so `_err_of` is not
+    # "success") would leave the robot streaming while we recorded that it
+    # was not -- and the exit path, which keys off this flag, would then skip
+    # the disable. Silence is not evidence the packet missed.
+    #
+    # So: an ATTEMPTED enable sets the flag; only a CONFIRMED disable clears
+    # it. A failed disable keeps it set, so the exit path tries again. Both
+    # errors now fall towards "send a disable we did not need" rather than
+    # "leave him streaming unattended".
+    if enable:
+        r2.sensor_streaming = True
+    elif ok:
+        r2.sensor_streaming = False
+    return {"requested": {"interval": interval, "count": count,
+                          "mask": mask, "ext_mask": ext},
+            "errs": errs,
+            "readback": ({"interval": readback[0], "count": readback[1],
+                          "mask": readback[2]} if readback else None),
+            "accepted": ok,
+            "mask_confirmed": bool(readback) and readback[2] == mask,
+            "note": ("extended mask has no documented read-back, so ext_mask "
+                     "is UNCONFIRMED even when this says accepted")}
+
+
 async def _op_events(r2, p):
     """Drain everything the robot said that nobody asked for."""
     return r2.drain_events()
@@ -1281,6 +1467,8 @@ OPS = {
     "gatt":       ("read",   _op_gatt),
     "stop":       ("read",   _op_stop),      # always allowed: default to STOP
     "events":     ("read",   _op_events),    # reading is never a hazard
+    # `read`: DID_SENSOR configures a notification stream and cannot move him.
+    "sensors":    ("read",   _op_sensors),
     "notify":     ("dome",   _op_notify),   # writes DID_ANIMATRONIC
     "idle":       ("dome",   _op_idle),     # writes DID_ANIMATRONIC (refuted)
     "leds":       ("leds",   _op_leds),
@@ -1480,6 +1668,37 @@ async def _run_daemon(args) -> int:
             print(f"stop on exit: {json.dumps(halt['results'])}")
             if halt["warning"]:
                 print(f"!! {halt['warning']}")
+            # Housekeeping, deliberately AFTER the halt and deliberately NOT
+            # inside stop_everything. The stop is the safety action and must
+            # stay minimal -- giving it a sensor-config write would hand the
+            # one path that must never fail a new way to be slow or throw.
+            #
+            # Only what THIS session switched on: another process may own the
+            # stream, and clobbering it is the same bug pointing the other way.
+            #
+            # Whether the mask survives a disconnect is UNKNOWN and untested.
+            # If it does not, this is a harmless no-op; if it does, it stops an
+            # unattended robot streaming for hours on a droid with no off
+            # switch (#38). Cheap either way, so it is not worth measuring
+            # first. Upstream provides `disable_all` (spherov2
+            # controls/v2.py:326) but never calls it -- nothing in the stack
+            # turns this off but us.
+            #
+            # NOT A FAILSAFE. A SIGKILL or a dead host skips this block
+            # entirely. A real failsafe would be device-side on link loss, and
+            # that firmware is not ours to change.
+            if r2.sensor_streaming:
+                try:
+                    off = _err_of(await asyncio.shield(
+                        r2.set_sensor_mask(0, 0, 0)))
+                    off_ext = _err_of(await asyncio.shield(
+                        r2.set_extended_sensor_mask(0)))
+                    print(f"sensor stream off: {off}/{off_ext}")
+                except BaseException as e:
+                    # Never let housekeeping mask the stop that just ran, and
+                    # never let it turn a clean exit into a traceback.
+                    print(f"!! could not disable sensor stream: "
+                          f"{type(e).__name__}: {e}")
             if r2.idle_disabled:
                 # Deliberately NOT restored here. Re-enabling idle is a command
                 # that starts spontaneous motion, and this is the path that

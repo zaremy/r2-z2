@@ -100,6 +100,11 @@ OP_TIER = {
     "head": "read",
     "stance": "read",
     "stop": "read",
+    # Read-tier additions for the S1e sensor probe (#29). `events` drains the
+    # notification ring and `sensors` configures a notification stream; neither
+    # can move him, which is the whole test for this tier.
+    "events": "read",
+    "sensors": "read",
 }
 
 # Ops that can end with R2 on the floor. Named explicitly so the guard below
