@@ -151,17 +151,29 @@ SENSOR_MODIFIERS = {("locator", "x"), ("locator", "y"),
                     ("velocity", "x"), ("velocity", "y")}
 
 
-def sensor_mask(groups) -> int:
-    """OR together every component bit of the named groups (normal table)."""
+def _mask_of(table, groups) -> int:
+    """OR together every component bit of the named groups.
+
+    `|=`, not `sum()`. Every bit in both tables is currently distinct, so a sum
+    happens to give the same answer -- but a group added later with an
+    overlapping bit would make sum CARRY into a neighbouring bit and quietly
+    request the wrong sensors. The bug would surface as a length mismatch in
+    decode_sensor_stream, one layer away from the cause."""
     want = set(groups)
-    return sum(bit for name, comps in SENSORS if name in want
-               for _, bit in comps)
+    mask = 0
+    for name, comps in table:
+        if name in want:
+            for _, bit in comps:
+                mask |= bit
+    return mask
+
+
+def sensor_mask(groups) -> int:
+    return _mask_of(SENSORS, groups)
 
 
 def ext_sensor_mask(groups) -> int:
-    want = set(groups)
-    return sum(bit for name, comps in EXT_SENSORS if name in want
-               for _, bit in comps)
+    return _mask_of(EXT_SENSORS, groups)
 
 
 def decode_sensor_stream(payload: bytes, mask: int, ext_mask: int) -> dict:
@@ -373,6 +385,10 @@ class R2:
         self._framing_reported = 0
         # None = never touched this session; True = we disabled native idle.
         self.idle_disabled: bool | None = None
+        # Set by `_op_sensors`. Tracked for the SAME reason idle_disabled is:
+        # the exit path has to know what THIS session turned on, so it can put
+        # it back without clobbering state some other process owns.
+        self.sensor_streaming: bool = False
 
     async def __aenter__(self) -> "R2":
         if self.client is None:
@@ -1299,6 +1315,22 @@ async def _op_sensors(r2, p):
     # feels nothing.
     readback = await r2.get_sensor_mask()
     ok = all(e == "success" for e in errs.values())
+    # Assume a command we SENT may have taken effect, even unconfirmed.
+    #
+    # Keying this on `ok` was wrong in the dangerous direction: an enable
+    # whose reply is lost (`send` returns None, so `_err_of` is not
+    # "success") would leave the robot streaming while we recorded that it
+    # was not -- and the exit path, which keys off this flag, would then skip
+    # the disable. Silence is not evidence the packet missed.
+    #
+    # So: an ATTEMPTED enable sets the flag; only a CONFIRMED disable clears
+    # it. A failed disable keeps it set, so the exit path tries again. Both
+    # errors now fall towards "send a disable we did not need" rather than
+    # "leave him streaming unattended".
+    if enable:
+        r2.sensor_streaming = True
+    elif ok:
+        r2.sensor_streaming = False
     return {"requested": {"interval": interval, "count": count,
                           "mask": mask, "ext_mask": ext},
             "errs": errs,
@@ -1636,6 +1668,37 @@ async def _run_daemon(args) -> int:
             print(f"stop on exit: {json.dumps(halt['results'])}")
             if halt["warning"]:
                 print(f"!! {halt['warning']}")
+            # Housekeeping, deliberately AFTER the halt and deliberately NOT
+            # inside stop_everything. The stop is the safety action and must
+            # stay minimal -- giving it a sensor-config write would hand the
+            # one path that must never fail a new way to be slow or throw.
+            #
+            # Only what THIS session switched on: another process may own the
+            # stream, and clobbering it is the same bug pointing the other way.
+            #
+            # Whether the mask survives a disconnect is UNKNOWN and untested.
+            # If it does not, this is a harmless no-op; if it does, it stops an
+            # unattended robot streaming for hours on a droid with no off
+            # switch (#38). Cheap either way, so it is not worth measuring
+            # first. Upstream provides `disable_all` (spherov2
+            # controls/v2.py:326) but never calls it -- nothing in the stack
+            # turns this off but us.
+            #
+            # NOT A FAILSAFE. A SIGKILL or a dead host skips this block
+            # entirely. A real failsafe would be device-side on link loss, and
+            # that firmware is not ours to change.
+            if r2.sensor_streaming:
+                try:
+                    off = _err_of(await asyncio.shield(
+                        r2.set_sensor_mask(0, 0, 0)))
+                    off_ext = _err_of(await asyncio.shield(
+                        r2.set_extended_sensor_mask(0)))
+                    print(f"sensor stream off: {off}/{off_ext}")
+                except BaseException as e:
+                    # Never let housekeeping mask the stop that just ran, and
+                    # never let it turn a clean exit into a traceback.
+                    print(f"!! could not disable sensor stream: "
+                          f"{type(e).__name__}: {e}")
             if r2.idle_disabled:
                 # Deliberately NOT restored here. Re-enabling idle is a command
                 # that starts spontaneous motion, and this is the path that

@@ -57,8 +57,6 @@ RESIST_TRAVEL_DEG = 15.0
 # the worst-case free undershoot plus margin.
 FREE_UNDERSHOOT_WORST_DEG = 5.7
 RESIST_MARGIN_DEG = 4.0
-# A trial "fires" when some channel deviates this many baseline sigmas.
-TOUCH_SIGMA = 6.0
 TRIALS_TO_CONFIRM = 4          # of 5
 # A trial must disturb this many channels at once to count.
 CHANNELS_TO_CORROBORATE = 2
@@ -136,19 +134,6 @@ def channels(samples: list[dict]) -> dict[str, list[float]]:
 # ---------------------------------------------------------------------------
 # rubric — dry-testable, no hardware
 # ---------------------------------------------------------------------------
-
-def noise_floor(baseline: dict[str, list[float]]) -> dict[str, tuple[float, float]]:
-    """mean and stdev per channel. A channel that never varies gets a stdev
-    floor so it cannot manufacture an infinite z-score."""
-    out = {}
-    for name, vals in baseline.items():
-        if len(vals) < 2:
-            continue
-        mu = statistics.fmean(vals)
-        sd = statistics.pstdev(vals)
-        out[name] = (mu, max(sd, 1e-6))
-    return out
-
 
 def window_stat(vals: list[float], mu: float = 0.0) -> float:
     """Peak-to-peak WITHIN the window. `mu` is ignored, kept for call symmetry.
@@ -334,10 +319,15 @@ def ac3_baseline(bridge, state, args):
     print(f"Hands OFF. Recording rest baseline for {args.seconds:.0f}s...")
     samples = collect(bridge, args.seconds, mask, ext)
     ch = channels(samples)
-    floor = noise_floor(ch)
+    # Store the raw SERIES, not a summary. `empirical_thresholds` derives the
+    # limits from it at scoring time, so a rubric change can be re-applied to
+    # an existing baseline instead of costing another 60 s of the operator's
+    # patience -- which is exactly what happened when the sigma rule was
+    # replaced. A stored mean/sigma pair would also imply sigma is still the
+    # threshold source, and it is not.
     state["ac3"] = {"seconds": args.seconds, "samples": len(samples),
-                    "noise_floor": {k: [round(m, 5), round(s, 5)]
-                                    for k, (m, s) in floor.items()},
+                    "rest_mean": {k: round(statistics.fmean(v), 5)
+                                  for k, v in ch.items()},
                     # EVERY raw sample, not the first 50. The rubric had to
                     # be rewritten after the fact and a truncated baseline
                     # could not be re-analysed, costing a whole re-run.
@@ -494,12 +484,7 @@ def selftest(*_):
           overall_verdict({"ac1": {"accepted": True}, "ac2": {"samples": 0}})["verdict"],
           "instrument_limited")
 
-    # noise floor guards
-    check("floor/constant-channel-has-floor",
-          noise_floor({"a": [1.0, 1.0, 1.0]})["a"][1] > 0, True)
-    check("floor/single-sample-dropped", "a" in noise_floor({"a": [1.0]}), False)
-
-    total = 22
+    total = 20
     print(f"{total - len(fails)}/{total} rubric cases passed")
     for f in fails:
         print("  FAIL", f)

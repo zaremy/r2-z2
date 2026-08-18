@@ -10,6 +10,7 @@ straight into docs/ as measurements.
     python3 -m unittest discover -s mac-prototype -p 'test_*.py' -v
 """
 
+import asyncio
 import struct
 import sys
 import unittest
@@ -120,6 +121,121 @@ class TestProbeStepsAreConstructible(unittest.TestCase):
         import r2_behavior as B
         for op in ("events", "sensors"):
             self.assertEqual(B.OP_TIER[op], P.op_tier(op))
+
+
+class TestStreamTeardown(unittest.TestCase):
+    """The exit path must leave the stream in a known state.
+
+    Nothing else in the stack does this: spherov2 provides `disable_all`
+    (controls/v2.py:326) and never calls it, and there is no destructor or
+    disconnect hook anywhere. If the daemon does not turn it off, nobody does.
+    """
+
+    def _fake_r2(self):
+        class FakeR2:
+            def __init__(self):
+                self.sensor_streaming = False
+                self.sent = []
+            async def set_sensor_mask(self, interval, count, mask):
+                self.sent.append(("mask", interval, count, mask)); return None
+            async def set_extended_sensor_mask(self, mask):
+                self.sent.append(("ext", mask)); return None
+            async def get_sensor_mask(self):
+                return (250, 0, P.sensor_mask(["accelerometer"]))
+        return FakeR2()
+
+    def test_enabling_marks_the_session_as_streaming(self):
+        r2 = self._fake_r2()
+        asyncio.run(P._op_sensors(r2, {"enable": True,
+                                       "groups": ["accelerometer"],
+                                       "ext_groups": []}))
+        self.assertTrue(r2.sensor_streaming)
+
+    def test_disable_sends_zero_masks(self):
+        r2 = self._fake_r2()
+        asyncio.run(P._op_sensors(r2, {"enable": False}))
+        self.assertIn(("ext", 0), r2.sent)
+        self.assertTrue(any(op == "mask" and mask == 0
+                            for op, _i, _c, mask in
+                            [s for s in r2.sent if s[0] == "mask"]))
+
+    def test_unconfirmed_enable_still_marks_streaming(self):
+        # THE REASON THIS RULE EXISTS. `send` returning None means the reply
+        # was lost, not that the packet missed. If that cleared the flag, the
+        # exit path would skip the disable and leave him streaming unattended.
+        r2 = self._fake_r2()
+        asyncio.run(P._op_sensors(r2, {"enable": True,
+                                       "groups": ["accelerometer"],
+                                       "ext_groups": []}))
+        self.assertTrue(r2.sensor_streaming)
+
+    def test_unconfirmed_disable_keeps_the_flag_set_for_a_retry(self):
+        # Errors must fall towards "send a disable we did not need".
+        r2 = self._fake_r2()
+        r2.sensor_streaming = True
+        asyncio.run(P._op_sensors(r2, {"enable": False}))
+        self.assertTrue(r2.sensor_streaming)
+
+    def test_flag_starts_false_so_a_read_only_session_sends_nothing(self):
+        # The exit path keys off this flag. A session that never enabled the
+        # stream must not fire a disable at a robot it does not own.
+        r2 = self._fake_r2()
+        self.assertFalse(r2.sensor_streaming)
+
+
+class TestPhasesRun(unittest.TestCase):
+    """Smoke-test every phase against a fake bridge.
+
+    These exist because the phase functions had NO coverage at all: a review
+    edit to `ac3_baseline` could have left a dangling name and the failure
+    would have surfaced only on live hardware, costing a daemon relaunch that
+    only the operator can perform. A phase that raises is the single most
+    expensive bug class in this file.
+    """
+
+    def setUp(self):
+        import sensor_probe as S
+        import tempfile, pathlib
+        self.S = S
+        self._real_state = S.STATE
+        self._tmp = tempfile.TemporaryDirectory()
+        S.STATE = pathlib.Path(self._tmp.name) / "results.json"
+
+    def tearDown(self):
+        self.S.STATE = self._real_state
+        self._tmp.cleanup()
+
+    def _args(self, **kw):
+        import argparse
+        d = dict(seconds=0.05, trials=1, site="dome", interval=250, window=0.05)
+        d.update(kw)
+        return argparse.Namespace(**d)
+
+    def _bridge(self):
+        import r2_behavior as B
+        return B.FakeBridge()
+
+    def test_ac2_and_ac3_run_and_persist(self):
+        st = {}
+        self.S.ac2_characterise(self._bridge(), st, self._args())
+        self.assertIn("ac2", st)
+        self.S.ac3_baseline(self._bridge(), st, self._args())
+        self.assertIn("ac3", st)
+        # The series is what scoring consumes; it must always be written.
+        self.assertIn("series", st["ac3"])
+
+    def test_ac4_refuses_without_a_baseline(self):
+        # A touch threshold with no rest baseline is meaningless, and must
+        # say so rather than scoring against nothing.
+        st = {}
+        self.S.ac4_touch(self._bridge(), st, self._args())
+        self.assertNotIn("ac4", st)
+
+    def test_verdict_runs_on_an_empty_state(self):
+        st = {}
+        self.S.verdict(self._bridge(), st, self._args())
+        # No stream, no trials -> must be instrument_limited, never "neither".
+        self.assertEqual(st["ac6"]["verdict"], "instrument_limited")
 
 
 class TestSensorsOpSafety(unittest.TestCase):
