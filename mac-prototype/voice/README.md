@@ -201,6 +201,49 @@ Model latency measured on this task, p50 of 3 calls:
 All five pick valid ids, so latency is the discriminator — and R2 stands lit in
 Processing for that whole time. Note "nano" is not the fast one.
 
+## Threepio's voice (V6, #47)
+
+**R2 never speaks.** He chirps, from his own body. C-3PO is a *second
+character* who rides in the backpack and does the talking — which is canon,
+and which dissolves the speaker-displacement worry in D-011: Threepio's voice
+*should* sound like it comes from somewhere other than R2's body, because it
+is somebody else.
+
+The character lives in `STEERING`, a plain-language prompt. `gpt-4o-mini-tts`
+takes direction, so the register is iterated by editing that string rather
+than by tuning a synthesiser. `LINE_SYSTEM` embeds the same string, so there
+is exactly one description of who he is — two would drift, and the voice would
+stop matching the words.
+
+The prompt describes *a* protocol droid and deliberately names no performer
+and no character. A test asserts that, because cloning a specific performance
+raises a likeness question this project has no reason to raise.
+
+### Quiet hours are enforced here, not only upstream
+
+#47 AC3 assigns quiet hours to V7. This module gates anyway, defaulting **on**
+(22:00–08:00). V7 not calling `speak()` is a policy held by a caller, and
+`CLAUDE.md` is explicit that a guard belongs where the effect happens —
+`FORBIDDEN_OPS` was once enforced on the construction path, so any caller that
+skipped construction skipped the guard. Sound is the one output that reaches a
+sleeping household through a closed door.
+
+An audition overrides it at the **call site**, never by weakening the default:
+
+```python
+speak(line, quiet_hours=QuietHours(enabled=False))
+```
+
+### Generating audio and making noise are separate decisions
+
+`play_audio` defaults to `False`. The one that makes a sound is the one you
+have to ask for.
+
+```bash
+python3 -c "import sys; sys.path.insert(0,'voice'); import speak as S; \
+  print(S.compose_line('R2 bumped into the doorframe again'))"
+```
+
 ## Microphone permission — the agent CAN open it
 
 **OBSERVED 2026-08-17.** The BLE restriction does **not** extend to the

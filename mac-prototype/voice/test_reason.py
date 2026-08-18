@@ -160,7 +160,11 @@ class TestAC4TheSeam(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         offenders = []
         for f in sorted(list(root.glob("*.py")) + list((root / "voice").glob("*.py"))):
-            if f.name in ("reason.py", "test_reason.py"):
+            # The ADAPTERS are allowed to name a vendor; that is their job.
+            # The guarantee is that nothing else does, so the behaviour layer
+            # stays swappable. Add to this list only when adding an adapter.
+            if f.name in ("reason.py", "test_reason.py",
+                          "speak.py", "test_speak.py"):
                 continue
             for i, line in enumerate(f.read_text().splitlines(), 1):
                 if line.lstrip().startswith("#"):
