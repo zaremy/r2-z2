@@ -165,12 +165,12 @@ class TestPerform(unittest.TestCase):
         bridge = B.FakeBridge()
         beat = B.express_curious()
         B.perform(beat, bridge, ceiling="dome", sleep=lambda _: None)
-        # One leading batch for the head read and one trailing batch for the
-        # absolute-angle correction, both added by return_to_start.
-        self.assertEqual(len(bridge.batches), len(beat.phrases) + 2)
-        middle = bridge.batches[1:-1]
-        self.assertEqual([len(b) for b in middle],
+        # return_to_start wraps the phrases: one leading head read, then a
+        # residual read and a closing colour reset after them.
+        phrase_batches = bridge.batches[1:1 + len(beat.phrases)]
+        self.assertEqual([len(b) for b in phrase_batches],
                          [len(p.steps) for p in beat.phrases])
+        self.assertEqual(bridge.batches[0][0].op, "head")
 
     def test_the_turn_and_the_chirp_share_one_batch(self):
         # The question is asked mid-turn. If the dome and the sound land in
@@ -216,16 +216,54 @@ class TestPerform(unittest.TestCase):
                     with self.subTest(beat=name, phrase=i):
                         self.assertGreaterEqual(p.gap_s, B.DOME_MOVE_S)
 
-    def test_return_to_start_closes_on_an_absolute_angle(self):
-        # Deltas undershoot ~3 deg each and never sum back to zero, so the
-        # closing move must be absolute or the dome walks every invocation.
-        bridge = B.FakeBridge(head_deg=-31.25)
+    def test_a_large_residual_is_corrected_with_an_absolute_angle(self):
+        # Deltas undershoot ~3 deg each and never sum back to zero, so a
+        # correction that IS achievable must target an absolute angle.
+        # Simulate a dome that ended 20 deg away from where it began.
+        bridge = B.FakeBridge(head_seq=[-30.0, -50.0, -30.0])
         out = B.perform(B.express_curious(), bridge, ceiling="dome",
                         sleep=lambda _: None)
-        self.assertEqual(out["start_angle"], -31.25)
+        self.assertEqual(out["start_angle"], -30.0)
         closing = [s for s in bridge.sent if s.op == "dome"][-1]
-        self.assertEqual(closing.params.get("angle"), -31.25)
+        self.assertEqual(closing.params.get("angle"), -30.0)
         self.assertNotIn("delta", closing.params)
+        self.assertEqual(out["residual_deg"], 0.0)
+
+    def test_a_residual_below_the_threshold_is_reported_not_commanded(self):
+        # The firmware ignores sub-12-degree moves and still reports success,
+        # so emitting one would manufacture a false correction. Say what the
+        # residual is instead of pretending to fix it.
+        bridge = B.FakeBridge(head_seq=[-30.0, -34.0])
+        out = B.perform(B.express_curious(), bridge, ceiling="dome",
+                        sleep=lambda _: None)
+        self.assertEqual(out["residual_deg"], 4.0)
+        self.assertFalse(any(s.op == "dome" and "angle" in s.params
+                             for s in bridge.sent))
+
+    def test_every_authored_dome_move_clears_the_threshold(self):
+        # The gesture must close itself: a beat relying on a small tidy-up
+        # move at the end is relying on the one move that never executes.
+        for name, make in B.VOCABULARY.items():
+            for p in make().phrases:
+                for st in p.steps:
+                    if st.op == "dome" and "delta" in st.params:
+                        with self.subTest(beat=name):
+                            self.assertGreaterEqual(
+                                abs(st.params["delta"]), B.MIN_DOME_TRAVEL_DEG)
+
+    def test_sub_threshold_dome_move_is_rejected_at_build_time(self):
+        bad = B.Beat(
+            name="too_small", rest_colour=B.BASE_NEUTRAL, interruptible=True,
+            energy="low", cooldown_s=0.0, evidence="test",
+            phrases=(
+                B.Phrase((B.Step("dome", {"delta": 8.0, "settle": 0}),),
+                         gap_s=B.DOME_MOVE_S),
+                B.Phrase((B.Step(
+                    "leds", {"channels": B.front(B.BASE_NEUTRAL)}),)),
+            ))
+        with self.assertRaises(ValueError) as cm:
+            bad.validate()
+        self.assertIn("silently ignored", str(cm.exception))
 
     def test_beat_reads_the_dome_before_it_moves_it(self):
         # "Where it started" is only knowable by asking: the dome has no home
@@ -340,6 +378,59 @@ class TestDurationEstimate(unittest.TestCase):
         for name, make in B.VOCABULARY.items():
             with self.subTest(beat=name):
                 self.assertLess(make().estimated_duration_s(), 30.0)
+
+
+
+
+class TestDomeHome(unittest.TestCase):
+    """The persistent drift anchor. A per-beat anchor measured the last beat's
+    error and forgot it, so the correction never fired across five real runs
+    while the dome walked -24.58 -> -41.17."""
+
+    def test_home_is_set_once_and_does_not_follow_the_dome(self):
+        h = B.DomeHome()
+        self.assertEqual(h.anchor(-30.0), -30.0)
+        self.assertEqual(h.anchor(-33.0), -30.0)     # not re-anchored
+        self.assertEqual(h.anchor(-41.0), -30.0)
+
+    def test_small_drift_is_not_commandable(self):
+        h = B.DomeHome(-30.0)
+        self.assertIsNone(h.correction(-33.0))       # 3 deg, below threshold
+
+    def test_accumulated_drift_eventually_becomes_commandable(self):
+        # The whole point: error builds against a FIXED mark until the
+        # hardware can act on it. Against a moving anchor it never does.
+        h = B.DomeHome(-30.0)
+        here = -30.0
+        fired = False
+        for _ in range(6):
+            here -= 3.0                              # one beat's worth of drift
+            if h.correction(here) is not None:
+                fired = True
+                break
+        self.assertTrue(fired, "correction never became commandable")
+
+    def test_correction_points_back_toward_home(self):
+        h = B.DomeHome(-30.0)
+        self.assertAlmostEqual(h.correction(-45.0), 15.0)
+        self.assertAlmostEqual(h.correction(-15.0), -15.0)
+
+    def test_unanchored_home_never_commands(self):
+        self.assertIsNone(B.DomeHome().correction(-99.0))
+
+    def test_perform_anchors_to_home_not_to_this_beat(self):
+        home = B.DomeHome()
+        b = B.FakeBridge(head_seq=[-30.0, -33.0])
+        B.perform(B.express_curious(), b, ceiling="dome",
+                  home=home, sleep=lambda _: None)
+        self.assertEqual(home.angle, -30.0)
+        # Second beat starts 3 deg away; home must NOT move to -33.
+        b2 = B.FakeBridge(head_seq=[-33.0, -36.0])
+        out = B.perform(B.express_curious(), b2, ceiling="dome",
+                        home=home, sleep=lambda _: None)
+        self.assertEqual(home.angle, -30.0)
+        self.assertEqual(out["start_angle"], -30.0)
+        self.assertEqual(out["residual_deg"], 6.0)   # vs home, not vs -33
 
 
 if __name__ == "__main__":

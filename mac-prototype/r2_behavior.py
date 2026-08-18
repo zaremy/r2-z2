@@ -65,9 +65,29 @@ DOME_MOVE_S = 2.2
 
 # MEASURED, same run: every move stops ~2.4-3.7 deg SHORT of its commanded
 # target, in the direction of travel. Relative deltas therefore never sum back
-# to zero, which is why a "balanced" gesture still walks the dome. Any beat
-# that must end where it started has to close on an ABSOLUTE angle.
+# to zero, which is why a "balanced" gesture still walks the dome.
 DOME_UNDERSHOOT_DEG = 3.0
+
+# MEASURED 2026-08-17. THE DOME CANNOT MAKE SMALL MOVEMENTS. Commanded travel
+# below ~10.5 deg is SILENTLY IGNORED — the firmware answers `ok: true`, the
+# response carries a plausible `commanded` value, and nothing moves.
+#
+#     4.0 -> 0.11    6.0 -> 0.00    8.0 -> 0.00   10.0 -> -0.11   (no motion)
+#    10.5 -> 7.08   11.0 -> 7.71   12.0 -> 8.45   14.0 -> -10.46  (motion)
+#
+# The boundary lies between 10.0 and 10.5 with n=1 either side, so 12.0 is the
+# working minimum: a measured edge is not a safe constant to sit on.
+#
+# This was first misdiagnosed as "a move issued while another is still
+# travelling gets dropped" — a hypothesis that fitted n=2 and was refuted by a
+# correction move that failed with 2.2 s of clear air in front of it. Recorded
+# because the wrong explanation was the more interesting one, and it survived
+# two runs before the boundary test killed it.
+#
+# Design consequence, and it is not small: a subtle 5 deg tilt is NOT
+# available on this hardware. Every dome gesture must be at least 12 deg, so
+# "small dome movement" in the bring-up order means 12 deg, not 3.
+MIN_DOME_TRAVEL_DEG = 12.0
 
 # Which tier each op we are allowed to emit needs. A subset of r2_probe.OPS on
 # purpose: this layer may not reach for `animation` or `set_stance`, and the
@@ -302,6 +322,18 @@ class Beat:
                     f"beat {self.name!r} phrase {i} moves the dome then waits "
                     f"only {p.gap_s}s; a move takes ~{DOME_MOVE_S}s and the "
                     f"next one would be silently dropped")
+        # Sub-threshold moves are the sharper failure, because the daemon
+        # reports them as successes. A beat asking for an 8 deg tilt is not
+        # slightly imprecise — it does nothing at all, and says it worked.
+        for i, p in enumerate(self.phrases):
+            for s in p.steps:
+                if s.op == "dome" and "delta" in s.params:
+                    if abs(s.params["delta"]) < MIN_DOME_TRAVEL_DEG:
+                        raise ValueError(
+                            f"beat {self.name!r} phrase {i} commands "
+                            f"{s.params['delta']:+.1f} deg; anything under "
+                            f"{MIN_DOME_TRAVEL_DEG} deg is silently ignored by "
+                            f"the firmware and still reports ok")
         if tier_rank(self.required_tier()) >= tier_rank("stance"):
             raise ValueError(f"beat {self.name!r} reaches the stance tier")
         if self.rest_colour not in (BASE_NEUTRAL, BASE_SUCCESS, BASE_PENDING):
@@ -403,11 +435,16 @@ class FakeBridge(Bridge):
     DOWN, because every edit made with the link up costs a relaunch and only
     the operator can relaunch."""
 
-    def __init__(self, fail_on: str | None = None, head_deg: float = -12.5):
+    def __init__(self, fail_on: str | None = None, head_deg: float = -12.5,
+                 head_seq: list[float] | None = None):
         self.sent: list[Step] = []
         self.batches: list[list[Step]] = []
         self.fail_on = fail_on
         self.head_deg = head_deg
+        # Successive answers to `head`, so a test can simulate a dome that
+        # actually drifted. Without this every read returns the same angle,
+        # the residual is always 0, and the correction branch never runs.
+        self.head_seq = list(head_seq) if head_seq else None
 
     def _reply(self, step: Step) -> dict:
         out = {"ok": self.fail_on != step.op, "op": step.op}
@@ -416,6 +453,8 @@ class FakeBridge(Bridge):
         # entire fix for the dome drift — was never exercised by any test
         # while every test still passed.
         if step.op == "head":
+            if self.head_seq:
+                self.head_deg = self.head_seq.pop(0)
             out["data"] = {"degrees": self.head_deg}
         return out
 
@@ -429,8 +468,43 @@ class FakeBridge(Bridge):
 # Performing
 # ---------------------------------------------------------------------------
 
+class DomeHome:
+    """A persistent reference angle for the dome, held across beats.
+
+    This exists because of a mistake worth keeping. `return_to_start` read the
+    dome at the start of EACH beat, so the anchor was wherever the dome
+    happened to be — and the residual measured against it was always ~3 deg,
+    always below the 12 deg the firmware needs to act on. The correction
+    therefore never fired once, and the dome still walked, just more slowly:
+    measured -24.58 -> -32.40 -> -34.93 -> -37.58 -> -41.17 over five runs.
+
+    A drift reference has to be FIXED to be a reference at all. Anchoring to
+    "where this beat began" measures the last beat's error and then forgets
+    it, which is precisely how a slow leak survives a fix aimed at it.
+    """
+
+    def __init__(self, angle: float | None = None):
+        self.angle = angle
+
+    def anchor(self, angle: float) -> float:
+        """Set the home once, on the first beat that has a reading."""
+        if self.angle is None:
+            self.angle = angle
+        return self.angle
+
+    def correction(self, here: float) -> float | None:
+        """How far to go to get home, or None if it cannot be commanded.
+        Accumulated drift crosses the threshold eventually, and that is the
+        point: the error is allowed to build against a fixed mark until it is
+        large enough for the hardware to act on."""
+        if self.angle is None:
+            return None
+        delta = self.angle - here
+        return delta if abs(delta) >= MIN_DOME_TRAVEL_DEG else None
+
+
 def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
-            sleep=time.sleep) -> dict:
+            home: "DomeHome | None" = None, sleep=time.sleep) -> dict:
     """Run one beat. Returns a record of what happened.
 
     `ceiling` is the daemon's --allow level and is checked BEFORE anything is
@@ -459,21 +533,41 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
         r = bridge.send_batch([Step("head", {})], timeout=12.0)[0]
         responses.append(r)
         start_angle = (r.get("data") or {}).get("degrees")
+        # Anchor to a PERSISTENT home, not to this beat's start. Passing no
+        # DomeHome keeps the old per-beat behaviour, which is why the caller
+        # has to opt in deliberately.
+        if home is not None and start_angle is not None:
+            start_angle = home.anchor(start_angle)
 
     for i, phrase in enumerate(beat.phrases):
         responses.extend(bridge.send_batch(phrase.steps, timeout=12.0))
         if phrase.gap_s and i < len(beat.phrases) - 1:
             sleep(phrase.gap_s)
 
+    residual = None
     if beat.return_to_start and start_angle is not None:
-        # Absolute, not relative. Every move undershoots by ~3 degrees in the
-        # direction of travel, so a sequence of deltas that sums to zero on
-        # paper still walks. Only an absolute target closes the loop. The
-        # daemon still bounds the TRAVEL from a fresh reading, so this cannot
-        # become a large uncommanded swing.
         sleep(DOME_MOVE_S)
+        here = (bridge.send_batch([Step("head", {})], timeout=12.0)[0]
+                .get("data") or {}).get("degrees")
+        if here is not None:
+            residual = round(start_angle - here, 2)
+            if abs(residual) >= MIN_DOME_TRAVEL_DEG:
+                # Absolute, not relative: undershoot means a sum-to-zero set
+                # of deltas still walks. The daemon bounds the TRAVEL from a
+                # fresh reading, so this cannot become a large uncommanded
+                # swing.
+                responses.extend(bridge.send_batch((
+                    Step("dome", {"angle": start_angle, "settle": 0}),
+                ), timeout=12.0))
+                sleep(DOME_MOVE_S)
+                here = (bridge.send_batch([Step("head", {})], timeout=12.0)[0]
+                        .get("data") or {}).get("degrees")
+                residual = round(start_angle - here, 2) if here else residual
+            # else: the correction is BELOW the threshold and therefore
+            # unachievable. Say so rather than emitting a command that would
+            # report success and do nothing. Residual under ~12 deg is the
+            # floor of what this hardware can hold, not a bug to fix.
         responses.extend(bridge.send_batch((
-            Step("dome", {"angle": start_angle, "settle": 0}),
             Step("leds", {"channels": front(beat.rest_colour)}),
         ), timeout=12.0))
 
@@ -481,6 +575,7 @@ def perform(beat: Beat, bridge: Bridge, *, ceiling: str,
     return {"ok": not failed, "beat": beat.name, "refused": False,
             "tier": need, "steps": len(responses),
             "start_angle": start_angle,
+            "residual_deg": residual,
             "elapsed_s": round(time.monotonic() - started, 3),
             "failed": failed, "responses": responses}
 
@@ -528,15 +623,20 @@ def express_curious(*, rest=BASE_NEUTRAL, travel: float = 15.0) -> Beat:
                 Step("dome", {"delta": travel, "settle": 0}),
                 Step("leds", {"channels": holo(255)}),
             ), gap_s=DOME_MOVE_S),              # the pause that IS the curiosity
-            # 3. Tilt the other way, shorter — a second look, not a repeat.
+            # 3. Swing the other way, PAST centre. Twice the travel because it
+            #    has to cross back over the start and still clear the 12 deg
+            #    floor on its own.
             Phrase((
-                Step("dome", {"delta": -travel * 1.5, "settle": 0}),
+                Step("dome", {"delta": -travel * 2, "settle": 0}),
                 Step("leds", {"channels": {**front(PULSE_CYAN), **holo(120)}}),
             ), gap_s=DOME_MOVE_S),
-            # 4. Holo down and base colour restored. The dome correction is
-            #    NOT here: perform() closes it against the angle it read before
-            #    the beat began, because deltas undershoot and never sum back.
+            # 4. The return is AUTHORED, not left to a correction. A gesture
+            #    that ends near where it began needs a final move under 12 deg
+            #    to tidy up, and that move is exactly the one the firmware
+            #    ignores. So the last leg of the gesture IS the return, at full
+            #    travel, and perform() only has to mop up what undershoot left.
             Phrase((
+                Step("dome", {"delta": travel, "settle": 0}),
                 Step("leds", {"channels": {**front(rest), **holo(0)}}),
             ), gap_s=0.0),
         ),
