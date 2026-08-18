@@ -352,6 +352,11 @@ class TestFileBridgeIds(unittest.TestCase):
             base = Path(d)
             (base / "requests").mkdir()
             (base / "responses").mkdir()
+            # A live lock, not just the queue dirs: the dirs outlive the
+            # daemon that made them, so their presence is not liveness.
+            (base / "daemon.lock").write_text(
+                __import__("json").dumps({"pid": __import__("os").getpid(),
+                                          "ceiling": "dome", "started": 0}))
             bridge = B.FileBridge(base)
             self.assertTrue(bridge.running())
             # Exercise the real writer, then read back what landed on disk.
@@ -368,6 +373,39 @@ class TestFileBridgeIds(unittest.TestCase):
             self.assertEqual(len(set(names)), len(names))     # no collisions
             self.assertEqual(names, sorted(names))            # sorts in order
             self.assertTrue(all(len(n) == len(names[0]) for n in names))
+
+    def test_a_dead_daemons_leftover_queue_is_not_running(self):
+        """The exact live failure: the daemon exits, its requests/ and
+        responses/ directories remain, and a session reads that as a healthy
+        bridge -- then dies 15 s later on a timeout that looks like a
+        protocol bug instead of an absent daemon."""
+        import json as _json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "requests").mkdir()
+            (base / "responses").mkdir()
+            bridge = B.FileBridge(base)
+            self.assertFalse(bridge.running())          # no lock at all
+            (base / "daemon.lock").write_text(
+                _json.dumps({"pid": 999_999_999, "ceiling": "dome",
+                             "started": 0}))
+            self.assertFalse(bridge.running())          # lock, but pid is gone
+            (base / "daemon.lock").write_text("{trunc")
+            self.assertFalse(bridge.running())          # half-written lock
+
+    def test_the_daemon_record_reports_its_ceiling(self):
+        # What the daemon will permit is knowable; it must never be taken on
+        # trust from a command-line flag the operator typed from memory.
+        import json as _json
+        import os as _os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "daemon.lock").write_text(
+                _json.dumps({"pid": _os.getpid(), "ceiling": "leds",
+                             "started": 0}))
+            self.assertEqual(B.FileBridge(base).daemon()["ceiling"], "leds")
 
     def test_refuses_when_the_bridge_is_not_running(self):
         import tempfile

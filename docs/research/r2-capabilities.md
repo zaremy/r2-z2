@@ -1109,6 +1109,110 @@ after the reordering.
 whole beat reads as *curiosity* to someone who was not told what it is;
 `thinking()` was built and unit-tested but **never fired on hardware**.
 
+### S2b sensor-triggered behaviour — PARTIAL 2026-08-18 on `D2-6F6B`
+
+The first closed loop: the sensor stream (S1e) drives the choreography layer
+(S2a) with no human in the middle. `mac-prototype/r2_reactive.py`.
+
+> **Read the verdict carefully.** The loop is OBSERVED working end to end on
+> hardware. What is **NOT** observed is the thing its name promises: no
+> deliberate hand-on-dome touch has ever triggered it. Every live trigger so
+> far came from ambient vibration, and the operator confirmed they were not
+> touching him at the time. Sensitivity to a *pet* is UNKNOWN, not proven.
+
+#### What the loop does
+
+`calibrate → negative control → arm → detect → settle → perform → recover →
+cooldown → re-arm`. Detection reuses S1e's validated rubric verbatim
+(peak-to-peak against an empirical rest null, two channels required to
+corroborate). The behaviour is `express_curious()` from S2a.
+
+#### OBSERVED — the mechanism
+
+| Claim | Evidence |
+|---|---|
+| A stream disturbance drives a full behaviour with no human step | **3/3** triggers → 3 completed `express_curious` performances, desk run 2026-08-18 |
+| The loop does not react to itself | 3/3 recoveries reached measured quiet; no reaction was ever triggered by the beat's own dome motion |
+| The negative control gates arming | **3/3** live runs passed a 20 s hands-off control; a synthetic stuck detector refuses to arm (exit 5) |
+| Event delivery is lossless at this rate | `dropped=0`, `decode_errors=0` across all live runs |
+| The dome drift correction fires in real use | residual walked 4.44° → 9.41°, crossed the 12° floor, and was corrected back to 2.43° — D-013's mechanism working live for the first time, not just in tests |
+
+Timing, desk run (3 reactions): settle **2.61–3.43 s**, beat **10.25–10.31 s**
+(13.30 s on the run that included a drift correction), cooldown held
+**16.35–16.37 s** of the beat's declared 20 s.
+
+#### OBSERVED — the surface matters more than expected
+
+Rest thresholds are a property of what he is standing on, not of the robot:
+
+| channel | floor run 1 | floor run 2 |
+|---|---|---|
+| `r2_head_angle.r2_head_angle` | 1.7437 | 0.3170 |
+| `gyroscope.x` | 0.5506 | 0.6413 |
+| `gyroscope.y` | 0.5496 | 0.5485 |
+| `attitude.pitch` | 0.1227 | 0.1134 |
+| `gyroscope.z` | **0.0000** | **0.0000** |
+
+Two findings, both load-bearing:
+
+- **`gyroscope.z` reports a constant at rest** and yields a zero limit on both
+  floor runs. A zero-limit channel is skipped, so 9 of 10 channels carry the
+  two-channel corroboration rule, not 10.
+- **`r2_head_angle`'s rest noise swung 5.5× between two consecutive runs on the
+  same surface.** A threshold set once and reused is therefore wrong; the
+  per-session calibration is not a convenience, it is required.
+
+#### OBSERVED — a rickety desk is indistinguishable from a hand
+
+The desk run's three triggers were **not** petting. Nobody was touching him.
+The operator's desk transmits enough vibration to clear a rest threshold
+calibrated on that same desk, which is worth stating plainly for a robot
+meant to live in a household: **on an unstable surface he will react to people
+walking past.** This is a specificity limit of the whole approach, not a bug in
+the rubric — and it is why he was moved to the floor.
+
+#### REFUTED — "those were false positives"
+
+Asserted mid-session and wrong. Re-scoring 120 rest samples offline — deriving
+thresholds from one half and sliding over the other — gives **0/55 firing
+windows at a 1.5 s window, 0/49 at 3.0 s, 0/41 at 5.0 s.** The detector is
+clean on quiet data; the desk was the signal source. Recorded because the wrong
+explanation (a structural multiple-comparisons flaw) was the more sophisticated
+one and fitted every fact available at the time.
+
+The figures above are floor run 1's, which are re-derivable from
+`.bridge/s2b-reactive-floor-run1.json`. The original analysis ran on the desk
+run and returned the identical counts — the window totals depend only on the
+sample count, and both runs captured 120 samples.
+
+#### Provenance — the desk run's raw data was destroyed
+
+`r2_reactive.py` wrote every run to one fixed filename, so **floor run 1
+overwrote the desk run it was trying to explain.** The desk figures in the
+tables above (3/3 triggers, the settle and beat timings, the residual walk)
+come from the session's console output and **cannot be re-derived from stored
+data.** Every other number in this section can. Fixed the same session — one
+log per run — but the evidence for the headline result is weaker than it
+should be, and saying so is cheaper than pretending otherwise.
+
+#### UNKNOWN — deliberate touch
+
+Never tested to a conclusion. Two floor runs returned 0 reactions and **both
+had zero touches in them**: the first because the arming cue was invisible
+(D-014), the second because the operator declined to continue. The right next
+step is not another blind trial but `r2_reactive.py monitor`, which records how
+close every window came to firing and decides nothing — a threshold set from
+ratios instead of from a boolean.
+
+#### Method note
+
+`--window` defaults to 1.5 s (6 samples at 4 Hz), which is **half** the 3.0 s
+window S1e validated the rubric at. Shortened deliberately for responsiveness:
+a corroborated detection cannot be faster than several samples, and several
+samples at 4 Hz is the latency floor. The departure is adjudicated empirically
+by the negative control before anything arms, and a control failure prints the
+3.0 s fallback.
+
 ## 4. Proposed semantic behavior vocabulary
 
 Mapping the target states from the brief onto real capabilities. Status column:
