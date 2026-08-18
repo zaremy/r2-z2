@@ -888,7 +888,7 @@ visible, and a 30-unit step flickers exactly as much as a full swap.
 hardware.** An interpolated baby-blue→cyan pulse read as flicker rather than a
 fade for this reason, not because the ramp was too coarse. The light language is
 inherently **steppy**: design discrete high-contrast frames, do not attempt
-fades. Ruled on in D-012.
+fades. Ruled on in **D-012 Amendment A** (§2) — which is where the ruling now actually lives; before 2026-08-17 this pointed at a D-012 that did not yet contain it.
 
 > [!warning] The modulation rate ceiling here is the BRIDGE, not the LED
 > ~**0.389 s** median per set, decomposing as ~0.07 s CLI process spawn + a

@@ -470,6 +470,121 @@ indicator bolted onto a character.
 *Does not decide:* brightness, the logic-display and holo-projector channels
 (brightness-only, so they cannot carry this), what yellow means, transition
 timing, or whether the two fixtures show the same colour or different ones.
+**Most of this list is settled by Amendment A below — read it before relying on
+anything here.**
+
+---
+
+### Amendment A — the hardware overrules the scheme
+**2026-08-17 · operator rulings + measured on `D2-6F6B`**
+
+D-012 above was written from three measurements and a ruling. Driving the
+channel properly since then has settled most of what it left open, and
+**refuted one thing it assumed**. The scheme's shape survives — colour carries
+meaning, modulation carries mode — but the primitives it named do not.
+
+**1. There are seven colours, not a continuum.** Low saturation reads as grey
+(a `(120,190,255)` pale blue rendered "almost grey"), so colour semantics must
+use hard-contrasting hues. In practice that is the **corners of the RGB cube** —
+each channel fully on or fully off — which is also the only set every successful
+hardware test has used. **Orange and amber are therefore unreachable**: there is
+no corner between red and yellow, and the mixed value is both desaturated enough
+to drift grey and too close to yellow to separate at lamp size. Two hues that
+differ only in shade are one hue on this hardware.
+
+**2. Fades are not available on the RGB fixtures.** Every value change flickers —
+isolated by writing the identical colour twenty times (rock steady) against any
+change at all, where a 30-unit step flickers as much as a full swap. An
+interpolated ramp therefore reads as flicker, not as a fade. The cause is R2's
+own LED update path, so **it survives the ESP32 port**. Design discrete
+high-contrast frames; never interpolate a PSI.
+
+**3. The fade relocates to bit 7.** The holo projector dims cleanly across
+255 → 64 → 16 and is the one genuinely continuous channel. Bit 3, the logic
+displays, has a curve so steep it must be designed as on/off — which suits a
+"thinking" indicator anyway, since real logic displays flicker rather than fade.
+This reverses the *Does not decide* line below: those two channels are no longer
+excluded, they are load-bearing.
+
+**4. The pattern vocabulary is four primitives, and only three are ours.**
+
+| primitive | whose | carries |
+|---|---|---|
+| **steady** — one corner held | ours, except red | a status claim |
+| **blink** — colour ↔ dark | ours | escalation: slow attention, fast danger |
+| **alternate** — colour ↔ colour | **the droid's** | expression |
+| **sweep** — ordered walk through 3+ corners | ours | transition |
+
+At rest, uncommanded, the front alternates red/blue and the back green/yellow;
+animation id 0 *speeds up* the front alternation rather than starting it. So
+**alternation is his idiom, and a status layer that alternates cannot be told
+apart from him simply being himself.** Steady is very nearly ours alone — the
+exception being animation id 4, the refusal, which breaks its alternation to
+hold **red steady**, making a steady red ambiguous between "fault pending" and
+"he just refused you". That is why danger is carried as a fast blink, not a hold.
+
+Alternation is also a real expansion where it belongs: seven corners become
+twenty-one distinguishable pairs, and the flicker that ruins fades is free for a
+corner-to-corner swap. You cannot mix your way to an eighth colour, though —
+blending would need 24–30 Hz and the ceiling is 8.3.
+
+**5. Colour assignments.**
+
+| colour | meaning |
+|---|---|
+| **blue** | idle — nothing engaged |
+| **cyan** | engaged with you |
+| **green** | wake-sweep terminus; success |
+| **yellow** | needs monitoring — *this is D-012's old steady red* |
+| **red** | danger and stop, only |
+| **magenta** | rest, low power |
+
+**Red is narrowed.** D-012 assigned steady red to "issue pending resolution".
+Both IEC 60073 and every shipping consumer device put pending-attention on
+**yellow** and reserve red for danger and privacy — and amber, which the
+original scheme would have wanted, is not reachable anyway. This also answers
+*what yellow means*, which D-012 declined to decide.
+
+**Blue is idle because it is the dimmest corner** — 0.072 relative luminance,
+about a tenth of green — and idle is the state that runs for hours. Cyan is the
+engaged baseline that interaction states hold underneath, so the back PSI
+answers "is he with me" at a glance while the front says what he is doing.
+
+**6. Urgency rides on rate, not brightness.** The corners are nowhere near
+equally bright: yellow 0.93, cyan 0.79, green 0.72, magenta 0.28, red 0.21,
+blue 0.07. Trimming them to a common level was tried and **failed** — anchored
+to red and blue, the two dimmest corners, it crushed the interaction states
+until they stopped reading. Red at full is only 0.21, so **danger can never be
+the brightest thing on this droid**; it is the *fastest*, at a 0.25 s blink
+against 2.4 s for a pending issue. Only yellow keeps a trim (0.60), being both
+the brightest corner and a sustained state.
+
+**7. The rate ceiling is 8.3 writes per second.** `cmd_safe_interval` is 120 ms
+and R2 drops commands sent faster. A 4 Hz blink is 8 writes/s and therefore has
+no margin. Today's harness is slower still at ~390 ms per set, but that is two
+bridge poll loops rather than the LED; the true LED ceiling is **unmeasured**
+(#17).
+
+**8. Quiet hours scale value, not hue** — scaling a saturated corner keeps it
+saturated, so `(0,255,0)` → `(0,64,0)` is still unambiguously green. Step to the
+dim frame; do not ramp into it. Safety and privacy states are exempt.
+
+> [!warning] The sleep state is specified but **blocked**
+> R2 cannot be put to sleep while the daemon holds the link, because the
+> keepalive **is** the wake command (`DID 0x13 / CID 0x0D`, every 3 s). Any
+> sleep is undone within three seconds. Quiet-hours behaviour is a
+> session-lifecycle change before it is a lighting decision — tracked on #38.
+
+**Now decided, that D-012 deferred:** brightness (§6, §8), the logic-display and
+holo channels (§3), what yellow means (§5), and whether the two fixtures show
+different colours (§5 — yes: back holds status, front carries expression).
+
+**Still open:** whether the holo still dims cleanly at a 120 ms step rate, and
+what rate the firmware's own alternation runs at — ours is judged beside it.
+
+*Reversed by:* a firmware or hardware revision in which a PSI value change no
+longer flickers, which would reopen fades and with them the whole modulation
+question.
 
 ---
 

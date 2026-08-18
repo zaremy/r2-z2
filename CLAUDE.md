@@ -184,6 +184,16 @@ little entity is continuously present in the household.
   implementations before trusting them. The packet layer in
   `mac-prototype/r2_probe.py` was validated three ways (spherov2, the
   `claude-r2d2-buddy` C firmware, and a clean-room trace) — keep that bar.
+- **`decisions.md` is a summary, and summaries omit. Read
+  `research/r2-capabilities.md` alongside it before designing against either.**
+  A design language was built on a smooth LED fade that the fixtures cannot
+  render: D-012 said modulation was *untested*, while the capability doc had
+  already measured that every value change flickers, and closed the section
+  "Ruled on in D-012" — a pointer to a ruling D-012 did not contain. Both docs
+  were individually honest and the pair was misleading. **A citation is a claim
+  to verify, not evidence.** If you write "ruled on in D-0NN", open it and check,
+  or write the ruling there yourself. And "untested" is weaker than a
+  measurement saying it failed — go looking for the measurement.
 
 ## Where things are written
 
