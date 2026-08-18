@@ -491,3 +491,85 @@ timing, or whether the two fixtures show the same colour or different ones.
 - **Keepalive period** — 3 s is inherited, not measured.
 - **Backpack power and mounting.** Entirely unaddressed and not a software
   problem.
+
+---
+
+## D-013 — Behaviours are composed from primitives, and the dome is not a fine instrument
+
+**Date:** 2026-08-17 · **Status:** accepted · **Supersedes nothing** ·
+**Implements:** `mac-prototype/r2_behavior.py`
+
+### Context
+
+S1 surveyed what R2 *can do*, one channel at a time. Nothing had ever been
+composed. The first attempt to drive dome, sound and light as a single gesture
+turned up three constraints that change how the vocabulary must be written, and
+two of them were only visible once channels ran together.
+
+### Decision
+
+**1. A semantic behaviour is composed from primitives, never from an authored
+animation.**
+
+An animation is a stance-tier command whose contents cannot be inspected before
+sending — `EMOTE_YES`, a *nod*, emitted WADDLE three times and put R2 on the
+floor (#11). The choreography layer therefore has **no name** for `animation`
+or `set_stance`; they are not merely discouraged, they are unrepresentable, and
+a beat that reaches the stance tier fails to validate. Every behaviour tops out
+at `dome`.
+
+This does not retire authored animations. It says they are not the substrate a
+behaviour library is built on. D-010 already ruled that excitement is
+choreographed by us; this extends the same reasoning to the whole vocabulary.
+
+**2. The dome's minimum legible gesture is ~12°, and commands below the
+threshold are silently ignored.**
+
+Measured: 4°/6°/8°/10° produce no motion; 10.5° and above do. Every one of
+them returns `ok: true`. A subtle tilt is not a thing this hardware can do, so
+behaviours must be written in large moves — and the sub-threshold move must be
+rejected at build time, because the hardware reports it as a success.
+
+**3. Drift is corrected against a persistent home, not against where the beat
+started.**
+
+Every dome move undershoots by ~3°, so a gesture built from deltas never
+returns to its origin. Anchoring the correction to each beat's own starting
+angle fails silently: the residual is always ~3°, always below the threshold,
+so the correction never fires and the dome walks anyway (measured −24.58° →
+−41.17° over five beats). A **fixed** home lets error accumulate until it is
+large enough to command, producing a bounded sawtooth instead of a slide.
+
+**4. Every beat ends on a D-012 status colour.**
+
+An LED colour we set is state and survives the link dropping, so whatever a
+beat leaves lit is what the household sees. A beat that ends mid-expression
+leaves R2 permanently mid-expression. Validation rejects a beat whose last step
+is not a colour reset to one of the three status colours.
+
+### Consequences
+
+- The behaviour table in `r2-capabilities.md` §4 needs its dome column rewritten:
+  "±15° alternating", "quick ±30°", "small repeated twitch" — the last is not
+  achievable at all, and any figure under 12° is fiction.
+- **True simultaneity is unavailable** while composition happens outside the
+  daemon: the queue loop is serial (`r2_probe.py:1443`). Batching a phrase's
+  requests gets 0.12 s pacing and `settle=0` lets motion outlive its command,
+  but overlapping channels properly needs the daemon-side timeline executor
+  (#43). This is the strongest argument for that issue.
+- Sound must be queued **before** the dome move it accompanies. The reverse was
+  tried first and refuted by the operator: audio onset is slower than the batch
+  spacing.
+- Beats are slower than designed. A dome move costs ~2.2 s of dead time
+  regardless of how far it travels, so a three-move gesture cannot run under
+  ~7 s. Behaviours that need to feel quick must not move the dome.
+
+### Rejected
+
+- **Tuning the gaps to make the dropped moves land.** Pursued for one round on
+  the hypothesis that moves issued into live travel were being discarded. It
+  fitted n=2 and was wrong; the cause was the travel threshold. Recorded because
+  the wrong explanation was the more natural one.
+- **A correction constant for undershoot.** S1c already showed the deadband is a
+  gradient across the range (2.4° at +170°, 5.7° at −145°), so a constant fitted
+  at one end is wrong at the other. Re-reading the angle beats modelling it.

@@ -161,18 +161,27 @@ measured across 12 consecutive 30° steps. It does *not* scale with move size:
 a 15° command and a 30° command lose about the same amount at the same part of
 the range. A correction constant fitted at one end will be wrong at the other.
 
-**There is a minimum effective dome increment of roughly 5°.** Discovered by
-accident and worth more than the range numbers: the return-to-start walk
-commanded the same 4.2° gap **21 times in a row and the dome never moved**,
-while every command returned success. A move smaller than the local deadband
-produces no motion and no error.
+**There is a minimum effective dome increment.** Discovered by accident and
+worth more than the range numbers: the return-to-start walk commanded the same
+4.2° gap **21 times in a row and the dome never moved**, while every command
+returned success. A move smaller than the local deadband produces no motion and
+no error.
+
+> [!danger] The "roughly 5°" figure below was SUPERSEDED on 2026-08-17
+> This session saw 4.2° fail and inferred a threshold of ~5°. That was a
+> **lower bound mistaken for a boundary** — nothing between 4.2° and 15° was
+> ever commanded. The boundary was measured directly on 2026-08-17 and sits
+> between **10.0° and 10.5°** near −32°, twice the inferred figure. See
+> [S2a — composing a behaviour](#s2a-first-composed-behaviour--observed-2026-08-17-on-d2-6f6b-issue-43).
+> The rest of this subsection stands; only the number is wrong.
 
 > [!warning] Consequence for the behavior layer
 > `express_curious()` cannot do a subtle 2° dome tilt — it will do nothing,
-> silently, and report success. **The smallest legible dome gesture is ~5°**,
-> and choreography that chains many small moves loses ~3-5° per command with no
-> feedback that it happened. Prefer fewer, larger moves; re-read the angle
-> rather than integrating commanded deltas.
+> silently, and report success. **The smallest legible dome gesture is ~12°**
+> (corrected 2026-08-17; this said ~5° and that was an inference, not a
+> measurement), and choreography that chains many small moves loses ~3-5° per
+> command with no feedback that it happened. Prefer fewer, larger moves;
+> re-read the angle rather than integrating commanded deltas.
 
 Raw per-move data (before/commanded/landed, settle samples) is in the vault at
 [[Experiments/Dome Survey]]. **UNKNOWN:** whether the deadband gradient is
@@ -878,6 +887,116 @@ closely (e.g. id 7: 5.31 s / 20 events in S1d, 5.33 and 5.14 s / 20 here),
 which is the reproducibility that *is* available without a camera.
 
 ---
+
+### S2a first composed behaviour — OBSERVED 2026-08-17 on `D2-6F6B` (issue #43)
+
+The first time dome, sound and light were driven as **one gesture** rather than
+as separate survey items. Driver: `mac-prototype/r2_behavior.py`, dry-tested
+offline (44 cases) before the link came up. Session at `--allow dome`.
+
+Two behaviours were built: `express_curious()` (all three channels) and
+`thinking()` (sound + light, dome deliberately still). Neither plays an
+authored animation, so neither can drive a leg action — see D-013.
+
+#### The bridge is serial, so choreography cannot mean parallel tracks
+
+The daemon's queue loop is `for req in reqs: await handle_request(...)`
+(`r2_probe.py:1443`). One request completes before the next starts. **True
+simultaneity is not reachable from outside the daemon** — which is the concrete
+argument for the daemon-side timeline executor in #43.
+
+Two things partly compensate, and both were used:
+
+1. `sorted(REQ_DIR.glob("*.json"))` drains everything already queued
+   back-to-back, so writing a phrase's request files in ONE batch paces its
+   steps at `CMD_SAFE_INTERVAL` (0.12 s) instead of the ~0.39 s round-trip
+   floor of one `./r2 send`.
+2. `_op_dome` with `settle=0` returns as soon as the move is *commanded*. The
+   dome is still physically turning while the next op runs — the overlap is
+   mechanical, not concurrent.
+
+#### Dome mechanics, measured
+
+| Property | **OBSERVED** | Method |
+|---|---|---|
+| Minimum effective travel | **between 10.0° and 10.5°** near −32° | 10 commands, 3.5 s apart, alternating direction |
+| Move duration | **~2.0–2.2 s, independent of distance** | n=4; 8.35° took 2.19 s, 22.61° took 2.07 s |
+| Undershoot | **~2.4–3.7°**, in the direction of travel | same run |
+| Sub-threshold command | **silently ignored, reports `ok: true`** | 4°/6°/8°/10° all produced ≤0.11° of motion |
+
+```
+ 4.0° -> 0.11    6.0° -> 0.00    8.0° -> 0.00   10.0° -> -0.11   (no motion)
+10.5° -> 7.08   11.0° -> 7.71   12.0° -> 8.45   14.0° -> -10.46  (motion)
+```
+
+**A move takes the same ~2 s whether it travels 8° or 22°**, so this is a
+fixed-duration move, not a slew rate. Combined with the threshold, the
+practical rule is: **12° minimum, 2.2 s apart.**
+
+> [!warning] The threshold is position-dependent and only ONE point was measured
+> S1c established that the deadband is a **gradient** — 2.4° near +170° growing
+> to 5.7° near −145°. This session measured the *motion threshold* at roughly
+> −32° only. It is very likely larger toward the bottom of the range and
+> smaller at the top. **10.0–10.5° is one point on a curve, not a constant.**
+> 12° is a working minimum with margin near centre, not a verified floor
+> everywhere.
+
+#### Two hypotheses raised and REFUTED in the same session
+
+Both are recorded because each fitted the data it was formed on and each was
+wrong, and the wrong versions are the more natural readings.
+
+| Hypothesis | Fitted | Killed by |
+|---|---|---|
+| "A dome move issued while another is still travelling is silently dropped" | n=2 — the third move of two consecutive beats vanished | A correction move that failed with **2.2 s of clear air** in front of it. The real cause is the travel threshold: all three failures were 7.5–7.8° moves. |
+| "Anchoring each beat to the angle it started at bounds the drift" | The residual was ~3° every beat, comfortably small | The anchor moved *with* the dome, so the residual was always sub-threshold and the correction **never fired once**. Measured walk: −24.58° → −32.40° → −34.93° → −37.58° → −41.17°. |
+
+The second is the more useful lesson: **a drift reference that follows the
+thing it measures is not a reference.** It measures the last step's error and
+then forgets it, which is exactly how a slow leak survives a fix aimed at it.
+
+#### Drift, and the fix that works
+
+A gesture built from deltas cannot return to where it started, because every
+leg undershoots. The fix is a **persistent home angle held across beats**
+(`DomeHome`): error accumulates against a fixed mark until it exceeds the
+~12° the firmware will act on, then one absolute-angle move pulls him back.
+
+Verified over five consecutive beats sharing one home at −45.71°:
+
+| beat | drift vs home | dome moves | correction |
+|---|---|---|---|
+| 1 | −3.59° | 3 | — |
+| 2 | −6.97° | 3 | — |
+| 3 | −9.62° | 3 | — |
+| **4** | **−3.59°** | **4** | **fired** |
+| 5 | −6.97° | 3 | — |
+
+A bounded sawtooth between ~−3.6° and ~−12°, repeating, instead of a monotonic
+walk. **Residual under ~12° is the floor of what this hardware can hold**, not
+a defect to engineer away.
+
+#### Sound must be queued BEFORE the dome move it accompanies
+
+The first build queued `dome` then `sound` 0.12 s later, on the theory that the
+dome would still be travelling when the chirp landed. **REFUTED by the
+operator**, who heard the chirp land in the pause *after* the dome settled.
+Audio onset is slower than the 0.12 s batch spacing and a small dome move
+completes in a few hundred ms, so the sound must go first for any overlap at
+all. Whether it then genuinely overlaps is **UNVERIFIED** — not yet observed
+after the reordering.
+
+#### What the operator confirmed
+
+- The **three-colour light transition reads well** — pale blue → cyan → steady
+  blue was described as "a nice transition". This is the first composed
+  expression confirmed to work as designed.
+- The **mid-gesture pause is clearly perceptible**, which was the intent: the
+  hold is what makes the beat read as a question rather than a twitch.
+
+**NOT covered:** whether the reordered chirp overlaps the turn; whether the
+whole beat reads as *curiosity* to someone who was not told what it is;
+`thinking()` was built and unit-tested but **never fired on hardware**.
 
 ## 4. Proposed semantic behavior vocabulary
 
