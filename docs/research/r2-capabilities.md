@@ -1114,11 +1114,11 @@ whole beat reads as *curiosity* to someone who was not told what it is;
 The first closed loop: the sensor stream (S1e) drives the choreography layer
 (S2a) with no human in the middle. `mac-prototype/r2_reactive.py`.
 
-> **Read the verdict carefully.** The loop is OBSERVED working end to end on
-> hardware. What is **NOT** observed is the thing its name promises: no
-> deliberate hand-on-dome touch has ever triggered it. Every live trigger so
-> far came from ambient vibration, and the operator confirmed they were not
-> touching him at the time. Sensitivity to a *pet* is UNKNOWN, not proven.
+> **RESOLVED 2026-08-18.** This section first shipped saying the loop worked
+> end to end but had never once been triggered by a hand — every live trigger
+> was ambient vibration. That is no longer true. A deliberate pet is now
+> OBSERVED to drive the full loop, and the operator confirmed the gesture
+> rendered. Detail in *Deliberate touch* below.
 
 #### What the loop does
 
@@ -1217,14 +1217,56 @@ data.** Every other number in this section can. Fixed the same session — one
 log per run — but the evidence for the headline result is weaker than it
 should be, and saying so is cheaper than pretending otherwise.
 
-#### UNKNOWN — deliberate touch
+#### OBSERVED — deliberate touch drives the loop
 
-Never tested to a conclusion. Two floor runs returned 0 reactions and **both
-had zero touches in them**: the first because the arming cue was invisible
-(D-014), the second because the operator declined to continue. The right next
-step is not another blind trial but `r2_reactive.py monitor`, which records how
-close every window came to firing and decides nothing — a threshold set from
-ratios instead of from a boolean.
+Settled 2026-08-18 by `monitor` first and a live run second, which is the order
+that mattered: two earlier runs had returned a bare "0 reactions" and that
+number cannot distinguish an untouched robot from a threshold too high to trip.
+Both had zero touches in them — the first because the arming cue was invisible
+(D-014), the second because the operator declined to continue.
+
+**A pet is not a marginal signal.** 45 s of `monitor` with the operator petting
+the dome, scoring 108 windows against a 20 s rest baseline:
+
+| | |
+|---|---|
+| peak ratio against its rest limit | `gyroscope.x` at **157.9×** |
+| channels over their limit at peak | **9** of 10 (the rule needs 2) |
+| windows with ≥2 channels over | **51** of 108 |
+| first corroborated window | t = 6.68 s — the moment the hand landed |
+
+Detection was never the constraint. Nothing about the rubric needed loosening.
+
+**The live run, at the S1e-validated 3.0 s window (12 samples at 4.00 Hz):**
+
+| | |
+|---|---|
+| opening control | silent |
+| reaction | t = 39.6 s, triggered on `attitude.pitch` |
+| settle | **timeout at 6.1 s** — the disturbance never went quiet, so he answered at the cap |
+| beat | `express_curious` completed in 10.30 s, residual 0.63° |
+| recovery | quiet |
+| closing control | **silent** |
+| dropped / decode errors | 0 / 0 |
+
+Controls silent at **both** ends, so the reaction between them is adjudicated
+rather than assumed — the first on this project that is. Operator confirmed the
+chirp *and* the dome turn, so the gesture rendered, not just the command.
+
+**Two things the run says that the numbers alone do not:**
+
+- **`settle=timeout` is the normal case for petting, not the exception.** A
+  hand resting on the dome never produces the quiet the settle waits for, so
+  the answer arrives at `SETTLE_MAX_S` (6 s) rather than ~2 s. The cap is
+  therefore load-bearing: without it, being held would mean never being
+  answered. It also means the response lands ~6 s after contact begins, which
+  is a long time to hold attention — the operator registered the chirp first
+  and needed prompting to confirm the dome.
+- **A 1.5 s window did not survive its own control on this surface.** The first
+  attempt refused to arm: the detector fired during the hands-off control. The
+  3.0 s window passed both controls on the same surface minutes later. The
+  shorter window buys ~1.5 s of latency at the cost of specificity, and on an
+  imperfect surface it is the wrong trade.
 
 #### The armed state is `listen`, not `idle`
 
@@ -1246,6 +1288,14 @@ a corroborated detection cannot be faster than several samples, and several
 samples at 4 Hz is the latency floor. The departure is adjudicated empirically
 by the negative control before anything arms, and a control failure prints the
 3.0 s fallback.
+
+**That fallback has now fired in earnest.** On 2026-08-18 the 1.5 s window
+failed its opening control and the 3.0 s window passed both controls on the
+same surface minutes later. The default is left at 1.5 s because the control
+gates it — the point of the design is that the operator never has to guess
+which window is honest today — but **3.0 s is what has actually been proven to
+hold**, and it is the right first choice on any surface that is not known
+still.
 
 ## 4. Proposed semantic behavior vocabulary
 
