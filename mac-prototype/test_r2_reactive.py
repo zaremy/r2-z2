@@ -277,13 +277,28 @@ class TestReaction(unittest.TestCase):
         self.assertIn("dome", [s.op for s in b.sent])
 
     def test_the_beats_own_noise_is_flushed_before_recovery(self):
+        """Hazard #1 in the module docstring: the beat turns the dome, the
+        dome disturbs every channel the detector watches, and a loop that
+        re-arms on that aftermath answers itself forever.
+
+        The previous version of this test asserted on a helper that read
+        `loop.reactions[-1]` -- but `react()` never appends to `reactions`,
+        only `run()` does, so the helper returned its own literal default and
+        the assertion was `"quiet" == "quiet"` with the code disconnected.
+        Deleting `self.feed.flush()` survived the entire suite."""
         c = Clock()
         b = ScriptedBridge(noisy=False)
         feed = quiet_feed(b, 20)
         loop = R.Reactive(b, feed, baseline_thresholds(), 6,
                           now=c.now, sleep=c.sleep)
-        loop.react()
-        self.assertEqual(rec_recover(loop), "quiet")
+        before = feed.flushes
+        rec = loop.react()                      # assert on react()'s OWN result
+        self.assertEqual(feed.flushes - before, 1)
+        self.assertEqual(rec["recover"], "quiet")
+        # Behavioural corollary: recovery can only have scored samples that
+        # arrived AFTER the beat. 20 pre-beat samples went in; if any survive,
+        # the flush did not happen.
+        self.assertLess(len(feed.samples), 20)
 
     def test_a_low_ceiling_refuses_the_beat_without_crashing(self):
         c = Clock()
@@ -338,8 +353,90 @@ class TestCooldown(unittest.TestCase):
         self.assertEqual(rec["cooldown_held_s"], 0.0)
 
 
-def rec_recover(loop):
-    return loop.reactions[-1]["recover"] if loop.reactions else "quiet"
+class TestStalledStream(unittest.TestCase):
+    """A dead stream is the one failure the design cannot see by itself: the
+    buffer keeps its last full window, every poll re-scores those same
+    samples, and "quiet" comes back forever."""
+
+    class DeadBridge(ScriptedBridge):
+        def _reply(self, step):
+            if step.op == "events":
+                return {"ok": True, "op": "events",
+                        "data": {"events": [], "count": 0, "dropped": 0}}
+            return super()._reply(step)
+
+    def test_a_dead_stream_is_detected_not_read_as_calm(self):
+        b = self.DeadBridge()
+        feed = R.Feed(b, MASK, EXT)
+        self.assertFalse(feed.stalled(12))
+        for _ in range(12):
+            feed.drain()
+        self.assertTrue(feed.stalled(12))
+
+    def test_it_refuses_to_perform_on_stale_data(self):
+        """settle returning "quiet" on a stalled feed is not a measurement.
+        Moving the robot on it is acting on data that stopped arriving."""
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        feed = quiet_feed(b, 20)
+        loop = R.Reactive(b, feed, baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        b.__class__ = self.DeadBridge          # the stream dies right here
+        rec = loop.react()
+        self.assertTrue(rec["stalled"])
+        self.assertTrue(rec["refused"])
+        self.assertNotIn("dome", [s.op for s in b.sent])
+
+    def test_settle_never_declares_quiet_on_a_dead_stream(self):
+        """The pre-perform refusal is the second line of defence. This is the
+        first: a full window that has STOPPED being refreshed is not evidence
+        of calm, and re-scoring the same six samples every 250 ms produces
+        "quiet" forever."""
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        feed = quiet_feed(b, 20)          # a full, quiet window already held
+        loop = R.Reactive(b, feed, baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        b.__class__ = self.DeadBridge     # ...and now nothing more arrives
+        outcome, _ = loop._watch_until(c.now() + 10.0,
+                                       want_quiet_s=R.SETTLE_QUIET_S)
+        self.assertEqual(outcome, "timeout")
+
+    def test_a_flush_clears_the_stall_counter(self):
+        b = self.DeadBridge()
+        feed = R.Feed(b, MASK, EXT)
+        for _ in range(12):
+            feed.drain()
+        feed.flush()
+        self.assertFalse(feed.stalled(12))
+
+
+class TestCorroboration(unittest.TestCase):
+    """CLAUDE.md: single-channel firing meant one encoder blip could trip it,
+    and did -- r2_head_angle produced a lone false positive in 1 of 4 no-touch
+    controls. Nothing in any unittest suite covered the rule; changing
+    CHANNELS_TO_CORROBORATE from 2 to 1 survived all four suites."""
+
+    def _one_channel_window(self, n=6):
+        import struct
+        out = []
+        for i in range(n):
+            v = {k: 0.001 * (i % 2) for k in ORDER}
+            v[("gyroscope", "x")] = 5.0 if i % 2 else -5.0   # exactly ONE
+            out.append({"t": float(i), "raw": "",
+                        "decoded": P.decode_sensor_stream(
+                            bytes.fromhex(payload(v)), MASK, EXT)})
+        return out
+
+    def test_one_channel_alone_does_not_fire(self):
+        hot, _ = R.fires(self._one_channel_window(), baseline_thresholds())
+        self.assertFalse(hot)
+
+    def test_but_it_does_show_up_in_the_ratios(self):
+        # It must be visible as evidence even though it does not fire --
+        # otherwise `monitor` could not tell a near-miss from silence.
+        rs = R.ratios(self._one_channel_window(), baseline_thresholds())
+        self.assertGreaterEqual(max(rs.values()), 1.0)
 
 
 class TestSelfTrigger(unittest.TestCase):
@@ -507,11 +604,30 @@ class TestSessionWiring(unittest.TestCase):
     NOISY_ONCE_ARMED = 210
 
     def test_a_disturbance_while_armed_performs_the_beat(self):
-        b = SessionBridge(noisy=False, go_noisy_after=self.NOISY_ONCE_ARMED)
+        b = SessionBridge(noisy=False, go_noisy_after=self.NOISY_ONCE_ARMED,
+                          quiet_again_after=self.NOISY_ONCE_ARMED + 8)
         self.assertEqual(self._session(b), 0)
         self.assertIn("dome", [s.op for s in b.sent])
 
-    def test_the_daemons_ceiling_overrides_the_flag(self):
+    def test_a_detector_that_drifts_loud_fails_the_closing_control(self):
+        """The opening control proves it was honest when it armed. Only the
+        closing one proves it still was when it stopped -- and thresholds are
+        frozen from a baseline taken in a pose the dome has since walked away
+        from, so drift is the expected failure."""
+        b = SessionBridge(noisy=False, go_noisy_after=self.NOISY_ONCE_ARMED)
+        self.assertEqual(self._session(b), 7)
+
+    def test_a_ceiling_too_low_is_refused_before_the_operator_waits(self):
+        """`perform` refuses on tier, but only after calibration and the
+        control have both run -- 50 s of the operator standing still to learn
+        the daemon was started wrong. And at `read` the LED writes are
+        refused too, so the arming cue silently never happens."""
+        b = SessionBridge(noisy=False)
+        b.lock = {"pid": 1, "ceiling": "leds", "started": 0}
+        self.assertEqual(self._session(b), 6)
+        self.assertEqual(b.sent, [])          # nothing spent, nothing moved
+
+    def test_the_daemons_ceiling_overrides_the_flag_before_arming(self):
         """The flag is the operator's memory of how they launched it; the lock
         is what they actually launched. This test only means anything if a
         reaction actually FIRES -- the first version asserted 'no dome op' on
@@ -519,7 +635,9 @@ class TestSessionWiring(unittest.TestCase):
         ceiling logic did."""
         b = SessionBridge(noisy=False, go_noisy_after=self.NOISY_ONCE_ARMED)
         b.lock = {"pid": 1, "ceiling": "read", "started": 0}
-        self._session(b, ceiling="dome")
+        # The flag says dome; the lock says read. The lock wins, and the
+        # pre-flight now refuses on it instead of discovering it mid-beat.
+        self.assertEqual(self._session(b, ceiling="dome"), 6)
         self.assertNotIn("dome", [s.op for s in b.sent])
 
     def test_a_stuck_detector_refuses_the_whole_session(self):
@@ -532,13 +650,144 @@ class TestSessionWiring(unittest.TestCase):
                               for s in b.sent if s.op == "sensors"])
 
 
+class TestTeardownAlwaysRuns(unittest.TestCase):
+    """Every exit path must put R2 back. The setup used to sit OUTSIDE the
+    try, so the one path that returned early skipped the teardown entirely."""
+
+    def _session(self, bridge, log_dir=None):
+        import argparse
+        import tempfile
+        args = argparse.Namespace(baseline=30.0, control=20.0, max_s=5.0,
+                                  max_reactions=1, ceiling="dome", window=1.5)
+        c = Clock()
+        real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
+        real_dir = R.LOG_DIR
+        with tempfile.TemporaryDirectory() as d:
+            R.LOG_DIR = Path(log_dir) if log_dir else Path(d)
+            try:
+                return R.run_session(args, now=c.now, sleep=c.sleep)
+            finally:
+                R.FileBridge, R.LOG_DIR = real, real_dir
+
+    def test_a_failed_stream_enable_still_tidies_up(self):
+        """`ok: False` includes "no response", and a lost reply is not
+        evidence the packet missed -- the stream may be ON. Returning without
+        attempting the disable leaks it, and leaves R2 parked in the DARK
+        that the arm cue uses as a transient."""
+        b = SessionBridge(noisy=False, fail_stream_enable=True)
+        self.assertEqual(self._session(b), 3)
+        flags = [s.params.get("enable") for s in b.sent if s.op == "sensors"]
+        self.assertIn(False, flags)              # disable was attempted
+        self.assertEqual(b.sent[-1].op, "leds")
+        self.assertEqual(b.sent[-1].params["channels"],
+                         B.front(B.BASE_NEUTRAL))   # NOT left dark
+
+    def test_a_refusal_to_arm_still_tidies_up(self):
+        b = SessionBridge(noisy=False, go_noisy_after=125)
+        self.assertEqual(self._session(b), 5)
+        self.assertIn(False, [s.params.get("enable")
+                              for s in b.sent if s.op == "sensors"])
+        self.assertEqual(b.sent[-1].params["channels"],
+                         B.front(B.BASE_NEUTRAL))
+
+    def test_the_teardown_stops_him_first(self):
+        """"Default to STOP. Disconnect or failure must result in stop, not
+        last-command." Turning the sensor stream off and setting a colour are
+        not stopping: if a session dies between a dome step and its settle,
+        nothing else in the teardown halts him. `stop` is permitted at every
+        tier precisely so it is always available here."""
+        b = SessionBridge(noisy=False)
+        self._session(b)
+        ops = [s.op for s in b.sent]
+        self.assertIn("stop", ops)
+        # First in the teardown batch, before the housekeeping.
+        tail = ops[ops.index("stop"):]
+        self.assertLess(tail.index("stop"), tail.index("sensors"))
+        self.assertLess(tail.index("stop"), tail.index("leds"))
+
+    def test_an_unwritable_log_does_not_cost_the_teardown(self):
+        """The log write lives in a `finally`. Unguarded, a full disk raises
+        THERE -- masking whatever was already propagating and skipping the
+        robot teardown, trading R2's physical state for a logging
+        convenience."""
+        import tempfile
+        b = SessionBridge(noisy=False)
+        with tempfile.TemporaryDirectory() as d:
+            blocked = Path(d) / "not-a-dir"
+            blocked.write_text("this is a file, so mkdir() must fail")
+            rc = self._session(b, log_dir=blocked)
+        self.assertEqual(rc, 0)                  # the run's own result stands
+        self.assertIn(False, [s.params.get("enable")
+                              for s in b.sent if s.op == "sensors"])
+        self.assertEqual(b.sent[-1].params["channels"],
+                         B.front(B.BASE_NEUTRAL))
+
+
+class TestRemainingGuards(unittest.TestCase):
+    """Three guards that survived mutation until an independent review pointed
+    at them. Each one is a refusal, and a refusal that no test exercises is
+    indistinguishable from a refusal that was deleted."""
+
+    def _session(self, bridge, fn=None, **over):
+        import argparse
+        import tempfile
+        args = argparse.Namespace(baseline=30.0, control=20.0, max_s=5.0,
+                                  max_reactions=1, ceiling="dome", window=1.5)
+        for k, v in over.items():
+            setattr(args, k, v)
+        c = Clock()
+        real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
+        real_dir = R.LOG_DIR
+        with tempfile.TemporaryDirectory() as d:
+            R.LOG_DIR = Path(d)
+            try:
+                return (fn or R.run_session)(args, now=c.now, sleep=c.sleep)
+            finally:
+                R.FileBridge, R.LOG_DIR = real, real_dir
+
+    def test_too_few_channels_refuses_to_arm(self):
+        """Fewer than two channels with a usable limit means the two-channel
+        corroboration rule can never be met, so nothing would EVER fire and
+        the session would look calm for its whole duration."""
+        b = SessionBridge(noisy=False)
+        self.assertEqual(self._session(b, baseline=1.0), 4)
+        self.assertNotIn("dome", [s.op for s in b.sent])
+
+    def test_the_process_wide_dome_home_is_reset_per_session(self):
+        """A fresh session inherits a dome parked wherever yesterday left it.
+        Carrying the old anchor over means the drift correction aims at a mark
+        that no longer exists."""
+        B._DEFAULT_HOME.angle = 999.0
+        try:
+            self._session(SessionBridge(noisy=False))
+            self.assertIsNone(B._DEFAULT_HOME.angle)
+        finally:
+            B.reset_default_home()
+
+    def test_monitor_moves_nothing_and_tidies_up(self):
+        """monitor is what #59 tells the operator to run, and it duplicated
+        the whole enable/calibrate/teardown wiring with zero coverage."""
+        b = SessionBridge(noisy=False)
+        self.assertEqual(self._session(b, fn=R.monitor_session, max_s=20.0), 0)
+        self.assertNotIn("dome", [s.op for s in b.sent])
+        self.assertNotIn("sound", [s.op for s in b.sent])
+        self.assertIn(False, [s.params.get("enable")
+                              for s in b.sent if s.op == "sensors"])
+        self.assertEqual(b.sent[-1].params["channels"],
+                         B.front(B.BASE_NEUTRAL))
+
+
 class SessionBridge(ScriptedBridge):
     """A ScriptedBridge that also answers the daemon-liveness question."""
 
-    def __init__(self, go_noisy_after: int | None = None, **kw):
+    def __init__(self, go_noisy_after: int | None = None,
+                 quiet_again_after: int | None = None,
+                 fail_stream_enable: bool = False, **kw):
         super().__init__(**kw)
         self.lock = {"pid": 1, "ceiling": "dome", "started": 0}
         self.go_noisy_after = go_noisy_after
+        self.quiet_again_after = quiet_again_after
+        self.fail_stream_enable = fail_stream_enable
         self.polls = 0
 
     def daemon(self):
@@ -552,6 +801,19 @@ class SessionBridge(ScriptedBridge):
             self.polls += 1
             if self.polls > self.go_noisy_after:
                 self.noisy = True
+            # The hand lifts. Without this the closing control correctly
+            # reports a detector that fires on nothing, and every session
+            # test would exit 7 instead of reaching its own assertion.
+            if (self.quiet_again_after is not None
+                    and self.polls > self.quiet_again_after):
+                self.noisy = False
+        # Fail only the ENABLE. The disable must still be attempted, and must
+        # still succeed, or the test cannot tell "teardown ran" from
+        # "teardown was skipped".
+        if (step.op == "sensors" and self.fail_stream_enable
+                and step.params.get("enable")):
+            return {"ok": False, "op": "sensors",
+                    "error": "no response for 1787000000000000.json"}
         return super()._reply(step)
 
 

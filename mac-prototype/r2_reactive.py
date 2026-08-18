@@ -8,7 +8,13 @@ nobody listens to, and an expression nobody triggers. This joins them.
     hand on the dome -> disturbance clears what rest produces
                      -> WAIT for him to stop rocking
                      -> express_curious()
-                     -> wait for quiet again, re-arm
+                     -> wait for quiet again, hold the beat's cooldown, re-arm
+
+A control runs at BOTH ends. The opening one refuses to arm a detector that
+fires on nothing; the closing one marks the whole run suspect if specificity
+drifted somewhere inside it. One control proves less than half of what two do,
+and the thresholds are frozen from a baseline taken in a pose the dome does
+not stay in.
 
 Run it as one continuous session. Unlike the S1e survey there is nothing to
 fire on "go": the operator pets him whenever they like and the loop is
@@ -18,6 +24,15 @@ because CLAUDE.md forbids leaving loops running unattended.
     ./r2 daemon --allow dome          # express_curious is a dome-tier beat
     python3 r2_reactive.py selftest   # no hardware, no daemon
     python3 r2_reactive.py run
+
+    ./r2 daemon --allow read          # monitor moves NOTHING, so `read` is
+    python3 r2_reactive.py monitor    # the correct ceiling for it
+
+`monitor` records how close every window came to firing and decides nothing.
+Reach for it whenever a `run` returns a bare "0 reactions": that number is
+equally consistent with an untouched robot and with a threshold too high to
+ever trip, and telling those apart by re-running `run` costs the operator's
+hands for no information.
 
 THE THREE THINGS THAT MAKE THIS HARD, none of which are the detection:
 
@@ -113,6 +128,15 @@ class Feed:
         self.samples: list[dict] = []
         self.dropped = 0
         self.decode_errors = 0
+        self.flushes = 0
+        # Consecutive drains that returned nothing. A DEAD stream is the one
+        # failure this whole design cannot see by itself: the buffer keeps its
+        # last full window, every poll re-scores those same samples, and
+        # "quiet" comes back forever. A settle completes, the beat performs,
+        # and a 180 s armed session reports 0 reactions -- identical to an
+        # untouched robot. CLAUDE.md: prove the channel live before trusting
+        # silence.
+        self.stale_polls = 0
 
     def flush(self) -> None:
         """Discard whatever accumulated, and forget what we already held.
@@ -121,6 +145,8 @@ class Feed:
         our own dome move produced are not evidence about a hand."""
         self.bridge.send_batch([Step("events", {})], timeout=15)
         self.samples.clear()
+        self.stale_polls = 0
+        self.flushes += 1
 
     def drain(self) -> int:
         """Pull whatever arrived since the last call. Returns how many."""
@@ -144,7 +170,16 @@ class Feed:
             n += 1
         if len(self.samples) > self.keep:
             self.samples = self.samples[-self.keep:]
+        self.stale_polls = 0 if n else self.stale_polls + 1
         return n
+
+    def stalled(self, polls: int) -> bool:
+        """Has the stream produced NOTHING for `polls` consecutive drains?
+
+        Separate from `dropped`, which counts ring evictions -- the opposite
+        problem. Nothing in the record distinguished a deaf session from a
+        calm one before this."""
+        return self.stale_polls >= polls
 
     def window(self, n: int) -> list[dict]:
         """The trailing `n` samples, or nothing if we do not have `n` yet.
@@ -207,6 +242,7 @@ class Reactive:
         self.ceiling, self.beat_factory = ceiling, beat_factory
         self.now, self.sleep = now, sleep
         self.reactions: list[dict] = []
+        self.stalled = False
 
     # -- phases ------------------------------------------------------------
 
@@ -226,11 +262,15 @@ class Reactive:
                 quiet_since = None
                 if want_quiet_s is None:
                     return "fired", chan
-            elif win:
-                # Only a FULL window counts toward quiet. A partial window is
-                # not evidence of calm, it is absence of data -- and treating
-                # it as calm is how a recovery wait ends early, straight after
-                # the flush that emptied the ring.
+            elif win and not self.feed.stalled(self.STALE_POLLS):
+                # Only a FULL window counts toward quiet, AND only while
+                # samples are still arriving. A partial window is not evidence
+                # of calm, it is absence of data -- and neither is a full one
+                # that stopped being refreshed. On a dead stream the same six
+                # samples are re-scored every poll and "quiet" comes back
+                # forever, so the settle completes, the beat performs, and a
+                # whole session reports 0 reactions indistinguishably from an
+                # untouched robot.
                 if quiet_since is None:
                     quiet_since = self.now()
                 elif want_quiet_s is not None and \
@@ -259,12 +299,33 @@ class Reactive:
                             f"him -- it is stuck on, and every reaction it "
                             f"produces would be void"}
 
+    # 1.5 s of COMPLETE silence at a 0.25 s poll. At 4 Hz that is six
+    # consecutive missed samples, which is not jitter. It also has to be
+    # SHORTER than the shortest settle can complete in (SETTLE_QUIET_S / POLL_S
+    # = 6 polls) -- set at 12, the guard could never fire during a settle,
+    # because quiet was declared first and `react` had already moved on.
+    STALE_POLLS = 6
+
     def react(self) -> dict:
         """Settle, perform, recover. Returns the record for one reaction."""
         t0 = self.now()
         settle, _ = self._watch_until(self.now() + SETTLE_MAX_S,
                                       want_quiet_s=SETTLE_QUIET_S)
         settled_s = round(self.now() - t0, 2)
+
+        # DO NOT PERFORM INTO A DEAD STREAM. `settle` returning "quiet" on a
+        # stalled feed is not a measurement -- it is the same six samples
+        # re-scored every poll. Moving the robot on the strength of that is
+        # acting on data that stopped arriving.
+        if self.feed.stalled(self.STALE_POLLS):
+            return {"settle": settle, "settle_s": settled_s,
+                    "cooldown_held_s": 0.0, "beat": None, "beat_ok": False,
+                    "refused": True, "stalled": True,
+                    "beat_error": "sensor stream produced nothing for "
+                                  f"{self.STALE_POLLS} consecutive polls; "
+                                  "refusing to perform on stale data",
+                    "elapsed_s": 0.0, "residual_deg": None,
+                    "recover": "stalled"}
 
         beat = self.beat_factory()
         result = B.perform(beat, self.bridge,
@@ -298,7 +359,16 @@ class Reactive:
                 "recover": recover}
 
     def run(self, max_s: float, max_reactions: int) -> dict:
-        """Arm and stay armed until one of the two bounds is hit."""
+        """Arm and stay armed until one of the two bounds is hit.
+
+        `max_s` bounds when the loop stops LISTENING, not when it returns. A
+        reaction that starts at 179.9 s still runs to completion, so the wall
+        clock can overrun by one full cycle (settle + beat + recover +
+        cooldown, worst case ~54 s). That is deliberate: cutting a beat off
+        mid-gesture would leave R2 mid-expression, which is a worse state
+        than a session that runs long. The overrun is bounded, and the
+        cooldown is the last thing in it, so nothing is moving during it.
+        """
         # Blue steady: "on / waiting / neutral" (D-012). The operator needs to
         # know from across the room that he is listening -- a state that lived
         # only in my console would be invisible to the person whose hand is
@@ -323,16 +393,29 @@ class Reactive:
             # here rather than in a longer recovery timeout.
             self.feed.flush()
             outcome, chan = self._watch_until(end, want_quiet_s=None)
+            if self.feed.stalled(self.STALE_POLLS):
+                self.stalled = True
+                break
             if outcome != "fired":
                 break
             rec = self.react()
             rec["trigger_channel"] = chan
             rec["at_s"] = round(max_s - (end - self.now()), 2)
             self.reactions.append(rec)
+        # DISARM IS AN EDGE TOO. `_tidy` also ends on BASE_NEUTRAL, so
+        # "listening" and "session over" were the same blue -- the operator is
+        # across the room, cannot see the console, and would keep petting a
+        # robot that had stopped listening. D-014's own consequence clause:
+        # any affordance meaning "act now" must define its before state, and
+        # that applies to the moment it stops meaning it.
+        self.bridge.send_batch([Step("leds", {"channels":
+                                              B.front((0, 0, 0))})])
         return {"reactions": self.reactions,
                 "count": len(self.reactions),
-                "stopped": "max_reactions" if len(self.reactions)
-                           >= max_reactions else "time",
+                "stalled": self.stalled,
+                "stopped": "stalled" if self.stalled else
+                           ("max_reactions" if len(self.reactions)
+                            >= max_reactions else "time"),
                 "dropped_events": self.feed.dropped,
                 "decode_errors": self.feed.decode_errors}
 
@@ -364,7 +447,34 @@ def calibrate(bridge, feed, seconds: float, window_n: int,
             "_thresholds": thresholds}
 
 
-def monitor_session(args) -> int:
+def _tidy(bridge) -> None:
+    """Put R2 back: stream off, a defined colour on. Never raises.
+
+    Shared by both sessions because it is the one thing that must happen on
+    every exit path, and two copies of it is two chances to fix only one.
+    The disable is attempted even when the enable was never confirmed -- a
+    lost reply is not evidence the packet missed.
+    """
+    try:
+        bridge.send_batch([
+            # STOP FIRST. "Default to STOP. Disconnect or failure must result
+            # in stop, not last-command." If a session dies between a dome
+            # step and its settle, nothing else here halts him -- turning the
+            # sensor stream off and setting a colour are not stopping. `stop`
+            # is permitted at every tier precisely so this is always available.
+            Step("stop", {}),
+            Step("sensors", {"enable": False}),
+            Step("leds", {"channels": B.front(B.BASE_NEUTRAL)}),
+        ], timeout=15)
+    except BaseException as e:
+        # BaseException, not Exception: a Ctrl-C landing inside the teardown
+        # is a plausible operator reflex on a session that runs long, and it
+        # must not escape a `finally` and skip the log write below it.
+        # r2_probe.py:1697 makes the same choice for the same reason.
+        print(f"!! could not tidy up: {type(e).__name__}: {e}")
+
+
+def monitor_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
     """Record how close he comes to firing, and decide nothing.
 
     Exists because two live runs returned "0 reactions" and that number
@@ -387,21 +497,27 @@ def monitor_session(args) -> int:
     started = time.time()
     window_n = window_n_for(STREAM_HZ, args.window)
 
-    bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
-                      timeout=15)
-    r = bridge.send_batch([Step("sensors", {"enable": True, "groups": GROUPS,
-                                            "ext_groups": EXT_GROUPS})],
-                          timeout=15)[0]
-    if not r.get("ok"):
-        print(f"could not enable the sensor stream: {r}")
-        return 3
-
     log = {"started": started, "mode": "monitor",
            "config": {"window_s": args.window, "baseline_s": args.baseline,
                       "monitor_s": args.max_s}}
     try:
+        # Inside the try for the same reason as run_session: an early return
+        # must not skip the teardown that turns the stream off and puts a
+        # defined colour back.
+        bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
+                          timeout=15)
+        r = bridge.send_batch([Step("sensors", {"enable": True,
+                                                "groups": GROUPS,
+                                                "ext_groups": EXT_GROUPS})],
+                              timeout=15)[0]
+        log["stream_enabled"] = r.get("ok")
+        if not r.get("ok"):
+            print(f"could not enable the sensor stream: {r}")
+            return 3
+
         print(f"HANDS OFF. Baseline for {args.baseline:.0f}s...")
-        cal = calibrate(bridge, feed, args.baseline, window_n)
+        cal = calibrate(bridge, feed, args.baseline, window_n,
+                        now=now, sleep=sleep)
         th = cal["_thresholds"]
         log["calibration"] = {k: v for k, v in cal.items()
                               if k != "_thresholds"}
@@ -414,18 +530,18 @@ def monitor_session(args) -> int:
               f"{args.max_s:.0f}s. Nothing will move; I am only watching.\n")
         feed.flush()
         track: list[dict] = []
-        end = time.monotonic() + args.max_s
-        while time.monotonic() < end:
+        end = now() + args.max_s
+        while now() < end:
             feed.drain()
             win = feed.window(window_n)
             if win:
                 rs = ratios(win, th)
                 top = sorted(rs.items(), key=lambda kv: -kv[1])[:3]
                 track.append({
-                    "t": round(args.max_s - (end - time.monotonic()), 2),
+                    "t": round(args.max_s - (end - now()), 2),
                     "over": sum(1 for v in rs.values() if v >= 1.0),
                     "top": [(k, round(v, 3)) for k, v in top]})
-            time.sleep(POLL_S)
+            sleep(POLL_S)
 
         log["track"] = track
         log["raw"] = [s["raw"] for s in feed.samples]
@@ -443,18 +559,15 @@ def monitor_session(args) -> int:
             print(f"   t={r['t']:6.2f}s  over={r['over']}  {r['top']}")
         return 0
     finally:
+        _tidy(bridge)
         log["ended"] = time.time()
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        out = LOG_DIR / f"s2b-monitor-{int(started)}.json"
-        out.write_text(json.dumps(log, indent=2))
-        print(f"log: {out.name}")
         try:
-            bridge.send_batch([
-                Step("sensors", {"enable": False}),
-                Step("leds", {"channels": B.front(B.BASE_NEUTRAL)}),
-            ], timeout=15)
-        except Exception as e:
-            print(f"!! could not tidy up: {type(e).__name__}: {e}")
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            log_file = LOG_DIR / f"s2b-monitor-{int(started)}.json"
+            log_file.write_text(json.dumps(log, indent=2))
+            print(f"log: {log_file.name}")
+        except (OSError, TypeError, ValueError) as e:
+            print(f"!! could not write the run log: {type(e).__name__}: {e}")
 
 
 def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
@@ -492,38 +605,79 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
         "recover_quiet_s": RECOVER_QUIET_S, "max_s": args.max_s,
         "max_reactions": args.max_reactions, "ceiling": ceiling}}
 
-    # Dark through calibration and the control, so that going blue at arm
-    # time is a change the operator can SEE rather than a colour they have to
-    # have been told to expect.
-    bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
-                      timeout=15)
+    # EVERYTHING that changes the robot lives inside the try, so the teardown
+    # in `finally` covers it. Both of these used to sit above it, and both
+    # leaked on the one path that skipped the teardown:
+    #
+    #   - the dark LEDs are a TRANSIENT, not a state (D-014 says dark is the
+    #     absence of a colour, used to make the next one legible). Returning
+    #     early left R2 parked in it, and whatever a session leaves lit is
+    #     what the household sees until something changes it.
+    #   - `ok: False` includes "no response", and a lost reply is NOT evidence
+    #     the packet missed. An unconfirmed enable may well have enabled the
+    #     stream, so the disable has to be attempted regardless. This is the
+    #     same attempted-enable-sets rule already fixed one layer down in
+    #     r2_probe.py, reintroduced here by putting the call in the wrong
+    #     block.
+    # CHECK THE CEILING NOW, not 50 s from now. `perform` refuses on tier and
+    # says so clearly -- but only after calibration and the control have both
+    # run, so a daemon started at the wrong --allow costs the operator the
+    # full hands-off stretch before telling them. Worse, at `read` the LED
+    # writes are refused too, so D-014's arming cue silently does not happen:
+    # the exact failure D-014 exists to eliminate.
+    need = B.express_curious().required_tier()
+    if B.tier_rank(need) > B.tier_rank(ceiling):
+        print(f"daemon ceiling is {ceiling!r} but the behaviour needs "
+              f"{need!r}. Relaunch:\n"
+              f"  cd ~/Projects/R2Z2/mac-prototype && ./r2 daemon "
+              f"--allow {need}")
+        return 6
 
-    r = bridge.send_batch([Step("sensors", {"enable": True, "groups": GROUPS,
-                                            "ext_groups": EXT_GROUPS})],
-                          timeout=15)[0]
-    log["stream_enabled"] = r.get("ok")
-    if not r.get("ok"):
-        print(f"could not enable the sensor stream: {r}")
-        return 3
-
+    loop = None
     try:
+        bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
+                          timeout=15)
+        r = bridge.send_batch([Step("sensors", {"enable": True,
+                                                "groups": GROUPS,
+                                                "ext_groups": EXT_GROUPS})],
+                              timeout=15)[0]
+        log["stream_enabled"] = r.get("ok")
+        if not r.get("ok"):
+            print(f"could not enable the sensor stream: {r}")
+            return 3
+
         window_n = window_n_for(STREAM_HZ, args.window)
         print(f"HANDS OFF. Calibrating rest for {args.baseline:.0f}s "
               f"(window {window_n} samples)...")
         cal = calibrate(bridge, feed, args.baseline, window_n,
                         now=now, sleep=sleep)
+
+        # RE-DERIVE FROM WHAT THE STREAM ACTUALLY DID. `STREAM_HZ` is a
+        # measured constant, not a guarantee: sensor_probe.py records a
+        # session that ran at 7.3 Hz. If the rate differs, `--window 1.5` is
+        # not 1.5 seconds, and the control-failure hint telling the operator
+        # to "retry at --window 3.0" is advice in units the code ignores.
+        measured_n = window_n_for(cal["rate_hz"], args.window)
+        thresholds = cal["_thresholds"]
+        if measured_n != window_n:
+            print(f"  note: stream measured {cal['rate_hz']} Hz, not "
+                  f"{STREAM_HZ}; window is {measured_n} samples, not "
+                  f"{window_n}. Re-deriving thresholds at the real rate.")
+            window_n = measured_n
+            thresholds = empirical_thresholds(cal["series"], window_n)
         log["calibration"] = {k: v for k, v in cal.items()
                               if k not in ("_thresholds", "series")}
         log["calibration"]["series"] = cal["series"]
+        log["calibration"]["window_n"] = window_n
         print(f"  {cal['samples']} samples at {cal['rate_hz']} Hz, "
-              f"{cal['thresholds']} channels have limits")
-        if cal["thresholds"] < 2:
+              f"{len(thresholds)} channels have limits")
+        if len(thresholds) < 2:
             print("REFUSING to arm: fewer than two channels produced a usable "
                   "limit, so the two-channel corroboration rule can never be "
                   "met and nothing would ever fire.")
             return 4
 
-        loop = Reactive(bridge, feed, cal["_thresholds"], window_n,
+        loop = Reactive(bridge, feed, thresholds, window_n,
                         ceiling=ceiling, now=now, sleep=sleep)
 
         print(f"STILL HANDS OFF. Negative control for {args.control:.0f}s — "
@@ -548,31 +702,64 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
         out = loop.run(args.max_s, args.max_reactions)
         log["run"] = out
         for i, rec in enumerate(out["reactions"], 1):
+            # `elapsed_s` is absent from perform()'s refusal dict, so a
+            # refused beat printed "in Nones".
+            took = rec.get("elapsed_s")
+            took = f"in {took}s" if took is not None else "(never ran)"
             print(f"  reaction {i} at {rec['at_s']:.0f}s: "
                   f"triggered on {rec['trigger_channel']}, "
                   f"settle={rec['settle']} ({rec['settle_s']}s), "
                   f"beat {'ok' if rec['beat_ok'] else 'FAILED'} "
-                  f"in {rec['elapsed_s']}s, recover={rec['recover']}")
+                  f"{took}, recover={rec['recover']}")
         print(f"\n{out['count']} reactions, stopped on {out['stopped']}."
               f"  dropped={out['dropped_events']} "
               f"decode_errors={out['decode_errors']}")
+
+        # CLOSING CONTROL. "Run the case that must NOT fire, BEFORE any real
+        # trial -- and again at the end." The opening control proves the
+        # detector was honest when it armed; only this one proves it was
+        # still honest when it stopped. Thresholds are frozen from a baseline
+        # taken in a pose the dome has since walked away from, so specificity
+        # drift is the expected failure, not a hypothetical -- and without
+        # this every reaction in the run stays unadjudicated.
+        print(f"\nHANDS OFF again — closing control ({args.control:.0f}s).")
+        closing = loop.control(args.control)
+        log["closing_control"] = closing
+        print(f"  {closing['outcome']}: {closing['why']}")
+        if not closing["ok"]:
+            print("!! The detector fires on nothing NOW, though it was quiet "
+                  "before the run. Every reaction above is suspect: "
+                  "specificity drifted somewhere inside the session.")
+            return 7
         return 0
     finally:
-        # Turn off what we turned on, and leave him in a defined colour.
-        # Whatever a session leaves lit is what the household sees until
-        # something changes it.
+        # Reactions already performed are evidence, and they used to be
+        # discarded whenever anything raised -- the daemon going away
+        # mid-session (its 900 s idle timeout, Ctrl-C in its Terminal, R2
+        # carried out of range) is the ordinary case, not the exotic one, and
+        # `FileBridge._send` raises RuntimeError on all of them. `loop` holds
+        # them on the object, so recover them here rather than on the one
+        # path that returns cleanly.
+        if loop is not None and "run" not in log:
+            log["run"] = {"reactions": loop.reactions,
+                          "count": len(loop.reactions),
+                          "incomplete": True,
+                          "dropped_events": feed.dropped,
+                          "decode_errors": feed.decode_errors}
+        # ROBOT FIRST, disk second. The log write used to come first and was
+        # unguarded inside a `finally`: a full disk or a bad permission would
+        # raise there, mask whatever exception was already propagating, AND
+        # skip the teardown entirely -- trading R2's physical state for a
+        # logging convenience. The write is the part that is allowed to fail.
+        _tidy(bridge)
         log["ended"] = time.time()
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        out = log_path(started)
-        out.write_text(json.dumps(log, indent=2))
-        print(f"log: {out.name}")
         try:
-            bridge.send_batch([
-                Step("sensors", {"enable": False}),
-                Step("leds", {"channels": B.front(B.BASE_NEUTRAL)}),
-            ], timeout=15)
-        except Exception as e:
-            print(f"!! could not tidy up: {type(e).__name__}: {e}")
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            log_file = log_path(started)
+            log_file.write_text(json.dumps(log, indent=2))
+            print(f"log: {log_file.name}")
+        except (OSError, TypeError, ValueError) as e:
+            print(f"!! could not write the run log: {type(e).__name__}: {e}")
 
 
 def main() -> int:

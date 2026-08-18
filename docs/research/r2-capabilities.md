@@ -1123,9 +1123,31 @@ The first closed loop: the sensor stream (S1e) drives the choreography layer
 #### What the loop does
 
 `calibrate → negative control → arm → detect → settle → perform → recover →
-cooldown → re-arm`. Detection reuses S1e's validated rubric verbatim
-(peak-to-peak against an empirical rest null, two channels required to
+cooldown → re-arm → closing control`. Detection reuses S1e's validated rubric
+verbatim (peak-to-peak against an empirical rest null, two channels required to
 corroborate). The behaviour is `express_curious()` from S2a.
+
+Both controls gate: the opening one refuses to arm, and the **closing** one
+marks the whole run suspect if the detector fires on nothing at the end though
+it was quiet at the start. Thresholds are frozen from one baseline taken in a
+pose the dome then walks away from, so specificity drift inside a run is the
+expected failure rather than a hypothetical — and without a control at both
+ends every reaction between them stays unadjudicated.
+
+Two refusals sit in front of the operator's time and R2's motion:
+
+- **Ceiling pre-flight.** `perform` refuses on tier, but only after
+  calibration and the control have both run — 50 s of standing still to learn
+  the daemon was launched at the wrong `--allow`. Worse, at `read` the LED
+  writes are refused too, so D-014's arming cue silently never happens. The
+  tier is now checked against `Beat.required_tier()` before anything starts.
+- **Stalled-stream refusal.** A dead stream is the one failure this design
+  cannot see by itself: the buffer keeps its last full window, every poll
+  re-scores those same samples, and "quiet" comes back forever — so a settle
+  completes and the beat performs on data that stopped arriving. Quiet is now
+  undeclarable while nothing is being received, and the loop refuses to
+  perform on a stalled feed. CLAUDE.md: prove the channel live before trusting
+  silence.
 
 #### OBSERVED — the mechanism
 
