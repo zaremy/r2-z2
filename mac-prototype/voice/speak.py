@@ -50,7 +50,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reason import ReasonError, error_beat                  # noqa: E402,F401
 
 DEFAULT_TIMEOUT_S = 12.0
-DEFAULT_VOICE = "ash"
+# OPERATOR RULING 2026-08-18, after auditioning all 13 voices on the same
+# line and steering prompt. Not a measured result and not mine to make:
+# #47 AC1 is explicitly a taste criterion.
+DEFAULT_VOICE = "ballad"
 DEFAULT_MODEL = "gpt-4o-mini-tts"
 
 # The character, in plain language. Edit THIS to change who he is; do not add

@@ -219,6 +219,28 @@ The prompt describes *a* protocol droid and deliberately names no performer
 and no character. A test asserts that, because cloning a specific performance
 raises a likeness question this project has no reason to raise.
 
+### The voice
+
+`TTS_VOICE=ballad` — operator ruling 2026-08-18, chosen after auditioning all
+thirteen voices on the same line with the same steering prompt. Recorded as a
+taste call, because that is what #47 AC1 makes it.
+
+The full set, which the API will enumerate if you send it an invalid one:
+`alloy echo fable onyx nova shimmer coral verse ballad ash sage marin cedar`.
+
+**The audition is retained, so revisiting costs nothing.** All thirteen, the
+same line, the same steering prompt, plus ten varied in-character lines:
+
+```
+R2Z2-vault/R2Z2-vault/Experiments/data/threepio-audition-20260818/
+```
+
+Re-listen before regenerating — the set already exists and a fresh render
+would differ subtly from the one the ruling was made on, which would make the
+comparison dishonest. If `STEERING` changes, though, the audition IS stale:
+the voice was chosen against that prompt, and a different character brief
+deserves a fresh pass.
+
 ### Quiet hours are enforced here, not only upstream
 
 #47 AC3 assigns quiet hours to V7. This module gates anyway, defaulting **on**
