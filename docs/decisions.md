@@ -95,6 +95,27 @@ panel cleanly, revisit.
 *Reversed by:* the BSP failing on V2 hardware, or Wi-Fi/BLE coexistence proving
 unworkable under IDF.
 
+### Amendment A — 2026-08-18: the BSP was read; it is V2-only
+
+The "provisional" caveat above rested on the BSP source being unread. It has now
+been read — `01_project_template` builds clean on ESP-IDF v5.5.5 and fetches it.
+
+**D-005 HOLDS, conditionally on the board being V2.** The reversal condition as
+written ("the BSP failing on V2 hardware") is **not** met: BSP v2.0.3 is
+V2-native. It calls `esp_lcd_new_panel_co5300()` unconditionally and declares no
+SH8601 dependency at all, so there is no V1 display driver in the tree.
+
+The real exposure is the mirror image of the one recorded. If the board arrives
+as **V1** (SH8601 + FT3168), the BSP will drive its panel with the CO5300 init
+sequence, and switching is not a config change — there is nothing to switch to.
+Touch is unaffected: the BSP probes CST816S at `0x15` then FT5x06 at `0x38` at
+runtime, and applies the `0x10` panel X offset only in the CST816S case.
+
+**So this decision now has a hardware precondition, not just a software one.**
+Confirm the revision before writing firmware against the BSP, and treat a V1
+result as a live reversal trigger for D-005 rather than a detail. Evidence and
+the per-variant table: [research/embedded-path.md](research/embedded-path.md).
+
 ---
 
 ## D-006 — Drop the BLE peripheral role; ESP32 is central-only

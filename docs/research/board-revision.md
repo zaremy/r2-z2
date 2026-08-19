@@ -135,3 +135,69 @@ and for whether OTA is affordable later.
    that the panel renders.
 5. Record all of it in `docs/decisions.md` with the date. Every later "which
    board do I have" question should be answered from that record, not re-derived.
+
+---
+
+## Determining the revision — release the touch reset FIRST
+
+**OBSERVED 2026-08-18** by reading
+`reference/ESP32-S3-Touch-AMOLED-1.8/examples/esp-idf/90_axp2101_pmu/components/board_variant/board_variant.c`
+@ `ed7c6a5` (132 lines). No hardware and no toolchain were needed for this —
+the detector is vendored in the clone.
+
+`board_variant_detect()` does **not** simply scan the bus. In order:
+
+1. Create an I²C master bus — `I2C_NUM_0`, SDA `GPIO15`, SCL `GPIO14`,
+   400 kHz, internal pull-ups on.
+2. **`release_touch_reset()`** — add the IO expander at `0x20`, write
+   `REG_CONFIG` (`0x03`) with the output mask inverted, then `REG_OUTPUT`
+   (`0x01`) first with only `SD_CS` asserted, wait **20 ms**, then with the
+   full output mask, wait **150 ms**.
+3. Probe `0x15` → `BOARD_VARIANT_CO5300_CST816` (**V2**).
+4. Else probe `0x38` → `BOARD_VARIANT_SH8601_FT3168` (**V1**).
+5. Else `BOARD_VARIANT_UNKNOWN`.
+
+> [!warning]
+> **Step 2 is the whole trick.** The touch controller is held in reset by the
+> IO expander at power-up and does not answer until released. A plain I²C
+> scan — `08_i2c_tools`, `i2cdetect`, anything that just walks addresses —
+> sees **nothing at either address** and reports "unknown board".
+>
+> That failure is indistinguishable from a dead touch controller or a wrong
+> board, and it is the reading a bring-up session would most naturally take
+> at face value. Run the vendored detector, or replicate its reset release.
+
+Note the probe **order**: V2 is tested first. A board answering at `0x15` is
+V2 regardless of what the retailer listing said, which is the whole reason
+this file exists.
+
+The detector caches its result (`s_detected`), so it is safe to call from
+multiple components; it will not re-probe or re-toggle the reset line.
+
+---
+
+## What the BSP does on each variant — OBSERVED 2026-08-18
+
+Read from `waveshare/esp32_s3_touch_amoled_1_8` **v2.0.3**, fetched by building
+`01_project_template` on ESP-IDF v5.5.5. This is why the revision matters more
+than "which driver do we configure".
+
+| | V2 — CO5300 + CST816 | V1 — SH8601 + FT3168 |
+|---|---|---|
+| Display driver used | CO5300 ✅ correct | **CO5300 ❌ wrong** — no SH8601 driver exists in the dependency tree |
+| Touch driver used | CST816S @ `0x15` ✅ | FT5x06 @ `0x38` ✅ (compatible driver for FT3168) |
+| Panel X offset | `0x10` applied ✅ | not applied ✅ correct |
+| Net | BSP is exactly right | **display is driven by the wrong controller** |
+
+The BSP picks the offset from the **touch** probe, not from any display
+detection — its README states this directly. `esp_lcd_new_panel_co5300()` is
+called unconditionally at `esp32_s3_touch_amoled_1_8.c:458`.
+
+> [!warning]
+> **A V1 board is a D-005 reversal trigger, not a configuration detail.** There
+> is no V1 display driver to switch to; adopting one is new work. See D-005
+> Amendment A.
+
+The BSP keeps its touch probe result private — there is no variant getter in
+`include/bsp/`. That is why three examples ship the standalone `board_variant`
+component, and why anything of ours needing the variant must probe for itself.
