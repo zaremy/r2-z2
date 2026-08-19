@@ -197,9 +197,26 @@ board bring-up → ESP32→R2 BLE → service panel → local behavior engine
 
 **Before the first flash:** the board revision must be resolved. V1 is
 SH8601/FT3168, V2 is CO5300/CST816 — same part number, same product page,
-different silicon. The vendor BSP detects it at runtime, so the safe first
-flash is the vendor quickstart. **Do not flash `vthinkxie` first**; its 1.8"
-target is V1-only. See `research/board-revision.md`.
+different silicon. **Do not flash `vthinkxie` first**; its 1.8" target is
+V1-only.
+
+Detection is not the BSP's job, and this file said otherwise for three hours:
+it claimed *"the vendor BSP detects it at runtime, so the safe first flash is
+the vendor quickstart."* Half right, and the wrong half matters.
+
+- **The BSP probes touch at runtime but keeps the result private** — there is
+  no variant getter in `include/bsp/`. Detection belongs to the standalone
+  `board_variant` component, which three examples vendor and which is readable
+  in the clone today.
+- **The BSP is V2-only for the display.** `esp_lcd_new_panel_co5300()` is
+  called unconditionally and no SH8601 driver exists in the dependency tree,
+  so a V1 board would be driven by the wrong controller. That makes a V1
+  result a **D-005 reversal trigger**, not a configuration detail.
+
+Which is the point of this section rather than an aside: the correction landed
+because a spike read the source, and the sentence it replaced was written from
+a reasonable assumption that happened to be wrong. Evidence and the
+per-variant table: `research/board-revision.md` and D-005 Amendment A.
 
 ## The first thing that will bite
 
