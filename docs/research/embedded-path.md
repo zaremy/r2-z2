@@ -110,10 +110,39 @@ scheduling constraint on a shared radio before we add Wi-Fi.
 
 ### Risks in this recommendation
 
-- **UNKNOWN — the BSP source is unread.** It is a managed component, not in the
-  clone. How it selects the V1/V2 panel driver, and whether it exposes variant
-  detection at all, is unresolved until first build. The standalone
-  `board_variant` component existing in three examples hints the BSP may *not*.
+- **RESOLVED 2026-08-18 — the BSP is V2-native and cannot drive a V1 panel.**
+  Settled by building `01_project_template` unmodified on ESP-IDF v5.5.5, which
+  fetches the source. **The feared failure was backwards.** This risk was
+  written as "the BSP may not handle V2"; it handles V2 and *only* V2.
+
+  | | BSP v2.0.3 behaviour |
+  |---|---|
+  | Display | `esp_lcd_new_panel_co5300()` called **unconditionally** (`esp32_s3_touch_amoled_1_8.c:458`). No branch, no Kconfig, and **no SH8601 dependency exists** — `idf_component.yml` declares `espressif/esp_lcd_co5300: ^2.0.3` and nothing for V1 |
+  | Touch | **Runtime probe.** CST816S `0x15` first, else FT5x06 `0x38`, else `ESP_ERR_NOT_FOUND` (`:502-517`) |
+  | Panel X offset | `0x10`, applied **only when CST816S is found** (`:27`, `:507`) |
+
+  The BSP therefore infers a **display** parameter from the **touch** probe.
+  Its own README says so: *"BSP v2.0.3 keeps the FT5x06 panel offset unchanged
+  and applies the CO5300 0x10 X offset when CST816S touch is detected."*
+
+  Consequences, and they invert the risk this section recorded:
+
+  - **On a V2 board (CO5300 + CST816), D-005 holds** — the BSP is exactly right
+    and needs nothing from us.
+  - **On a V1 board (SH8601 + FT3168), the BSP drives the panel with the CO5300
+    init sequence.** Touch still works via the FT5x06 path and the offset is
+    correctly not applied, but the display controller is wrong and there is no
+    V1 driver in the tree to switch to.
+
+  So the board revision question is now **more** load-bearing than when this
+  document was written, and in the opposite direction: the risk is not that the
+  BSP mishandles a new board, it is that it cannot handle an old one.
+
+- **RESOLVED — the BSP does not expose variant detection.** The standalone
+  `board_variant` component's existence was read as a hint; it is confirmed.
+  The BSP probes touch internally and keeps the result private (there is no
+  variant getter in `include/bsp/`), which is why three examples ship their own
+  detector. Anything of ours that needs the variant must probe for itself.
 - **UNKNOWN — Wi-Fi + BLE-central coexistence under load.** ESP-IDF supports
   it; sustained BLE central traffic (120 ms command cadence + keepalive)
   alongside TLS is not something we have measured. Mitigation: R2 control must

@@ -173,3 +173,31 @@ this file exists.
 
 The detector caches its result (`s_detected`), so it is safe to call from
 multiple components; it will not re-probe or re-toggle the reset line.
+
+---
+
+## What the BSP does on each variant — OBSERVED 2026-08-18
+
+Read from `waveshare/esp32_s3_touch_amoled_1_8` **v2.0.3**, fetched by building
+`01_project_template` on ESP-IDF v5.5.5. This is why the revision matters more
+than "which driver do we configure".
+
+| | V2 — CO5300 + CST816 | V1 — SH8601 + FT3168 |
+|---|---|---|
+| Display driver used | CO5300 ✅ correct | **CO5300 ❌ wrong** — no SH8601 driver exists in the dependency tree |
+| Touch driver used | CST816S @ `0x15` ✅ | FT5x06 @ `0x38` ✅ (compatible driver for FT3168) |
+| Panel X offset | `0x10` applied ✅ | not applied ✅ correct |
+| Net | BSP is exactly right | **display is driven by the wrong controller** |
+
+The BSP picks the offset from the **touch** probe, not from any display
+detection — its README states this directly. `esp_lcd_new_panel_co5300()` is
+called unconditionally at `esp32_s3_touch_amoled_1_8.c:458`.
+
+> [!warning]
+> **A V1 board is a D-005 reversal trigger, not a configuration detail.** There
+> is no V1 display driver to switch to; adopting one is new work. See D-005
+> Amendment A.
+
+The BSP keeps its touch probe result private — there is no variant getter in
+`include/bsp/`. That is why three examples ship the standalone `board_variant`
+component, and why anything of ours needing the variant must probe for itself.
