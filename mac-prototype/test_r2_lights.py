@@ -257,5 +257,84 @@ class TestFrames(unittest.TestCase):
                         self.assertTrue(0 <= v <= 255)
 
 
+class TestWakeAssertion(unittest.TestCase):
+    """MEASURED 2026-08-18: a colour survives a link drop and a fresh connect,
+    but NOT a sleep cycle. Magenta written at 23:52:47, confirmed on the droid,
+    gone 22.1 h later after he had slept -- back to the firmware's own red/blue
+    alternation. Nothing re-established it, so the household would have seen
+    R2's own idiom every morning whatever the language said."""
+
+    def test_a_fresh_store_shows_idle(self):
+        self.assertEqual(L.resume(None), (L.DEFAULT_STATE, None))
+
+    def test_a_pending_issue_is_still_pending_in_the_morning(self):
+        # The whole point. attention is a claim about the SYSTEM, and it
+        # outlives the session that made it.
+        self.assertEqual(L.resume("attention"), ("attention", None))
+
+    def test_interaction_states_are_not_restored(self):
+        # No exchange survives a disconnect, so restoring one asserts a
+        # conversation that is not happening.
+        for name in ("listen", "thinking", "misheard", "withholding", "wake"):
+            with self.subTest(state=name):
+                shown, dropped = L.resume(name)
+                self.assertEqual(shown, L.DEFAULT_STATE)
+                self.assertEqual(dropped, name)
+
+    def test_live_conditions_are_not_restored_but_ARE_reported(self):
+        # Silently asserting a stale danger and silently clearing one are both
+        # wrong. Handing it back lets the caller re-derive it.
+        for name in ("danger", "offline"):
+            with self.subTest(state=name):
+                shown, dropped = L.resume(name)
+                self.assertEqual(shown, L.DEFAULT_STATE)
+                self.assertEqual(dropped, name,
+                                 "a dropped claim must be reported, not lost")
+
+    def test_a_corrupt_store_does_not_raise(self):
+        # A wake path that crashes on a bad name leaves R2 showing the
+        # firmware default -- the exact outcome this code exists to prevent.
+        for junk in ("", "nonsense", "IDLE", "../../etc/passwd"):
+            with self.subTest(value=junk):
+                shown, _ = L.resume(junk)
+                self.assertIn(shown, L.STATES)
+
+    def test_restoring_is_the_exception_not_the_rule(self):
+        restorable = {n for n, s in L.STATES.items() if s.restorable}
+        self.assertEqual(restorable, {"idle", "attention"})
+
+    def test_the_assertion_writes_every_bit(self):
+        # Emitting only the channels a state mentions leaves the rest holding
+        # whatever was there before, which is what an assertion exists to
+        # stop. Asserting idle would otherwise leave yesterday's holo lit.
+        want = {"0", "1", "2", "3", "4", "5", "6", "7"}
+        for name in L.STATES:
+            with self.subTest(state=name):
+                self.assertEqual(set(L.assertion(name)), want)
+
+    def test_asserting_idle_turns_the_holo_off(self):
+        self.assertEqual(L.assertion("idle")["7"], 0)
+        self.assertEqual(L.assertion("idle")["3"], 0)
+        self.assertGreater(L.assertion("listen")["7"], 0)   # control
+
+    def test_a_blinking_state_asserts_on_its_LIT_half(self):
+        # Frame zero, not an arbitrary phase: a state that asserted itself on
+        # its dark half would read as "off" until the first tick.
+        for name in ("attention",):
+            with self.subTest(state=name):
+                ch = L.assertion(name)
+                self.assertNotEqual((ch["0"], ch["1"], ch["2"]), (0, 0, 0))
+
+    def test_the_assertion_is_a_status_colour(self):
+        for name in L.STATES:
+            with self.subTest(state=name):
+                ch = L.assertion(name)
+                rgb = (ch["0"], ch["1"], ch["2"])
+                scaled = any(s.front.scale != 1.0
+                             for s in [L.STATES[name]])
+                if not scaled:
+                    self.assertIn(rgb, B.STATUS_COLOURS)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
