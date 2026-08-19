@@ -65,11 +65,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import r2_probe as P
 import r2_behavior as B
+import r2_lights as LG
 from r2_behavior import FileBridge, Step
+from r2_status import StatusLayer, StatusStore
 from sensor_probe import (GROUPS, EXT_GROUPS, masks, channels,
                           empirical_thresholds, trial_fires, window_stat)
 
 LOG_DIR = Path(__file__).parent / ".bridge"
+
+# Patchable for the same reason LOG_DIR is. Left as None the StatusLayer uses
+# its own default, which is the REAL store -- and the test suite promptly wrote
+# {"state": "idle"} into it. A test run must not be able to tell the next live
+# session what R2 is.
+STATUS_STORE: Path | None = None
 
 
 def log_path(stamp: float) -> Path:
@@ -236,10 +244,16 @@ class Reactive:
 
     def __init__(self, bridge, feed, thresholds, window_n, *,
                  ceiling: str = "dome", beat_factory=B.express_curious,
+                 status: StatusLayer | None = None,
                  now=time.monotonic, sleep=time.sleep):
         self.bridge, self.feed = bridge, feed
         self.thresholds, self.window_n = thresholds, window_n
         self.ceiling, self.beat_factory = ceiling, beat_factory
+        # Constructed rather than left None when absent. An optional status
+        # layer is not a status layer: every call site would accept the
+        # default and the wiring would be inert, which is the exact shape
+        # that left r2_lights unimported for three PRs.
+        self.status = status if status is not None else StatusLayer(bridge)
         self.now, self.sleep = now, sleep
         self.reactions: list[dict] = []
         self.stalled = False
@@ -327,9 +341,18 @@ class Reactive:
                     "elapsed_s": 0.0, "residual_deg": None,
                     "recover": "stalled"}
 
-        beat = self.beat_factory()
-        result = B.perform(beat, self.bridge,
-                           ceiling=self.ceiling, sleep=self.sleep)
+        # THROUGH THE STATUS LAYER, not straight to perform(). The beat's
+        # rest colour comes from whatever status R2 is in, and the status is
+        # re-asserted afterwards. Called directly, a beat run while status was
+        # `attention` painted blue over a pending issue and the issue stopped
+        # being pending.
+        #
+        # Curiosity is NOT a status and this does not set one: it is an
+        # expression, it is not among the ten states, and
+        # docs/behaviour-states.md is explicit that expression passes through
+        # and hands the status back.
+        result = self.status.express(self.beat_factory,
+                                     ceiling=self.ceiling, sleep=self.sleep)
         beat_ended = self.now()
 
         # Everything in the ring now is the beat's own noise, not a hand.
@@ -345,8 +368,9 @@ class Reactive:
         # quiet is instrument hygiene (is the signal usable again), cooldown
         # is character pacing (should he say this again yet). Both apply.
         held = 0.0
-        if beat.cooldown_s:
-            held = max(0.0, beat.cooldown_s - (self.now() - beat_ended))
+        cooldown_s = result.get("cooldown_s") or 0.0
+        if cooldown_s:
+            held = max(0.0, cooldown_s - (self.now() - beat_ended))
             if held:
                 self.sleep(held)
         return {"settle": settle, "settle_s": settled_s,
@@ -448,13 +472,23 @@ def calibrate(bridge, feed, seconds: float, window_n: int,
             "_thresholds": thresholds}
 
 
-def _tidy(bridge) -> None:
+def _tidy(bridge, status=None) -> None:
     """Put R2 back: stream off, a defined colour on. Never raises.
 
     Shared by both sessions because it is the one thing that must happen on
     every exit path, and two copies of it is two chances to fix only one.
     The disable is attempted even when the enable was never confirmed -- a
     lost reply is not evidence the packet missed.
+
+    THE COLOUR COMES FROM THE STATUS LAYER when there is one. This painted
+    BASE_NEUTRAL unconditionally, so a session that raised `attention` wiped
+    it on the way out -- the pending issue stopped being pending the moment
+    the session ended, and the next connect restored idle because that is what
+    the teardown had written. "Leave him in a defined state" was satisfied and
+    the state was the wrong one.
+
+    Falls back to blue when there is no status layer: a defined colour beats
+    an inherited one, and the monitor path has no status of its own.
     """
     try:
         bridge.send_batch([
@@ -465,7 +499,9 @@ def _tidy(bridge) -> None:
             # is permitted at every tier precisely so this is always available.
             Step("stop", {}),
             Step("sensors", {"enable": False}),
-            Step("leds", {"channels": B.front(B.BASE_NEUTRAL)}),
+            Step("leds", {"channels":
+                          LG.assertion(status.current) if status is not None
+                          else B.front(B.BASE_NEUTRAL)}),
         ], timeout=15)
     except BaseException as e:
         # BaseException, not Exception: a Ctrl-C landing inside the teardown
@@ -634,6 +670,29 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
               f"--allow {need}")
         return 6
 
+    # AFTER the ceiling refusal, deliberately. Asserting a status writes LEDs
+    # and the chirp announces "I am back" -- doing that for a session about to
+    # abort spends the operator's droid on an event that never happens, and it
+    # broke the invariant that a refused session moves nothing at all.
+    #
+    # MEASURED 2026-08-18: a colour we set survives a link drop and a fresh
+    # connect but NOT a sleep cycle, so a session that skips this inherits
+    # whatever the firmware reverted to -- R2's own red/blue alternation,
+    # every morning, whatever the light language says.
+    #
+    # `dropped` is a claim the store held that could not be restored (a stale
+    # danger, an interaction state whose conversation is long over). Printed
+    # rather than swallowed: silently clearing a pending claim and silently
+    # re-asserting a stale one are both wrong, and only the operator can tell
+    # which happened.
+    status = StatusLayer(
+        bridge, StatusStore(STATUS_STORE) if STATUS_STORE else None)
+    asserted, dropped = status.connect()
+    log["status"] = {"asserted": asserted, "dropped": dropped}
+    print(f"status: asserted {asserted!r}" +
+          (f"; DROPPED {dropped!r} (not restorable across a session — "
+           f"re-derive it if it still holds)" if dropped else ""))
+
     loop = None
     try:
         bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
@@ -679,7 +738,7 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
             return 4
 
         loop = Reactive(bridge, feed, thresholds, window_n,
-                        ceiling=ceiling, now=now, sleep=sleep)
+                        ceiling=ceiling, status=status, now=now, sleep=sleep)
 
         print(f"STILL HANDS OFF. Negative control for {args.control:.0f}s — "
               f"proving it can stay quiet...")
@@ -752,7 +811,7 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
         # raise there, mask whatever exception was already propagating, AND
         # skip the teardown entirely -- trading R2's physical state for a
         # logging convenience. The write is the part that is allowed to fail.
-        _tidy(bridge)
+        _tidy(bridge, status)
         log["ended"] = time.time()
         try:
             LOG_DIR.mkdir(parents=True, exist_ok=True)

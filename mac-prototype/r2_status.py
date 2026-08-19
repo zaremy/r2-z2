@@ -303,6 +303,14 @@ class StatusLayer:
         """
         beat = beat_factory(rest=self.rest_colour(), **kwargs)
         result = perform(beat, self.bridge, ceiling=ceiling, sleep=sleep)
+        # The caller schedules against the beat's cooldown -- one of the four
+        # fields the behaviour library requires precisely so R2 can be run
+        # without becoming twitchy. Building the beat happens in here now, so
+        # the number has to come back out; a caller that cannot see it would
+        # silently drop the cooldown and re-fire as fast as the sensor allows.
+        # The VALUE, not the object: the beat itself does not need to cross
+        # this boundary.
+        result["cooldown_s"] = beat.cooldown_s
         # Unconditional: a beat that failed part-way is exactly when the
         # status most needs re-establishing, and `perform` stops on failure
         # without necessarily having reached its own colour reset.

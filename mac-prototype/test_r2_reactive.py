@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import r2_probe as P
 import r2_behavior as B
+import r2_lights as LG
 import r2_reactive as R
 from sensor_probe import GROUPS, EXT_GROUPS, masks, channels, empirical_thresholds
 
@@ -344,8 +345,11 @@ class TestCooldown(unittest.TestCase):
         c = Clock()
         b = ScriptedBridge(noisy=False)
 
-        def eager():
-            beat = B.express_curious()
+        def eager(**kw):
+            # Beat factories now receive `rest=` from the status layer, which
+            # is the whole point of the wiring: a beat rests on whatever
+            # status R2 is actually in.
+            beat = B.express_curious(**kw)
             object.__setattr__(beat, "cooldown_s", 0.0)
             return beat
 
@@ -561,7 +565,7 @@ class TestSessionWiring(unittest.TestCase):
     feature lived HERE -- in how the phases were wired together -- and not one
     of them was visible to a unit test of the pieces."""
 
-    def _session(self, bridge, **over):
+    def _session(self, bridge, seed_status=None, **over):
         import argparse
         args = argparse.Namespace(baseline=30.0, control=20.0, max_s=5.0,
                                   max_reactions=1, ceiling="dome", window=1.5)
@@ -575,26 +579,106 @@ class TestSessionWiring(unittest.TestCase):
         # interleaved with genuine session logs and indistinguishable from
         # them by name. Tests must not litter the runtime directory they are
         # testing.
-        real_dir = R.LOG_DIR
+        real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(d)
+            # And the status store, for the same reason and a worse
+            # consequence: the suite wrote {"state": "idle"} into the LIVE
+            # store, so a test run could tell the next real session what R2 is.
+            R.STATUS_STORE = Path(d) / "status.json"
+            if seed_status:
+                R.StatusStore(R.STATUS_STORE).write(seed_status)
             try:
                 return R.run_session(args, now=c.now, sleep=c.sleep)
             finally:
                 R.FileBridge, R.LOG_DIR = real, real_dir
+                R.STATUS_STORE = real_store
+
+    def test_the_session_asserts_a_status_before_arming(self):
+        # MEASURED 2026-08-18: a colour we set does not survive a sleep cycle,
+        # so without this the household sees R2's own red/blue alternation
+        # every morning whatever the light language says.
+        b = SessionBridge(noisy=False)
+        self.assertEqual(self._session(b), 0)
+        leds = [s.params["channels"] for s in b.sent if s.op == "leds"]
+        self.assertEqual(leds[0], LG.assertion("idle"))
+
+    def test_a_pending_issue_survives_into_the_next_session(self):
+        b = SessionBridge(noisy=False)
+        self.assertEqual(self._session(b, seed_status="attention"), 0)
+        leds = [s.params["channels"] for s in b.sent if s.op == "leds"]
+        self.assertEqual(leds[0], LG.assertion("attention"))
+
+    def test_the_reactor_shares_the_SESSION_status_not_its_own(self):
+        """The mutation that survived the first pass. Drop `status=status`
+        from the Reactive constructor and it quietly builds its own layer:
+        same store file, but `current` never read from it, so it sits at the
+        `idle` default. A beat then rests on blue while the session is
+        asserting yellow -- the two-systems-disagreeing bug the whole wiring
+        exists to remove, reintroduced silently one keyword at a time."""
+        # `noisy=True` alone fires NOTHING -- the detector needs the stream to
+        # go loud AFTER arming. Written with noisy=True the test found no beat
+        # rest at all and would have passed on an empty list under a looser
+        # assertion. Same trigger the existing beat test uses.
+        b = SessionBridge(noisy=False,
+                          go_noisy_after=self.NOISY_ONCE_ARMED,
+                          quiet_again_after=self.NOISY_ONCE_ARMED + 8)
+        self.assertEqual(self._session(b, seed_status="attention"), 0)
+        self.assertIn("dome", [s.op for s in b.sent], "no beat fired")
+        leds = [s.params["channels"] for s in b.sent if s.op == "leds"]
+
+        # Look for the BEAT's own rest write, not any yellow. The connect
+        # assertion is yellow too, and asserting "yellow appears somewhere"
+        # passed with the wiring removed -- the mutation survived a whole
+        # round because of it. The assertion writes all EIGHT bits; a beat
+        # rests via front()/holo(), which is three or four. That width is what
+        # separates "the status layer spoke" from "the beat did".
+        beat_rests = [c for c in leds
+                      if len(c) < 8
+                      and (c.get("0"), c.get("1"), c.get("2"))
+                      == B.BASE_PENDING]
+        self.assertTrue(beat_rests,
+                        "no beat rested on the session's status — the reactor "
+                        "is using a StatusLayer of its own")
+        self.assertEqual(leds[-1], LG.assertion("attention"),
+                         "the session must end on the status it asserted")
 
     def test_the_arm_cue_is_a_visible_edge_not_a_colour(self):
         """The bug that cost a live run. He was armed blue while ALREADY blue
         -- the previous session's own teardown had left him there -- so the
         one signal saying 'now, pet him' was identical to the state before
-        it. The operator waited for a cue that had already happened."""
+        it. The operator waited for a cue that had already happened.
+
+        The session now ASSERTS idle blue on connect, which makes "already
+        blue" the guaranteed precondition rather than an unlucky one. So the
+        dark edge matters more than it did, not less, and this test checks the
+        edge relationship rather than an absolute position: write zero is the
+        status assertion, and the cue that follows still goes dark BEFORE it
+        goes blue."""
         b = SessionBridge(noisy=False)
         self.assertEqual(self._session(b), 0)
         leds = [s.params["channels"] for s in b.sent if s.op == "leds"]
         dark, blue = B.front((0, 0, 0)), B.front(B.BASE_NEUTRAL)
-        self.assertEqual(leds[0], dark)
-        self.assertIn(blue, leds)
-        self.assertLess(leds.index(dark), leds.index(blue))
+
+        # The status assertion comes first and lights him blue.
+        self.assertEqual(leds[0], LG.assertion("idle"))
+        self.assertEqual({k: leds[0][k] for k in ("0", "1", "2")}, blue)
+
+        # THE CUE IS DARK -> CYAN, not dark -> blue. Arming moved to
+        # BASE_ENGAGED when the state table landed, and this assertion did not
+        # follow it: the old version looked for a blue after the dark and
+        # found the TEARDOWN's blue several writes later. It passed on
+        # "something dark happens before the session ends", which is trivially
+        # true and never touched the arm cue at all.
+        self.assertGreater(leds.index(dark), 0,
+                           "the dark edge must follow the assertion")
+        armed = next(c for c in leds[leds.index(dark):]
+                     if {k: c.get(k) for k in ("0", "1", "2")}
+                     == B.front(B.BASE_ENGAGED))
+        self.assertLess(leds.index(dark), leds.index(armed),
+                        "the cue must go dark THEN cyan, or there is no edge")
+        self.assertNotEqual(B.front(B.BASE_ENGAGED), blue,
+                            "arming must not be the colour he is already in")
 
     def test_it_turns_off_the_stream_it_turned_on(self):
         b = SessionBridge(noisy=False)
@@ -609,7 +693,7 @@ class TestSessionWiring(unittest.TestCase):
         self._session(b)
         self.assertEqual(b.sent[-1].op, "leds")
         self.assertEqual(b.sent[-1].params["channels"],
-                         B.front(B.BASE_NEUTRAL))
+                         LG.assertion("idle"))  # all 8 bits, not just the front PSI
 
     def test_no_daemon_is_reported_before_anything_else_happens(self):
         b = SessionBridge(noisy=False)
@@ -680,12 +764,14 @@ class TestTeardownAlwaysRuns(unittest.TestCase):
                                   max_reactions=1, ceiling="dome", window=1.5)
         c = Clock()
         real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
-        real_dir = R.LOG_DIR
+        real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(log_dir) if log_dir else Path(d)
+            R.STATUS_STORE = Path(d) / "status.json"
             try:
                 return R.run_session(args, now=c.now, sleep=c.sleep)
             finally:
+                R.STATUS_STORE = real_store
                 R.FileBridge, R.LOG_DIR = real, real_dir
 
     def test_a_failed_stream_enable_still_tidies_up(self):
@@ -699,7 +785,7 @@ class TestTeardownAlwaysRuns(unittest.TestCase):
         self.assertIn(False, flags)              # disable was attempted
         self.assertEqual(b.sent[-1].op, "leds")
         self.assertEqual(b.sent[-1].params["channels"],
-                         B.front(B.BASE_NEUTRAL))   # NOT left dark
+                         LG.assertion("idle"))  # all 8 bits, not just the front PSI   # NOT left dark
 
     def test_a_refusal_to_arm_still_tidies_up(self):
         b = SessionBridge(noisy=False, go_noisy_after=125)
@@ -707,7 +793,7 @@ class TestTeardownAlwaysRuns(unittest.TestCase):
         self.assertIn(False, [s.params.get("enable")
                               for s in b.sent if s.op == "sensors"])
         self.assertEqual(b.sent[-1].params["channels"],
-                         B.front(B.BASE_NEUTRAL))
+                         LG.assertion("idle"))  # all 8 bits, not just the front PSI
 
     def test_the_teardown_stops_him_first(self):
         """"Default to STOP. Disconnect or failure must result in stop, not
@@ -739,7 +825,7 @@ class TestTeardownAlwaysRuns(unittest.TestCase):
         self.assertIn(False, [s.params.get("enable")
                               for s in b.sent if s.op == "sensors"])
         self.assertEqual(b.sent[-1].params["channels"],
-                         B.front(B.BASE_NEUTRAL))
+                         LG.assertion("idle"))  # all 8 bits, not just the front PSI
 
 
 class TestRemainingGuards(unittest.TestCase):
@@ -756,12 +842,14 @@ class TestRemainingGuards(unittest.TestCase):
             setattr(args, k, v)
         c = Clock()
         real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
-        real_dir = R.LOG_DIR
+        real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(d)
+            R.STATUS_STORE = Path(d) / "status.json"
             try:
                 return (fn or R.run_session)(args, now=c.now, sleep=c.sleep)
             finally:
+                R.STATUS_STORE = real_store
                 R.FileBridge, R.LOG_DIR = real, real_dir
 
     def test_too_few_channels_refuses_to_arm(self):
@@ -793,7 +881,7 @@ class TestRemainingGuards(unittest.TestCase):
         self.assertIn(False, [s.params.get("enable")
                               for s in b.sent if s.op == "sensors"])
         self.assertEqual(b.sent[-1].params["channels"],
-                         B.front(B.BASE_NEUTRAL))
+                         B.front(B.BASE_NEUTRAL))   # monitor has no status layer
 
 
 class SessionBridge(ScriptedBridge):
