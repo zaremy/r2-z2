@@ -118,18 +118,48 @@ little entity is continuously present in the household.
   than falling back to the unsafe one — a diagnostic must never be the most
   dangerous command in the session.
 - **An LED colour we set is STATE, not a command — it survives the link
-  dropping.** Green set in the afternoon was still lit an hour later, across
-  animations played over it, a daemon kill and a fresh connect. The firmware's
-  own resting alternation does not resume and overwrite it; an animation only
-  masks it and it returns unprompted. So the base layer is storage we own, and
-  the corollary bites: **whatever colour a session leaves him in is what the
-  household sees until something changes it.** Leave him in a defined state.
+  dropping, but NOT a sleep cycle.** Green set in the afternoon was still lit
+  an hour later, across animations played over it, a daemon kill and a fresh
+  connect. The firmware's own resting alternation does not resume and
+  overwrite it *within a session*; an animation only masks it and it returns
+  unprompted.
+
+  **The exception, MEASURED 2026-08-18:** magenta written at 23:52:47 and
+  confirmed by eye was gone 22.1 h later, back to R2's own red/blue
+  alternation, on the charger at full battery. The difference from the green
+  trial is **sleep** — every reconnect in that hour restarted the keepalive,
+  and the keepalive IS the wake command, so that droid was never allowed to
+  sleep. The original claim was not wrong, it was unscoped. (Sleep is the
+  likely destroyer, not the proven one: the 22 h also contains duration. Set a
+  colour, disconnect, wait well under the sleep timeout, reconnect and look —
+  nobody has run that.)
+
+  Two corollaries, and both bite:
+  - **Whatever colour a session leaves him in is what the household sees —
+    until he sleeps.** Leave him in a defined state anyway.
+  - **Assert the status on connect; never inherit it.** Without that the
+    household sees his own idiom every morning whatever the light language
+    says, and worse, a droid left in `attention` comes back showing nothing
+    about it — a pending issue silently stops being pending. Implemented in
+    `r2_status.StatusLayer.connect()`; the LED equivalent of *default to
+    STOP*.
 - **He never sleeps while we are connected, because our keepalive IS the wake
   command.** `DID 0x13 / CID 0x0D` every ~3 s (`r2_probe.py:523`). Any `sleep`
   we send is undone within three seconds, which is why he has no idle timeout in
   practice and why there is no working "off" — unplugging does nothing on a
   charged battery. A soft power control is a **session-lifecycle** change, not a
   new op (#38). Do not read "he stayed awake" as a firmware property; it is us.
+
+  **He DOES have an idle sleep — OBSERVED 2026-08-18, the first time we ever
+  stopped the keepalive and left him alone long enough to watch.** He reverted
+  to his resting alternation and then faded out, on the charger at full
+  battery. So "no idle timeout in practice" is exactly right — *in practice*,
+  and the practice is ours. The upper bound is a useless 22.1 h because nobody
+  was watching in between; the real timeout is cheap to measure and unmeasured:
+  disconnect, then look at 5, 15, 30 and 60 minutes.
+
+  That reframes #38. "No working off" is not a firmware limitation to engineer
+  around — it is us suppressing his own, every three seconds.
 - **Running a survey where a human is the instrument?** Use `/survey-session`.
   Brief before firing, fire within ~3 s of "go", and never suppress stderr on a
   send loop — a silent crash reads exactly like a dead device.
