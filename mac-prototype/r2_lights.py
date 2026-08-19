@@ -212,6 +212,18 @@ class StateLights:
     sound_family: str | None = None
     status: bool = True          # False for expression, which may alternate
     dimmable: bool = True
+    # Whether this state may be RESTORED on a fresh connect, or must be
+    # re-derived. DEFAULT FALSE: restoring is the exception.
+    #
+    # The test is whether the claim is about the SYSTEM or about an
+    # INTERACTION. A pending issue is still pending in the morning, so
+    # `attention` restores. Listening, thinking, misheard and withholding are
+    # all claims about an exchange in progress, and no exchange survives a
+    # disconnect -- restoring one asserts a conversation that is not
+    # happening. `danger` and `offline` are live conditions we cannot vouch
+    # for: we do not know he is still on the floor, and we know for a fact we
+    # are not offline while talking to him.
+    restorable: bool = False
     note: str = ""
 
     def fixtures(self):
@@ -321,6 +333,7 @@ _add(StateLights(
     name="idle",
     front=Pattern("steady", (BASE_NEUTRAL,)),
     back=Pattern("steady", (BASE_NEUTRAL,)),
+    restorable=True,
     note="Blue because it is the DIMMEST corner -- 0.072 relative luminance, "
          "about a tenth of green -- and idle is the state that runs for "
          "hours. Costs zero writes/s, which is the other half of the same "
@@ -372,6 +385,7 @@ _add(StateLights(
     name="attention",
     front=Pattern("blink", (BASE_PENDING,), 2.4),
     back=Pattern("blink", (BASE_PENDING,), 2.4),
+    restorable=True,
     note="Yellow, not red. D-012 assigned steady red to 'issue pending'; both "
          "IEC 60073 and every shipping consumer device put pending-attention "
          "on yellow and reserve red for danger.",
@@ -432,3 +446,70 @@ _add(StateLights(
 ))
 
 BLOCKED = ("sleep",)
+
+
+# ---------------------------------------------------------------------------
+# Waking up
+# ---------------------------------------------------------------------------
+#
+# MEASURED 2026-08-18: a colour we set survives a link drop and a fresh
+# connect, but NOT a sleep cycle. Magenta was written at 23:52:47, confirmed on
+# the droid, and 22.1 h later -- after he had slept -- he came back showing the
+# firmware's own red/blue alternation with no trace of it.
+#
+# `CLAUDE.md` says the base layer is storage we own. It is, within a session.
+# Across a sleep it is not, and nothing in this codebase re-established it, so
+# the household would have seen R2's own resting idiom every morning no matter
+# what the language said. Worse than wrong for idle: a droid left in
+# `attention` came back showing nothing about it, and a pending issue silently
+# stopped being pending.
+#
+# This is the LED equivalent of "default to STOP" -- the state after a
+# discontinuity must be one we chose, not one we inherited.
+
+DEFAULT_STATE = "idle"
+
+
+def resume(remembered: str | None) -> tuple[str, str | None]:
+    """What to show on a fresh connect, and what was dropped getting there.
+
+    Returns `(state_to_assert, dropped)`. `dropped` is the remembered state
+    when it could not be restored, so the caller can RE-DERIVE it rather than
+    have it silently vanish -- which is the failure mode this whole function
+    exists to prevent. Silently clearing a danger claim and silently asserting
+    a stale one are both wrong; reporting it is not.
+
+    Unknown or unparseable names fall back to the default rather than raising.
+    A wake path that crashes on a corrupt store leaves R2 showing the firmware
+    default, which is exactly the outcome being fixed.
+    """
+    if remembered is None:
+        return DEFAULT_STATE, None
+    state = STATES.get(remembered)
+    if state is None or not state.restorable:
+        return DEFAULT_STATE, remembered
+    return remembered, None
+
+
+def assertion(state_name: str, *, value: float = 1.0) -> dict[str, int]:
+    """The ONE write that re-establishes a status colour on connect.
+
+    A single frame, not a running animation: this is a bootstrap, and its job
+    is that R2 is showing something we chose before anything else happens. The
+    player takes over afterwards and animates from there.
+
+    Taking frame zero is deliberate rather than incidental -- for a blink that
+    is the lit half, so a state asserts itself visibly instead of starting on
+    its own dark phase and reading as "off" until the first tick.
+
+    ALL EIGHT BITS ARE WRITTEN, including an explicit zero for every fixture
+    the state does not use. Emitting only the channels a state mentions leaves
+    the others holding whatever was there before, and "whatever was there
+    before" is precisely what an assertion exists to stop. Asserting `idle` --
+    which uses neither the holo nor the logic panel -- would otherwise leave
+    yesterday's holo glowing over it.
+    """
+    ch = dict.fromkeys(
+        (str(b) for b in (*FRONT_BITS, *BACK_BITS, LED_HOLO, LED_LOGIC)), 0)
+    ch.update(STATES[state_name].frames(0.001, value=value)[0][1])
+    return ch

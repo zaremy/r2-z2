@@ -50,7 +50,7 @@ Front and back PSI unless noted. Sound column is the family, not an id.
 |---|---|---|---|---|---|---|
 | **idle** | blue steady | blue steady | off | off | — | none |
 | **wake** | sweep blue→cyan→green, 0.45 s | blue steady | ramp up | on | `R2_HEY_*` ✅ | **none** |
-| **listen** | cyan steady | cyan steady | breathe 2.2 s | blink | — | small tilt, hold |
+| **listen** | cyan steady | cyan steady | breathe 2.2 s | blink | — | **none** — see below |
 | **thinking** | cyan↔blue alt, 0.9 s | cyan↔blue alt | breathe 1.2 s | blink | `R2_EXCITED_*` ✅ | still |
 | **attention** | yellow blink 2.4 s | yellow blink 2.4 s | off | off | **unassigned** | none |
 | **danger** | red blink 0.25 s | red blink 0.25 s | off | off | `R2_ALARM_*` ✅ | none |
@@ -78,6 +78,53 @@ lost link (1.0 s). Only one of those means go and pick him up.
 >
 > This drops `EMOTE_ATTENTION` (id 9) from wake, and with it one of the two
 > `inconclusive` animation labels this table was resting on.
+
+> [!warning] **listen had "small tilt, hold" and that was unbuildable.**
+> Commanded dome travel under ~10.5 deg is silently ignored and still reports
+> `ok: true`. This file marks `idle()`'s "slow small drift" and
+> `impatient()`'s "twitch" as BROKEN for exactly that reason and missed its own
+> listen row. Either the tilt clears 12 deg -- at which point it is not small,
+> and it costs ~2.0-2.2 s -- or listening carries no dome at all. Set to
+> **none** pending an operator call.
+
+## On waking: assert, never inherit
+
+**MEASURED 2026-08-18.** A colour we set survives a link drop and a fresh
+connect. It does **not** survive a sleep cycle. Magenta was written at
+23:52:47, confirmed on the droid by eye, and 22.1 h later -- after he had
+slept -- he came back showing the firmware's own red/blue alternation with no
+trace of it.
+
+Nothing in the codebase re-established it, so the household would have seen
+R2's own resting idiom every morning regardless of what this file said. Worse
+than wrong for idle: a droid left in **attention** came back showing nothing
+about it, and a pending issue silently stopped being pending.
+
+**On connect, assert the status colour before anything else runs.** It is the
+LED equivalent of *default to STOP* -- the state after a discontinuity must be
+one we chose, not one we inherited. `r2_lights.assertion()` writes all eight
+bits, explicitly zeroing every fixture the state does not use, because a
+partial write leaves the rest holding exactly what the assertion exists to
+displace.
+
+### What may be restored, and what must be re-derived
+
+The test is whether the claim is about the **system** or about an
+**interaction**. Interactions do not survive a disconnect.
+
+| state | restored? | why |
+|---|---|---|
+| **idle** | yes | trivially still true |
+| **attention** | yes | a pending issue is still pending in the morning |
+| listen, thinking, misheard, withholding | no | claims about an exchange that has ended |
+| wake | no | an instant, not a state |
+| danger | no | a live physical condition we cannot vouch for a day later |
+| offline | no | demonstrably false — we are talking to him |
+| sleep | no | blocked anyway (#38) |
+
+A dropped claim is **returned to the caller**, never swallowed. Silently
+asserting a stale danger and silently clearing one are both wrong; reporting
+it lets the brain re-derive it.
 
 ## Expression beats
 
