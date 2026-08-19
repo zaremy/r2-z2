@@ -10,6 +10,17 @@ Prerequisites, in order:
    `../docs/research/board-revision.md`. **Do not flash `vthinkxie` firmware.**
 3. Follow the first embedded slice in `../docs/research/embedded-path.md`.
 
+**Read `../docs/port-boundary.md` before writing any of it.** The Mac
+prototype does not port, but most of what it learned does — hardware truths
+that constrain any implementation, protocol constants already cross-validated
+three ways, and the handful of designs worth rebuilding in C. It also names
+what is pure Mac scaffolding, which looks like architecture and is not.
+
+It ends with the one that will bite: **prove the link by reading the battery
+voltage, not by moving the dome.** The dome has no home position, ignores
+small commands while reporting success, and the obvious first test against it
+is one whose negative result means nothing.
+
 Planned layout (do not scaffold ahead of need):
 
 ```
