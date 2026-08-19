@@ -130,7 +130,17 @@ scheduling constraint on a shared radio before we add Wi-Fi.
 In order, each independently verifiable:
 
 1. `00_board_check` → record chip/flash/PSRAM/BSP capabilities.
-2. `08_i2c_tools` + `13_display_colorbar` → **confirm the board revision.**
+2. **Confirm the board revision** by running the vendored detector, not a
+   manual scan. `board_variant_detect()` ships in
+   `examples/esp-idf/90_axp2101_pmu/components/board_variant/board_variant.c`
+   (also in `91_pcf85063_rtc` and `92_qmi8658_imu`). It probes CST816 at
+   I²C `0x15` → V2, else FT3168 at `0x38` → V1.
+
+   > This step previously read "`08_i2c_tools` + `13_display_colorbar`".
+   > **`08_i2c_tools` has no `components/` directory and does not ship the
+   > detector** — following that instruction produces exactly the bare I²C
+   > scan that the reset-release gotcha defeats. See
+   > [board-revision.md](board-revision.md).
 3. `01_project_template` → our own project skeleton on the managed BSP.
 4. Add LVGL status screen: two labels, `R2 BLE: —` / `state: —`.
 5. Port `r2d2_central.c` (drop `nus_peripheral`, target `esp32s3`,

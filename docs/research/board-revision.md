@@ -135,3 +135,41 @@ and for whether OTA is affordable later.
    that the panel renders.
 5. Record all of it in `docs/decisions.md` with the date. Every later "which
    board do I have" question should be answered from that record, not re-derived.
+
+---
+
+## Determining the revision — release the touch reset FIRST
+
+**OBSERVED 2026-08-18** by reading
+`reference/ESP32-S3-Touch-AMOLED-1.8/examples/esp-idf/90_axp2101_pmu/components/board_variant/board_variant.c`
+@ `ed7c6a5` (132 lines). No hardware and no toolchain were needed for this —
+the detector is vendored in the clone.
+
+`board_variant_detect()` does **not** simply scan the bus. In order:
+
+1. Create an I²C master bus — `I2C_NUM_0`, SDA `GPIO15`, SCL `GPIO14`,
+   400 kHz, internal pull-ups on.
+2. **`release_touch_reset()`** — add the IO expander at `0x20`, write
+   `REG_CONFIG` (`0x03`) with the output mask inverted, then `REG_OUTPUT`
+   (`0x01`) first with only `SD_CS` asserted, wait **20 ms**, then with the
+   full output mask, wait **150 ms**.
+3. Probe `0x15` → `BOARD_VARIANT_CO5300_CST816` (**V2**).
+4. Else probe `0x38` → `BOARD_VARIANT_SH8601_FT3168` (**V1**).
+5. Else `BOARD_VARIANT_UNKNOWN`.
+
+> [!warning]
+> **Step 2 is the whole trick.** The touch controller is held in reset by the
+> IO expander at power-up and does not answer until released. A plain I²C
+> scan — `08_i2c_tools`, `i2cdetect`, anything that just walks addresses —
+> sees **nothing at either address** and reports "unknown board".
+>
+> That failure is indistinguishable from a dead touch controller or a wrong
+> board, and it is the reading a bring-up session would most naturally take
+> at face value. Run the vendored detector, or replicate its reset release.
+
+Note the probe **order**: V2 is tested first. A board answering at `0x15` is
+V2 regardless of what the retailer listing said, which is the whole reason
+this file exists.
+
+The detector caches its result (`s_detected`), so it is safe to call from
+multiple components; it will not re-probe or re-toggle the reset line.
