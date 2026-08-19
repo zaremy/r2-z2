@@ -470,6 +470,34 @@ BLOCKED = ("sleep",)
 DEFAULT_STATE = "idle"
 
 
+def is_status_colour(rgb) -> bool:
+    """True for a status corner, or that corner uniformly dimmed.
+
+    Quiet hours scale VALUE and never hue, so (0,0,255) at 0.2 becomes
+    (0,0,51) -- still unambiguously blue, still the same claim, and NOT a
+    member of STATUS_COLOURS. Something had to know that a dimmed corner is
+    the same colour as the corner.
+
+    A scaled corner is recognisable without knowing the scale: the zero /
+    non-zero PATTERN is preserved and every lit channel shares one value. That
+    admits exactly the dimmed corners and rejects everything else -- (0,40,51)
+    has unequal lit channels and is a colour nobody chose.
+
+    Without this, `rest_colour()` had to hand beats a FULL-brightness colour to
+    get past the beat validator, so every beat during quiet hours ended on a
+    bright flash before the status re-assert dimmed it back. At 2am, which is
+    the one thing quiet hours exist to prevent.
+    """
+    rgb = tuple(rgb)
+    if rgb in STATUS_COLOURS:
+        return True
+    lit = {v for v in rgb if v}
+    if len(lit) != 1:
+        return False
+    pattern = tuple(255 if v else 0 for v in rgb)
+    return pattern in STATUS_COLOURS
+
+
 def resume(remembered: str | None) -> tuple[str, str | None]:
     """What to show on a fresh connect, and what was dropped getting there.
 
