@@ -55,9 +55,14 @@ class TestConnectAsserts(unittest.TestCase):
         self.assertEqual(st.bridge.channels[0], LG.assertion("idle"))
 
     def test_connect_writes_before_anything_else_can(self):
+        # The invariant is that the assertion is FIRST, not that it is alone:
+        # a chirp and an optional greeting follow it, each in its own batch.
+        # What must never happen is something reaching the droid before the
+        # status it is supposed to be in.
         st = _layer()
         st.connect()
-        self.assertEqual(len(st.bridge.batches), 1,
+        self.assertTrue(st.bridge.batches)
+        self.assertEqual([s.op for s in st.bridge.batches[0]], ["leds"],
                          "the assertion must be the first thing sent")
 
     def test_a_pending_issue_survives_the_night(self):
@@ -148,6 +153,122 @@ class TestSet(unittest.TestCase):
         st = _layer()
         with self.assertRaises(KeyError):
             st.set("nonsense")
+
+
+class TestConnectChirp(unittest.TestCase):
+
+    @staticmethod
+    def _sounds(bridge):
+        return [s for b in bridge.batches for s in b if s.op == "sound"]
+
+    def test_connect_chirps(self):
+        st = _layer()
+        st.connect()
+        sounds = self._sounds(st.bridge)
+        self.assertEqual(len(sounds), 1)
+        self.assertEqual(sounds[0].params["id"], S.CONNECT_CHIRP)
+        self.assertEqual(sounds[0].params["volume"], S.CHIRP_VOLUME)
+
+    def test_the_chirp_is_its_OWN_batch_after_the_assertion(self):
+        # The chirp needs `audio`, the assertion needs only `leds`. Bundled,
+        # a daemon at --allow leds could refuse the batch and cost us the
+        # assertion -- the louder, less important half taking the quieter,
+        # more important half down with it.
+        st = _layer()
+        st.connect()
+        led_batch = next(i for i, b in enumerate(st.bridge.batches)
+                         if any(s.op == "leds" for s in b))
+        snd_batch = next(i for i, b in enumerate(st.bridge.batches)
+                         if any(s.op == "sound" for s in b))
+        self.assertLess(led_batch, snd_batch, "assert before you chirp")
+        self.assertNotEqual(led_batch, snd_batch, "never the same batch")
+        for b in st.bridge.batches:
+            ops = {s.op for s in b}
+            self.assertNotEqual(ops, {"leds", "sound"})
+
+    def test_a_refused_chirp_does_not_cost_the_assertion(self):
+        # fail_after=1: the assertion lands, everything after is refused.
+        d = Path(tempfile.mkdtemp())
+        st = S.StatusLayer(FakeBridge(fail_after=1),
+                           S.StatusStore(d / "s.json"))
+        shown, _ = st.connect()
+        self.assertEqual(shown, "idle")
+        self.assertEqual(st.bridge.channels[0], LG.assertion("idle"))
+
+    def test_quiet_hours_suppress_the_chirp(self):
+        # A chirp is the one part of a connect that carries into another room.
+        st = _layer(quiet_value=0.25)
+        st.connect()
+        self.assertEqual(self._sounds(st.bridge), [])
+
+    def test_chirping_in_quiet_hours_must_be_asked_for_explicitly(self):
+        st = _layer(quiet_value=0.25, chirp_in_quiet_hours=True)
+        st.connect()
+        self.assertEqual(len(self._sounds(st.bridge)), 1)
+
+    def test_the_chirp_can_be_turned_off(self):
+        st = _layer(chirp=False)
+        st.connect()
+        self.assertEqual(self._sounds(st.bridge), [])
+
+    def test_the_chirp_is_a_sound_we_have_actually_HEARD(self):
+        # S1b rated CHATTY_1 "quick success". R2_STEP_* are the only sounds
+        # confirmed short, but were sampled for DURATION only and never rated
+        # for character -- short and unknown is worse than short and rated.
+        self.assertEqual(S.CONNECT_CHIRP, B._sid("R2_CHATTY_1"))
+
+
+class TestConnectGreeting(unittest.TestCase):
+
+    @staticmethod
+    def _domes(bridge):
+        return [s for b in bridge.batches for s in b if s.op == "dome"]
+
+    def test_the_dome_does_NOT_move_by_default(self):
+        # Each actuator is individually opt-in and never bundled. Asserting a
+        # status is not a moment anybody asked for motion.
+        st = _layer()
+        st.connect()
+        self.assertEqual(self._domes(st.bridge), [])
+
+    def test_the_greeting_goes_out_and_back(self):
+        # A single move would displace the dome further on every connect and
+        # nothing would ever put it back.
+        st = _layer(greet=True)
+        st.connect()
+        deltas = [s.params["delta"] for s in self._domes(st.bridge)]
+        self.assertEqual(deltas, [S.GREET_TRAVEL_DEG, -S.GREET_TRAVEL_DEG])
+        self.assertEqual(sum(deltas), 0)
+
+    def test_the_greeting_clears_the_silent_floor(self):
+        # Under ~10.5 deg the firmware ignores the command and still reports
+        # ok: true, so a smaller nod would be invisible AND look successful.
+        self.assertGreaterEqual(S.GREET_TRAVEL_DEG, B.MIN_DOME_TRAVEL_DEG)
+
+    def test_the_greeting_is_expressed_as_travel_not_destination(self):
+        # The dome has no resting position, so an angle is meaningless.
+        st = _layer(greet=True)
+        st.connect()
+        for s in self._domes(st.bridge):
+            self.assertIn("delta", s.params)
+            self.assertNotIn("angle", s.params)
+
+    def test_each_dome_move_is_its_own_batch(self):
+        st = _layer(greet=True)
+        st.connect()
+        for b in st.bridge.batches:
+            self.assertLessEqual(len([s for s in b if s.op == "dome"]), 1)
+
+    def test_the_greeting_never_shares_a_batch_with_the_assertion(self):
+        # `dome` tier vs `leds` tier: bundled, a refused dome move could cost
+        # us the assertion.
+        st = _layer(greet=True)
+        st.connect()
+        for b in st.bridge.batches:
+            ops = {s.op for s in b}
+            self.assertFalse(
+                {"dome", "leds"} <= ops,
+                f"batch mixes tiers: {sorted(ops)}")
 
 
 class TestQuietHours(unittest.TestCase):

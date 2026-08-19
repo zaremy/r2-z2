@@ -27,7 +27,25 @@ import time
 from pathlib import Path
 
 import r2_lights as LG
-from r2_behavior import Bridge, Step, perform
+from r2_behavior import Bridge, Step, perform, _sid
+
+# The connect chirp. R2_CHATTY_1 is the best-evidenced short sound we have:
+# HEARD in S1b and read as "quick success", the most neutral-leaning member of
+# the family, and already carrying an operator ruling that it is acceptable
+# despite CHATTY being refuted as "neutral talking" (they are conversational
+# turn-shapes, and "I am back" is a conversational turn).
+#
+# R2_STEP_3/4/5 are the only sounds CONFIRMED short -- but they were sampled
+# for DURATION only and never rated for character, so we know how long they
+# are and not what they sound like. Short and unknown is worse than short and
+# rated.
+CONNECT_CHIRP = _sid("R2_CHATTY_1")
+CHIRP_VOLUME = 200          # 80 was too quiet to evaluate across a room (S1b)
+
+# The optional connect nod. 15 deg clears the ~10.5 deg floor below which the
+# firmware SILENTLY ignores the command and still returns ok: true, with margin
+# for the curve -- that floor is one point on it, not a constant.
+GREET_TRAVEL_DEG = 15.0
 
 # The rate ceiling lives in r2_lights, which owns the light layer. r2_probe
 # has the same measured value under a different name (CMD_SAFE_INTERVAL); a
@@ -79,10 +97,14 @@ class StatusLayer:
     """
 
     def __init__(self, bridge: Bridge, store: StatusStore | None = None,
-                 *, quiet_value: float = 1.0):
+                 *, quiet_value: float = 1.0, chirp: bool = True,
+                 chirp_in_quiet_hours: bool = False, greet: bool = False):
         self.bridge = bridge
         self.store = store or StatusStore()
         self.quiet_value = quiet_value
+        self.chirp = chirp
+        self.chirp_in_quiet_hours = chirp_in_quiet_hours
+        self.greet = greet
         self.current: str = LG.DEFAULT_STATE
         self.dropped: str | None = None
 
@@ -107,7 +129,64 @@ class StatusLayer:
             Step("leds", {"channels": LG.assertion(
                 self.current, value=self._value_for(self.current))})])
         self.store.write(self.current)
+        self._chirp()
+        self._greet()
         return self.current, self.dropped
+
+    def _greet(self) -> bool:
+        """An optional dome nod on connect. OFF BY DEFAULT.
+
+        Default off is the safety rule, not timidity: each actuator is
+        individually opt-in and never bundled (CLAUDE.md). Lights and a chirp
+        cannot knock anything over; the dome is a moving part, and asserting a
+        status is not a moment anybody asked for motion.
+
+        Its own batch, for the same reason the chirp gets one: this needs the
+        `dome` tier while the assertion needs only `leds`, and a refusal here
+        must never cost us the assertion.
+
+        Expressed as `delta`, never `angle`. The dome has NO resting position
+        -- observed at 103, 3.3 and -0.06 degrees across three sessions -- so a
+        destination is meaningless, and the daemon bounds travel from a freshly
+        read position.
+
+        OUT AND BACK, because a single move would displace the dome a little
+        further on every connect and nothing would ever put it back. Two moves
+        at ~2.0-2.2 s each makes a connect greeting a ~4.4 s event, not a
+        flourish. That is the hardware, not the choreography.
+        """
+        if not self.greet:
+            return False
+        for delta in (GREET_TRAVEL_DEG, -GREET_TRAVEL_DEG):
+            self.bridge.send_batch([
+                Step("dome", {"delta": delta, "settle": 0})])
+        return True
+
+    def _chirp(self) -> bool:
+        """The short "I am back" on connect. Returns whether it was sent.
+
+        SENT AS ITS OWN BATCH, AFTER the assertion, and never bundled with it.
+        The chirp needs the `audio` tier and the assertion needs only `leds`,
+        so a daemon started at `--allow leds` refuses the sound -- and if the
+        two shared a batch, a refused chirp could cost us the assertion, which
+        is the part that actually matters. The louder, less important half must
+        never be able to take the quieter, more important half down with it.
+
+        Silence is therefore an acceptable outcome and not an error.
+
+        Suppressed during quiet hours. A chirp is the one part of a connect
+        that carries into another room, and quiet hours exist precisely so the
+        droid can come back without announcing it at 2am. Overriding that is
+        explicit -- pass `chirp=True` to the constructor -- because the whole
+        point of a quiet-hours rule is that it is not bypassed by accident.
+        """
+        if not self.chirp:
+            return False
+        if self.quiet_value < 1.0 and not self.chirp_in_quiet_hours:
+            return False
+        self.bridge.send_batch([
+            Step("sound", {"id": CONNECT_CHIRP, "volume": CHIRP_VOLUME})])
+        return True
 
     def set(self, name: str) -> None:
         """Change status. Persists BEFORE rendering.
