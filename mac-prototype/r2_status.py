@@ -319,6 +319,22 @@ class StatusLayer:
                 self.current, value=self._value_for(self.current))})])
         return result
 
+    def assertion_channels(self) -> dict[str, int]:
+        """The current status as a channel dict, quiet hours applied.
+
+        Public because callers outside this module need the frame WITHOUT
+        sending it -- the session teardown batches it with `stop` and the
+        sensor disable, and splitting that batch would break the "stop first"
+        ordering it depends on.
+
+        It exists because the teardown built the frame itself with a bare
+        `LG.assertion(current)` and so ignored quiet hours, ending a 2am
+        session at full brightness. Every other caller went through
+        `_value_for`; one did not, and nothing made that visible. One method,
+        one place that knows how to scale it.
+        """
+        return LG.assertion(self.current, value=self._value_for(self.current))
+
     def rest_colour(self) -> tuple[int, int, int]:
         """The colour an expression beat must come to rest on.
 

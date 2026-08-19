@@ -500,7 +500,7 @@ def _tidy(bridge, status=None) -> None:
             Step("stop", {}),
             Step("sensors", {"enable": False}),
             Step("leds", {"channels":
-                          LG.assertion(status.current) if status is not None
+                          status.assertion_channels() if status is not None
                           else B.front(B.BASE_NEUTRAL)}),
         ], timeout=15)
     except BaseException as e:
@@ -685,16 +685,23 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
     # rather than swallowed: silently clearing a pending claim and silently
     # re-asserting a stale one are both wrong, and only the operator can tell
     # which happened.
+    # Constructed OUTSIDE the try so the `finally` can always reach it, but
+    # CONNECTED inside it. connect() writes LEDs and sends a chirp, and
+    # FileBridge.send_batch raises on failure -- outside the try that raise
+    # escaped run_session with no teardown and no run log. TestTeardownAlwaysRuns
+    # exists because "the setup used to sit OUTSIDE the try, so the one path
+    # that returned early skipped the teardown entirely"; this was that shape
+    # again.
     status = StatusLayer(
         bridge, StatusStore(STATUS_STORE) if STATUS_STORE else None)
-    asserted, dropped = status.connect()
-    log["status"] = {"asserted": asserted, "dropped": dropped}
-    print(f"status: asserted {asserted!r}" +
-          (f"; DROPPED {dropped!r} (not restorable across a session — "
-           f"re-derive it if it still holds)" if dropped else ""))
 
     loop = None
     try:
+        asserted, dropped = status.connect()
+        log["status"] = {"asserted": asserted, "dropped": dropped}
+        print(f"status: asserted {asserted!r}" +
+              (f"; DROPPED {dropped!r} (not restorable across a session — "
+               f"re-derive it if it still holds)" if dropped else ""))
         bridge.send_batch([Step("leds", {"channels": B.front((0, 0, 0))})],
                           timeout=15)
         r = bridge.send_batch([Step("sensors", {"enable": True,

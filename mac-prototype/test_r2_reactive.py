@@ -18,6 +18,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 import r2_probe as P
 import r2_behavior as B
 import r2_lights as LG
+import r2_status as S
+
+
+class FakeStatusBridge(B.Bridge):
+    def _send(self, steps, timeout):
+        return [{"ok": True}]
+
+    def running(self):
+        return True
 import r2_reactive as R
 from sensor_probe import GROUPS, EXT_GROUPS, masks, channels, empirical_thresholds
 
@@ -593,6 +602,49 @@ class TestSessionWiring(unittest.TestCase):
             finally:
                 R.FileBridge, R.LOG_DIR = real, real_dir
                 R.STATUS_STORE = real_store
+
+    def test_a_failing_connect_still_tidies_up(self):
+        """connect() writes LEDs and sends a chirp, and send_batch raises on
+        failure. Sitting outside the try, that raise escaped run_session with
+        no teardown and no run log -- the exact shape TestTeardownAlwaysRuns
+        was written about."""
+        b = SessionBridge(noisy=False)
+        real_send = b.send_batch
+        calls = {"n": 0}
+
+        def failing(steps, timeout=12.0):
+            calls["n"] += 1
+            if calls["n"] == 1:                 # the status assertion
+                raise RuntimeError("synthetic bridge failure")
+            return real_send(steps, timeout)
+
+        b.send_batch = failing
+        with self.assertRaises(RuntimeError):
+            self._session(b)
+        # The teardown still ran: stop first, stream off, a defined colour.
+        ops = [s.op for s in b.sent]
+        self.assertIn("stop", ops, "teardown never ran")
+        self.assertIn(False, [s.params.get("enable")
+                              for s in b.sent if s.op == "sensors"])
+
+    def test_the_teardown_honours_quiet_hours(self):
+        """It built the frame with a bare LG.assertion(current) and so ended a
+        2am session at FULL brightness -- the flash quiet hours exist to
+        prevent, one PR after the same bug was fixed in rest_colour()."""
+        # Drive _tidy ITSELF. Asserting on assertion_channels() alone proves
+        # the helper is right and says nothing about whether the teardown
+        # calls it -- reverting _tidy to a bare LG.assertion() passed that
+        # version of this test.
+        b = SessionBridge(noisy=False)
+        layer = S.StatusLayer(b, quiet_value=0.2)
+        layer.current = "idle"
+        R._tidy(b, layer)
+        frames = [s.params["channels"] for s in b.sent if s.op == "leds"]
+        self.assertTrue(frames)
+        self.assertEqual(frames[-1]["2"], 51,
+                         "the teardown ended at full brightness at 2am")
+        self.assertEqual(frames[-1], layer.assertion_channels())
+        self.assertNotEqual(frames[-1], LG.assertion("idle"))
 
     def test_the_session_asserts_a_status_before_arming(self):
         # MEASURED 2026-08-18: a colour we set does not survive a sleep cycle,
