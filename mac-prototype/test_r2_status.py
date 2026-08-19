@@ -332,6 +332,115 @@ class TestRender(unittest.TestCase):
         self.assertEqual(len(sent), 1)
 
 
+class TestRenderHonoursItsDuration(unittest.TestCase):
+    """render(seconds) used to return after the LAST TRANSITION, so a steady
+    state returned in 0.0000 s having sent one write. The obvious main loop --
+    `while running: layer.render(10)` -- then measured at 368,780 writes/s
+    against a ceiling of 8.3."""
+
+    def _clock(self):
+        t = {"now": 0.0}
+        return (lambda s: t.__setitem__("now", t["now"] + s),
+                lambda: t["now"])
+
+    def test_a_steady_state_occupies_the_whole_duration(self):
+        st = _layer()
+        st.connect()
+        sleep, now = self._clock()
+        st.render(3600.0, sleep=sleep, now=now)
+        self.assertAlmostEqual(now(), 3600.0, places=6)
+
+    def test_a_steady_state_still_costs_only_one_write(self):
+        # Occupying the duration must not mean spinning on it.
+        st = _layer()
+        st.connect()
+        sleep, now = self._clock()
+        sent = st.render(3600.0, sleep=sleep, now=now)
+        self.assertEqual(len(sent), 1)
+
+    def test_an_animated_state_occupies_the_whole_duration_too(self):
+        st = _layer()
+        st.connect()
+        st.set("attention")
+        sleep, now = self._clock()
+        st.render(6.0, sleep=sleep, now=now)
+        self.assertAlmostEqual(now(), 6.0, places=6)
+
+    def test_a_repeated_render_loop_stays_under_the_ceiling(self):
+        # The regression that motivated all of this, as an assertion.
+        st = _layer()
+        st.connect()
+        sleep, now = self._clock()
+        st.bridge.batches.clear()
+        # BOUNDED. The first version looped on `while now() < 60` and, against
+        # a render that does not advance the clock, spun forever -- a test
+        # that HANGS instead of failing tells you nothing at 3am and blocks
+        # the suite. Six calls of 10 s should reach 60 s; anything else is the
+        # bug, and it now reports as one.
+        for i in range(6):
+            st.render(10.0, sleep=sleep, now=now)
+            self.assertAlmostEqual(now(), 10.0 * (i + 1), places=6,
+                                   msg="render did not occupy its duration")
+        writes = len(st.bridge.channels)
+        self.assertLessEqual(writes / now(), LG.MAX_WRITES_PER_S,
+                             f"{writes} writes in {now()}s blows the ceiling")
+
+
+class TestQuietHoursReachExpression(unittest.TestCase):
+
+    def test_rest_colour_is_dimmed_during_quiet_hours(self):
+        # It returned full brightness, so every beat ended on a bright flash
+        # before the re-assert pulled it back down. At 2am.
+        st = _layer(quiet_value=0.2)
+        st.connect()
+        self.assertEqual(st.rest_colour(), (0, 0, 51))
+
+    def test_a_beat_may_rest_on_a_DIMMED_status_colour(self):
+        st = _layer(quiet_value=0.2)
+        st.connect()
+        st.express(B.express_curious, ceiling="dome", sleep=lambda _: None)
+
+    def test_no_frame_of_a_quiet_hours_beat_is_full_brightness(self):
+        st = _layer(quiet_value=0.2)
+        st.connect()
+        st.bridge.batches.clear()
+        st.express(B.express_curious, ceiling="dome", sleep=lambda _: None)
+        for ch in st.bridge.channels:
+            front = (ch.get("0", 0), ch.get("1", 0), ch.get("2", 0))
+            self.assertNotEqual(front, B.BASE_NEUTRAL,
+                                "full-brightness flash during quiet hours")
+
+    def test_a_dimmed_corner_is_recognised_and_a_muddle_is_not(self):
+        self.assertTrue(LG.is_status_colour((0, 0, 51)))       # dimmed blue
+        self.assertTrue(LG.is_status_colour((0, 51, 51)))      # dimmed cyan
+        self.assertTrue(LG.is_status_colour(B.BASE_DANGER))    # exact corner
+        self.assertFalse(LG.is_status_colour((0, 40, 51)))     # lit unequal
+        self.assertFalse(LG.is_status_colour((120, 190, 255)))  # the pale blue
+        self.assertFalse(LG.is_status_colour((0, 0, 0)))       # off is not a
+                                                               # status claim
+
+
+class TestConnectPersistsBeforeSending(unittest.TestCase):
+
+    def test_the_store_is_written_before_the_hardware_on_connect(self):
+        # set() argued for this order and connect() did the opposite. A crash
+        # between the two left a dropped claim in the store, to be dropped
+        # again on the next connect.
+        d = Path(tempfile.mkdtemp())
+        store = S.StatusStore(d / "s.json")
+        store.write("danger")                 # non-restorable
+        seen = []
+
+        class Watching(FakeBridge):
+            def _send(self, steps, timeout):
+                seen.append(store.read())
+                return super()._send(steps, timeout)
+
+        S.StatusLayer(Watching(), store).connect()
+        self.assertEqual(seen[0], "idle",
+                         "the store must already be correct by the first send")
+
+
 class TestExpressRidesOnStatus(unittest.TestCase):
 
     def test_the_beat_rests_on_the_CURRENT_status_not_a_default(self):

@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 import r2_lights as LG
-from r2_behavior import Bridge, Step, perform, _sid
+from r2_behavior import Bridge, Step, perform, sound_id
 
 # The connect chirp. R2_CHATTY_1 is the best-evidenced short sound we have:
 # HEARD in S1b and read as "quick success", the most neutral-leaning member of
@@ -39,7 +39,7 @@ from r2_behavior import Bridge, Step, perform, _sid
 # for DURATION only and never rated for character, so we know how long they
 # are and not what they sound like. Short and unknown is worse than short and
 # rated.
-CONNECT_CHIRP = _sid("R2_CHATTY_1")
+CONNECT_CHIRP = sound_id("R2_CHATTY_1")
 CHIRP_VOLUME = 200          # 80 was too quiet to evaluate across a room (S1b)
 
 # The optional connect nod. 15 deg clears the ~10.5 deg floor below which the
@@ -125,10 +125,15 @@ class StatusLayer:
         the light language says.
         """
         self.current, self.dropped = LG.resume(self.store.read())
+        # Store first, hardware second -- the same order `set()` argues for,
+        # and for the same reason. If the send fails or the process dies, the
+        # store must already say what we intended. This used to send first,
+        # which meant a crash between the two left a dropped claim still
+        # sitting in the store to be dropped again on the next connect.
+        self.store.write(self.current)
         self.bridge.send_batch([
             Step("leds", {"channels": LG.assertion(
                 self.current, value=self._value_for(self.current))})])
-        self.store.write(self.current)
         self._chirp()
         self._greet()
         return self.current, self.dropped
@@ -225,17 +230,29 @@ class StatusLayer:
 
     def render(self, seconds: float, *, sleep=time.sleep,
                now=time.monotonic) -> list[dict]:
-        """Drive the current state's animation for `seconds`.
+        """Drive the current state's animation FOR `seconds`, then return.
 
         `sleep` and `now` are injected so the whole runner is testable on
-        synthetic time with no robot and no waiting. That is not a convenience:
-        a scheduler tested only against a real clock is tested only against
-        the timings that happened to occur.
+        synthetic time with no robot and no waiting. That is not a
+        convenience: a scheduler tested only against a real clock is tested
+        only against the timings that happened to occur.
 
         Frames are sent one batch each, in order. The player has already
         merged fixtures changing at the same instant into a single write, so
         one frame IS one write, and the state's declared writes/s is the rate
         this loop produces.
+
+        IT RUNS FOR THE FULL DURATION, including when there is nothing left to
+        do. That sounds obvious and was not: this returned after the LAST
+        TRANSITION, so a steady state -- idle, the one that runs for hours --
+        emitted frame zero and returned in 0.0000 s. The obvious main loop,
+
+            while running:
+                layer.render(10)
+
+        then measured at 368,780 writes/s against a ceiling of 8.3, with a
+        pegged core and a flooded queue. The caller was not wrong; `render`
+        was, and it was wrong in the shape most likely to be trusted.
         """
         state = LG.STATES[self.current]
         frames = state.frames(seconds, value=self._value_for(self.current))
@@ -247,6 +264,12 @@ class StatusLayer:
                 sleep(behind)
             sent.append(channels)
             self.bridge.send_batch([Step("leds", {"channels": channels})])
+        # Hold out the remainder. A steady state spends its whole duration
+        # here, which is the point: idle costs one write and `seconds` of
+        # quiet, not one write and an instant return.
+        remaining = seconds - (now() - started)
+        if remaining > 0:
+            sleep(remaining)
         return sent
 
     # -- expression --------------------------------------------------------
@@ -294,6 +317,13 @@ class StatusLayer:
         Frame zero of the current status -- for a blinking state that is the
         lit half, so a beat never rests on a status's dark phase and reads as
         "off".
+
+        HONOURS QUIET HOURS. It did not, and could not: the beat validator
+        demanded an exact corner, so this returned full brightness while the
+        status layer asserted dimmed. Every beat during quiet hours ended on a
+        bright flash before the re-assert pulled it back down -- at 2am, which
+        is precisely what quiet hours exist to prevent.
         """
-        ch = LG.assertion(self.current)
+        ch = LG.assertion(self.current,
+                          value=self._value_for(self.current))
         return (ch["0"], ch["1"], ch["2"])

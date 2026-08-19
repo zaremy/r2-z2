@@ -211,6 +211,13 @@ class SoundPool:
         return choice
 
 
+def sound_id(name: str) -> int:
+    """Public alias for `_sid`. Other modules need to name a sound, and
+    reaching across a module boundary for an underscore name is a private API
+    by accident rather than by design."""
+    return _sid(name)
+
+
 def _sid(name: str) -> int:
     """Look up a sound id by name, failing loudly. A typo'd name silently
     becoming `None` would reach `int(p["id"])` in the daemon and raise there,
@@ -364,7 +371,13 @@ class Beat:
                             f"the firmware and still reports ok")
         if tier_rank(self.required_tier()) >= tier_rank("stance"):
             raise ValueError(f"beat {self.name!r} reaches the stance tier")
-        if self.rest_colour not in STATUS_COLOURS:
+        # Accepts a status corner OR that corner uniformly dimmed: quiet
+        # hours scale value and never hue, and a dimmed blue is still blue.
+        # Requiring an exact corner forced the status layer to hand beats a
+        # full-brightness rest during quiet hours, so every beat ended on a
+        # bright flash. Imported lazily -- r2_lights imports this module.
+        from r2_lights import is_status_colour
+        if not is_status_colour(self.rest_colour):
             raise ValueError(
                 f"beat {self.name!r} rests on {self.rest_colour}, which is not "
                 f"a D-012 status colour. The colour we leave him in is what "
