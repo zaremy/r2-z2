@@ -56,7 +56,7 @@ Front and back PSI unless noted. Sound column is the family, not an id.
 | **danger** | red blink 0.25 s | red blink 0.25 s | off | off | `R2_ALARM_*` ✅ | none |
 | **misheard** | yellow blink 1.2 s | yellow blink 1.2 s | off | off | **unassigned** | none |
 | **offline** | red blink 1.0 s | red blink 1.0 s | off | off | **unassigned** | none |
-| **withholding** | blue blink 3.0 s | blue steady @0.25 | off | off | — | none |
+| **waiting** | blue blink 3.0 s | blue steady @0.25 | off | off | — | none |
 | **sleep** | blue steady @0.2 | blue steady @0.2 | off | off | — | none |
 
 **Rate is the discriminator within a hue**, because luminance cannot carry
@@ -87,6 +87,29 @@ lost link (1.0 s). Only one of those means go and pick him up.
 > and it costs ~2.0-2.2 s -- or listening carries no dome at all. Set to
 > **none** pending an operator call.
 
+> [!important] **`withholding` is gone. R2 never decides not to answer.**
+> Operator ruling. The state meant *deliberate silence* — he heard you and
+> chose not to reply — and that is not a thing this character does. Removing
+> the meaning freed frames that were already the right shape for something
+> else: present, unmistakably alive, and not saying anything.
+>
+> They are now **`waiting`** — blocked on something the backpack has not
+> produced yet: a link that is up but unresponsive, a request still
+> unanswered, a board still coming up. Nothing was redesigned; the meaning
+> was.
+>
+> **It is distinct from `thinking`, which is also a wait.** Thinking looks
+> BUSY — holo breathing, logic blinking, an interaction in flight. Waiting
+> looks PATIENT — both channels dark, because he is not working on anything,
+> he is blocked. If those two ever converge visually they are one state with
+> two names.
+>
+> **It only renders while the backpack can still reach him.** A fully dead
+> link cannot be announced on the droid by the thing that failed. That case
+> needs an indicator on the backpack itself, and
+> `research/board-capabilities.md` records none — so it is currently
+> unsignalled, and that is a gap rather than a decision.
+
 ## On waking: assert, never inherit
 
 **MEASURED 2026-08-18.** A colour we set survives a link drop and a fresh
@@ -116,7 +139,8 @@ The test is whether the claim is about the **system** or about an
 |---|---|---|
 | **idle** | yes | trivially still true |
 | **attention** | yes | a pending issue is still pending in the morning |
-| listen, thinking, misheard, withholding | no | claims about an exchange that has ended |
+| listen, thinking, misheard | no | claims about an exchange that has ended |
+| waiting | no | the link is re-derived live on every connect |
 | wake | no | an instant, not a state |
 | danger | no | a live physical condition we cannot vouch for a day later |
 | offline | no | demonstrably false — we are talking to him |

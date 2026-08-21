@@ -197,6 +197,38 @@ class TestStatesMatchTheSpec(unittest.TestCase):
         self.assertIn("BLOCKED", L.STATES["sleep"].note)
 
 
+class TestWaitingIsNotWithholding(unittest.TestCase):
+    """OPERATOR RULING: R2 should never decide not to answer. That retired
+    `withholding` -- deliberate silence -- and freed frames already the right
+    shape for a wait on the backpack."""
+
+    def test_no_state_means_deliberate_refusal(self):
+        self.assertNotIn("withholding", L.STATES)
+        self.assertIn("waiting", L.STATES)
+
+    def test_waiting_looks_patient_and_thinking_looks_busy(self):
+        # Both are waits. The difference has to be visible or the pair is one
+        # state with two names: thinking is working on something (holo
+        # breathing, logic blinking), waiting is blocked on something (both
+        # dark, because he is not working at all).
+        waiting, thinking = L.STATES["waiting"], L.STATES["thinking"]
+        self.assertIsNone(waiting.holo)
+        self.assertIsNone(waiting.logic)
+        self.assertIsNotNone(thinking.holo)
+        self.assertIsNotNone(thinking.logic)
+
+    def test_waiting_can_hold_for_hours(self):
+        # A backpack that never answers is the case this exists for, so the
+        # rate has to be sustainable rather than merely legal.
+        self.assertLess(L.STATES["waiting"].writes_per_s, 1.0)
+
+    def test_waiting_is_not_restored_on_connect(self):
+        # The link is re-derived live on every connect; a remembered wait
+        # would assert a block that may have cleared overnight.
+        self.assertFalse(L.STATES["waiting"].restorable)
+        self.assertEqual(L.resume("waiting"), (L.DEFAULT_STATE, "waiting"))
+
+
 class TestQuietHours(unittest.TestCase):
 
     def test_scaling_keeps_the_hue(self):
@@ -216,9 +248,9 @@ class TestQuietHours(unittest.TestCase):
                 self.assertEqual(dim, full)
 
     def test_per_fixture_scale_is_independent_of_quiet_hours(self):
-        # withholding dims only its BACK: a dim steady claim under a front
-        # that blinks once every three seconds.
-        w = L.STATES["withholding"]
+        # waiting dims only its BACK: a dim steady claim under a front that
+        # blinks once every three seconds.
+        w = L.STATES["waiting"]
         _, ch = w.frames(1.0)[0]
         self.assertEqual((ch["4"], ch["5"], ch["6"]), (0, 0, 64))
         self.assertEqual((ch["0"], ch["1"], ch["2"]), (0, 0, 255))
@@ -275,7 +307,7 @@ class TestWakeAssertion(unittest.TestCase):
     def test_interaction_states_are_not_restored(self):
         # No exchange survives a disconnect, so restoring one asserts a
         # conversation that is not happening.
-        for name in ("listen", "thinking", "misheard", "withholding", "wake"):
+        for name in ("listen", "thinking", "misheard", "waiting", "wake"):
             with self.subTest(state=name):
                 shown, dropped = L.resume(name)
                 self.assertEqual(shown, L.DEFAULT_STATE)
