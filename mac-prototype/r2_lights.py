@@ -222,9 +222,10 @@ class StateLights:
     # restoring one asserts a conversation that is not happening. `waiting` is
     # about the backpack rather than a conversation, and is still not
     # restorable: the link is re-derived live on every connect, so a
-    # remembered wait would assert a block that may have cleared. `danger` and `offline` are live conditions we cannot vouch
-    # for: we do not know he is still on the floor, and we know for a fact we
-    # are not offline while talking to him.
+    # remembered wait would assert a block that may have cleared. `danger`
+    # and `offline` are live conditions we cannot vouch for: we do not know
+    # he is still on the floor, and we know for a fact we are not offline
+    # while talking to him.
     restorable: bool = False
     note: str = ""
 
