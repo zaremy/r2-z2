@@ -170,6 +170,21 @@ little entity is continuously present in the household.
   `CLAUDE.md` is loaded every session and skill descriptions evidently are not
   matched reliably. If the next instruction will move the robot, the skill
   applies.
+- **Mutate the GUARD, not the table.** Three mutations survived in one
+  session, all the same shape: deleting a check left the suite green because
+  the tests asserted the SHIPPED DATA was valid rather than that the check
+  rejects bad input. Removing the status-colour guard passed, because every
+  state in the table used a legal colour. Reverting a teardown to an unscaled
+  frame passed, because the test drove the *helper* that scales instead of the
+  *caller* that was meant to use it. A wiring test asserted "yellow appears
+  somewhere", which an unrelated assertion satisfied on its own.
+
+  The table being correct today is not the property worth pinning; the next
+  row somebody adds is. **For every guard, write the ILLEGAL case first and
+  assert it raises** — then walk the legal ones. Where a helper enforces
+  something, one test must prove the caller ROUTES THROUGH it. If deleting a
+  check leaves the suite green, that check has no test, whatever the coverage
+  number says.
 - **Run the case that must NOT fire, BEFORE any real trial — and again at the
   end.** A detector that is stuck ON is invisible to a positive control: it
   produces the *loud* answer, and loud reads as success. The S1e touch survey
@@ -196,6 +211,28 @@ little entity is continuously present in the household.
   issue #29's own AC5 text telling us to probe resistance with "a much smaller
   delta", which would have moved nothing and read as total resistance. Full
   evidence in **D-013**.
+
+## Wire one path end-to-end before building the layer above it
+
+**Four PRs of the LED stack merged completely inert.** The state table, the
+colour fixes, the animation player and the wake assertion all landed before
+anything imported `r2_lights` except its own test — while the older beat layer
+went on writing LEDs directly on the live path. Two systems described one droid
+and only the wrong one ran. It took the operator asking *"if we landed our led
+stack, why is it still using defaults?"* to surface it.
+
+Each PR was individually correct, tested, and reviewed. That is what makes this
+worth a rule: **correctness does not detect deadness.** A layer with no caller
+passes every check a layer with a caller passes.
+
+**How to apply:** before starting the layer above, make ONE path reach the
+hardware, the screen, or the user — however thin. A single state asserted on
+connect would have exposed the gap at the first PR instead of the fifth. When a
+PR adds no call site for what it builds, say so in the body in those words
+("nothing calls this yet"), so the inertness is a stated fact rather than a
+discovery three PRs later. And when the operator asks why a shipped thing is
+not visible, treat that as the highest-priority signal in the thread — it is
+the CX gap the pipeline is structurally blind to.
 
 ## Research discipline
 
