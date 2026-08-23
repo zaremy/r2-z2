@@ -217,12 +217,15 @@ class StateLights:
     #
     # The test is whether the claim is about the SYSTEM or about an
     # INTERACTION. A pending issue is still pending in the morning, so
-    # `attention` restores. Listening, thinking, misheard and withholding are
-    # all claims about an exchange in progress, and no exchange survives a
-    # disconnect -- restoring one asserts a conversation that is not
-    # happening. `danger` and `offline` are live conditions we cannot vouch
-    # for: we do not know he is still on the floor, and we know for a fact we
-    # are not offline while talking to him.
+    # `attention` restores. Listening, thinking and misheard are all claims
+    # about an exchange in progress, and no exchange survives a disconnect --
+    # restoring one asserts a conversation that is not happening. `waiting` is
+    # about the backpack rather than a conversation, and is still not
+    # restorable: the link is re-derived live on every connect, so a
+    # remembered wait would assert a block that may have cleared. `danger`
+    # and `offline` are live conditions we cannot vouch for: we do not know
+    # he is still on the floor, and we know for a fact we are not offline
+    # while talking to him.
     restorable: bool = False
     note: str = ""
 
@@ -424,13 +427,28 @@ _add(StateLights(
 ))
 
 _add(StateLights(
-    name="withholding",
+    name="waiting",
     front=Pattern("blink", (BASE_NEUTRAL,), 3.0),
     back=Pattern("steady", (BASE_NEUTRAL,), scale=0.25),
-    note="The back holds a dim steady claim while the front blinks once every "
-         "three seconds. An acknowledgement, not a conversation -- and it is "
-         "what stops deliberate silence reading as a dead droid. 0.7 "
-         "writes/s.",
+    note="Blocked on something the backpack has not produced yet -- a link "
+         "that is up but unresponsive, a request still unanswered, a board "
+         "still coming up. The back holds a dim steady claim while the front "
+         "blinks once every three seconds: an acknowledgement, not a "
+         "conversation, and what stops a wait reading as a dead droid. "
+         "0.7 writes/s, so it can hold for hours.\n\n"
+         "THIS WAS `withholding` -- deliberate silence, R2 choosing not to "
+         "answer. OPERATOR RULING: he should never decide not to answer. That "
+         "removed the state's only reason to exist and freed frames that were "
+         "already the right shape for a wait: present, unmistakably alive, and "
+         "not saying anything. Nothing was redesigned; the meaning was.\n\n"
+         "Distinct from `thinking`, which is also a wait. Thinking looks BUSY "
+         "-- holo breathing, logic blinking, an interaction in flight. Waiting "
+         "looks PATIENT -- both dark, because he is not working on anything, "
+         "he is blocked.\n\n"
+         "Only renderable while the backpack can still reach him. A fully "
+         "dead link cannot be announced on the droid by the thing that "
+         "failed; that case needs an indicator on the backpack, and "
+         "docs/research/board-capabilities.md records none.",
 ))
 
 _add(StateLights(
