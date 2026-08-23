@@ -144,16 +144,38 @@ SH8601 init sequence to a CO5300 panel and probe touch where nothing answers.
 Repo remains valuable as a **service-panel architecture reference**
 (`src/hw/` HAL split, NVS persistence, battery UI, PSRAM framebuffer).
 
-**Substantially weakened 2026-08-15.** The retailer listing for the unit
-actually purchased (Amazon B0DSVK5576) names **SH8601 + FT3168** in its title —
-the V1 stack. If that holds, `vthinkxie`'s 1.8" env is the *correct* firmware
-for this board and this decision's premise is void.
+**Weakened 2026-08-15, then RESTORED IN FULL 2026-08-23.**
 
-The decision stands only as "do not flash before the I²C probe confirms the
-revision." The direction of the hazard is now unknown, not known.
+The 2026-08-15 note read: the retailer listing for the unit actually purchased
+(Amazon B0DSVK5576) names **SH8601 + FT3168** in its title — the V1 stack. If
+that held, `vthinkxie`'s 1.8" env would be the *correct* firmware for this board
+and this decision's premise void. It concluded "the direction of the hazard is
+now unknown, not known", and named its own reversal condition: `0x38` (FT3168)
+answering on the probe.
 
-*Reversed by:* `08_i2c_tools` reporting `0x38` (FT3168) — which the listing
-predicts. Re-file this decision with the probe output either way.
+**That condition did not occur. The probe ran on 2026-08-23 and `0x38` was
+silent; `0x15` (CST816) answered.** The board is V2. So:
+
+- **The retailer listing was wrong.** This is the sharpest evidence yet for the
+  rule in [board-revision.md](research/board-revision.md) that the revision must
+  be probed, never read off a product page — the listing named both V1 parts and
+  both were wrong.
+- **This decision's original premise is restored, not void.** `vthinkxie`'s 1.8"
+  target is V1-only; this board is V2. Flashing it would send an SH8601 init
+  sequence to a CO5300 panel and probe touch at `0x38` where nothing answers —
+  exactly the hazard originally described.
+- **The direction of the hazard is known again, and it is the original
+  direction.** The intermediate "unknown" state is closed.
+
+Leaving the weakened wording standing would have been the dangerous outcome: it
+reads as "`vthinkxie` might be the right firmware for this board", which is now
+known to be false.
+
+*Reversed by:* nothing outstanding. The probe that could have reversed this
+confirmed it instead. A different board would need its own probe.
+
+Evidence: [board-capabilities.md](research/board-capabilities.md); transcript at
+`R2Z2-vault/Experiments/data/board-check-20260823-000316.log`.
 
 ---
 
@@ -619,13 +641,13 @@ question.
   ruling authored animations out as the library.
 - **`enable_idle_animations` on or off.** Off during bring-up so every motion is
   attributable in logs; re-evaluate as a feature afterwards.
-- **Board revision — confirm, do not assume.** **V2 as of 2026-08-22, but
-  INFERRED, not yet OBSERVED on the bus.** The dumped factory image is
-  byte-identical to the vendor's V2 recovery image and links only CO5300 +
-  CST816S with zero V1 drivers; the factory demo runs, so the hardware matches
-  the drivers. Confirm with `firmware/board_check/` on the bus (`0x15` answers
-  after the reset release) and record that reading here. Evidence:
-  [board-capabilities.md](research/board-capabilities.md).
+- ~~**Board revision — confirm, do not assume.**~~ **RESOLVED 2026-08-23 —
+  V2 (CO5300 + CST816), OBSERVED.** `board_check` on the bus: `0x15` answered,
+  `0x38` silent, `0x20` present. This confirmed a prior inference from the
+  factory-image comparison, by an independent method. **D-005 Amendment A's
+  reversal is NOT triggered.** Evidence and the full I²C + PMU inventory:
+  [board-capabilities.md](research/board-capabilities.md); transcript in the
+  vault at `Experiments/data/board-check-20260823-000316.log`.
 - ~~**Flash size** — 8 MB (`vthinkxie`'s claim) vs 16 MB (Waveshare's
   `sdkconfig.defaults`).~~ **RESOLVED 2026-08-22 — 16 MB, OBSERVED.**
   `esptool.py flash_id` read it directly from the board and the full-image dump

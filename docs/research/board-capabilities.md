@@ -5,11 +5,20 @@ cross-referenced against `vthinkxie/claude-desktop-buddy-esp32` @ `61a0ce9`
 (third-party, V1). Revision differences are in
 [board-revision.md](board-revision.md).
 
-**Partly measured as of 2026-08-22.** The board is connected at
-`/dev/cu.usbmodem2101` (native USB-JTAG, VID `0x303a` / PID `0x1001` — no
-bridge chip, no driver). The silicon inventory below is OBSERVED read-only over
-the factory firmware; the peripheral tables further down are still read from
-source and await `board_check` on first boot.
+**Measured on hardware. `board_check` has run (2026-08-23).** The board is at
+`/dev/cu.usbmodem2101` (native USB-JTAG, VID `0x303a` / PID `0x1001` — no bridge
+chip, no driver). Silicon, revision, I²C inventory and the PMU rails are
+**OBSERVED**; the per-peripheral capability tables further down are still read
+from source and are labelled where they are not yet confirmed.
+
+Two things are measured but NOT yet proven, and both are called out where they
+appear: the PMU rails were read after a chip reset rather than a power cycle, so
+they may be the factory firmware's configuration rather than power-on defaults;
+and the `0x51` / `0x6B` identifications are inferred from the peripheral table,
+not from a constant this clone contains.
+
+**Still unmeasured: the microSD path** — no card in hand as of 2026-08-23. See
+issue #81.
 
 ### OBSERVED 2026-08-22 — `esptool.py flash_id`, read-only, nothing flashed
 
@@ -25,7 +34,118 @@ source and await `board_check` on first boot.
 Note **silicon** revision v0.2 is not **board** revision V1/V2 — different
 things, similar names, and conflating them is the obvious mistake here.
 
-### Board revision: **V2** — INFERRED (strong), 2026-08-22
+### OBSERVED 2026-08-23 — `board_check` running on the board
+
+First firmware we ever ran on it. Transcript:
+`R2Z2-vault/Experiments/data/board-check-20260823-000316.log`.
+
+These re-confirm the `flash_id` table above through a completely different
+instrument — the ESP-IDF bootloader and `esp_psram`, not `esptool`:
+
+| | Reported by | Value |
+|---|---|---|
+| Chip revision | `boot: chip revision` | **v0.2** |
+| eFuse block rev | `boot: efuse block revision` | v1.4 |
+| Flash size | `boot.esp32s3: SPI Flash Size` | **16MB** |
+| Flash mode / speed | `boot.esp32s3` | QIO @ 80 MHz |
+| PSRAM | `octal_psram` + `esp_psram` | **8 MB**, vendor `0x0d` (AP), 64 Mbit die, 80 MHz |
+| Base MAC | `esp_read_mac` | `28:84:85:90:B1:B0` |
+
+So the 8 MB flash figure is now refuted by two independent instruments.
+
+#### I²C inventory — OBSERVED
+
+`0x15  0x18  0x20  0x34  0x51  0x6B`
+
+Addresses are OBSERVED. The identifications are **INFERRED** from the peripheral
+table below, except where a citation is given:
+
+| Addr | Part | Basis |
+|---|---|---|
+| `0x15` | CST816 touch (V2) | OBSERVED — `board_variant.c:20`, and the detector's own verdict |
+| `0x18` | ES8311 audio codec | `ES8311_CODEC_DEFAULT_ADDR (0x30)` in `espressif__esp_codec_dev/device/include/es8311_codec.h:18` — that is the **8-bit** address; `0x30 >> 1 = 0x18` |
+| `0x20` | TCA9554-class IO expander | OBSERVED — `board_variant.c:19` |
+| `0x34` | AXP2101 PMU | OBSERVED — chip-ID register `0x03` read back `0x4A`, matching `AXP2101Constants.h:5` |
+| `0x51` | PCF85063A RTC | INFERRED. `PCF85063A_ADDRESS` is *used* at `91_pcf85063_rtc/main/pcf85063_rtc.c:118` but **defined nowhere in the clone** — it comes from a component fetched at that example's build time. Not yet verified. |
+| `0x6B` | QMI8658 IMU | INFERRED. Same situation: `QMI8658_ADDRESS_HIGH/LOW` are used at `92_qmi8658_imu/main/qmi8658_imu.c:49-50`, defined nowhere in the clone. |
+
+`0x38` (FT3168, V1 touch) did **not** answer. That is the decisive negative.
+
+#### AXP2101 rail inventory — AC11 table, derived by hand
+
+**This table is derived from the datasheet constants, not from the firmware's
+decoder.** That is the whole point of AC11: a decoder must not be allowed to
+satisfy its own acceptance criterion. Formulas from
+`reference/…/XPowersLib/src/REG/AXP2101Constants.h`; enable-bit positions from
+`XPowersAXP2101.tpp` `isEnableDCn()` / `isEnableXLDOn()`.
+
+Encodings used:
+
+- DCDC1 — `(raw & 0x1F) × 100 mV + 1500 mV` (`:135-137`)
+- DCDC2, DCDC4 — `raw & 0x7F`; `< 71` → `×10 + 500`; `≥ 71` → `×20 − 200` (`:139-148`, `:171-180`)
+- DCDC3 — `raw & 0x7F`; `< 71` → `×10 + 500`; `71–87` → `×20 − 200`; `≥ 88` → `×100 − 7200` (`:158-167`)
+- DCDC5 — `raw & 0x1F`; `0x19` → 1200 mV; else `×100 + 1400` (`:184-188`)
+- ALDO1-4, BLDO1-2, DLDO1-2 — `(raw & 0x1F) × 100 mV + 500 mV` (`:196-222`, `:232-238`)
+- CPUSLDO — `(raw & 0x1F) × 50 mV + 500 mV` (`:226-228`)
+- Enables — `0x80` bits 0-4 = DCDC1-5; `0x90` bits 0-7 = ALDO1, ALDO2, ALDO3, ALDO4, BLDO1, BLDO2, CPUSLDO, DLDO1; `0x91` bit 0 = DLDO2
+
+| Reg | Rail | Raw | Enable bit | Hand-derived |
+|---|---|---|---|---|
+| `0x03` | IC_TYPE | `0x4A` | — | matches AXP2101 chip id (`AXP2101Constants.h:5`) |
+| `0x00` | STATUS1 | `0x20` | — | not decoded; recorded raw |
+| `0x01` | STATUS2 | `0x15` | — | not decoded; recorded raw |
+| `0x80` | DC_ONOFF | `0x0F` | — | DCDC1-4 **on**, DCDC5 **off** |
+| `0x81` | DC_FORCE_PWM | `0x00` | — | no rail forced to PWM |
+| `0x82` | DCDC1 | `0x12` | on | 18 × 100 + 1500 = **3300 mV** |
+| `0x83` | DCDC2 | `0x28` | on | 40 < 71 → 40 × 10 + 500 = **900 mV** |
+| `0x84` | DCDC3 | `0x46` | on | 70 < 71 → 70 × 10 + 500 = **1200 mV** |
+| `0x85` | DCDC4 | `0x64` | on | 100 ≥ 71 → 100 × 20 − 200 = **1800 mV** |
+| `0x86` | DCDC5 | `0x00` | **off** | would be 1400 mV; rail is off, so the field is not a rail state |
+| `0x90` | LDO_ONOFF0 | `0xFF` | — | ALDO1-4, BLDO1-2, CPUSLDO, DLDO1 all **on** |
+| `0x91` | LDO_ONOFF1 | `0x01` | — | DLDO2 **on** |
+| `0x92` | ALDO1 | `0x1C` | on | 28 × 100 + 500 = **3300 mV** |
+| `0x93` | ALDO2 | `0x1C` | on | 28 × 100 + 500 = **3300 mV** |
+| `0x94` | ALDO3 | `0x19` | on | 25 × 100 + 500 = **3000 mV** |
+| `0x95` | ALDO4 | `0x0D` | on | 13 × 100 + 500 = **1800 mV** |
+| `0x96` | BLDO1 | `0x07` | on | 7 × 100 + 500 = **1200 mV** |
+| `0x97` | BLDO2 | `0x17` | on | 23 × 100 + 500 = **2800 mV** |
+| `0x98` | CPUSLDO | `0x0E` | on | 14 × 50 + 500 = **1200 mV** |
+| `0x99` | DLDO1 | `0x00` | on | 0 × 100 + 500 = **500 mV** — the register floor, see below |
+| `0x9A` | DLDO2 | `0x00` | on | 0 × 100 + 500 = **500 mV** — the register floor, see below |
+
+**The hand derivation agrees with the firmware's decoder on every row.** That
+corroborates the decoder; it is not what makes the table valid. The table stands
+on the raw bytes and the constants.
+
+> [!warning]
+> **`DLDO1` and `DLDO2` read enabled with their voltage register at `0x00`.**
+> `0x00` decodes to the minimum the field can express (500 mV), which is also
+> the register's reset value — so "enabled at `0x00`" most plausibly means the
+> enable bit is set and the voltage was never programmed. Whether either rail is
+> physically connected to anything is **UNKNOWN**: the vendor repo ships no
+> schematic. Do not treat 500 mV as a measured rail voltage. It is a register
+> value whose meaning is unresolved.
+
+> [!warning]
+> **These are the rails as the FACTORY FIRMWARE left them, not proven power-on
+> defaults.** The AXP2101 keeps its register state as long as it has power, and
+> everything since the factory image was overwritten has been a *chip* reset
+> (`rst:0x15 USB_UART_CHIP_RESET`), never a PMU power cycle. `board_check`
+> writes nothing. So this read cannot distinguish "AXP2101 POR defaults" from
+> "whatever the factory firmware configured before we replaced it" — and the
+> spec's inference was specifically about *power-on defaults*.
+>
+> Cheap unrun experiment that settles it: **unplug, replug, re-run.** Our
+> firmware writes no PMU registers, so a cold-boot read is the POR state. If it
+> matches the table above, the inference holds as stated; if it differs, then
+> what the SD step will actually see is the cold-boot values, not these.
+>
+> `LDO_ONOFF0 = 0xFF` — every LDO enabled — is the row that makes this worth
+> checking rather than assuming.
+
+**Nothing the SD path needs is gated off**, under either reading. AC12 clears.
+
+### Board revision: **V2** — OBSERVED 2026-08-23 (was INFERRED 2026-08-22)
 
 Not yet OBSERVED on the bus; the OBSERVED test is `board_check` seeing `0x15`
 answer after the touch reset release (issue #79, AC1/AC2). But two independent
@@ -70,9 +190,18 @@ The step that makes this strong rather than suggestive: the factory demo
 drivers and contains no V1 driver at all could not drive V1 hardware, so the
 hardware matches the drivers present.
 
+**CONFIRMED on the bus 2026-08-23.** `board_variant_detect()` reported
+`modified CO5300 + CST816`, `0x15` answered and `0x38` did not. The pre-flash
+inference was correct, and the two methods are independent: one compared flash
+contents, the other probed the physical bus.
+
 Consequence: **D-005 Amendment A's reversal is not triggered** — the BSP being
-V2-only is a match, not a hazard. Confirm on the bus before treating it as
-OBSERVED.
+V2-only is a match, not a hazard. Corroborated a third way by the dependency
+tree that `01_project_template` resolves: it pulls `espressif/esp_lcd_co5300`
+and **no SH8601 driver at all** (`grep -ci sh8601 dependencies.lock` → 0). Note
+it *does* pull both touch drivers, `esp_lcd_touch_cst816s` and
+`esp_lcd_touch_ft5x06` — which is consistent, because D-005 Amendment A scopes
+the V2-only claim to the **display**, not to touch.
 
 Backup: `~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes,
 SHA-256 `6f188fb9d35ee793a3423934a4fa4e7c1fef9cc9dae76f9f177dabe854a6cdb3`.
