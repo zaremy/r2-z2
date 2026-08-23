@@ -72,11 +72,22 @@ STEERING = (
 # description of who he is. #47 AC1 requires the ten test lines be generated
 # from a steering prompt rather than read from a fixed script -- otherwise the
 # criterion tests my writing rather than the prompt's.
+# NOTE: this constrains LENGTH and FORMAT only. The character brief is
+# STEERING above, and it is deliberately untouched here -- the voice was
+# chosen against STEERING (#66), so editing that would stale the audition
+# while editing this does not.
+#
+# MEASURED 2026-08-18, first live conversation: "one or two sentences"
+# produced 35-40 word replies running ~15 s of audio, against a ~5 s
+# pipeline. Threepio was three quarters of the wait. He is a presence in a
+# hallway, not a narrator.
 LINE_SYSTEM = (
     STEERING + "\n\nWrite exactly one spoken line for the situation given. "
-    "One or two sentences. Output the line only, with no quotation marks, no "
-    "stage directions and no preamble. You are speaking aloud in a household, "
-    "often about the astromech droid you accompany, who does not speak."
+    "ONE sentence, twenty words at most. Being brief does not make you less "
+    "fussy — compress the fussiness, do not drop it. Output the line only, "
+    "with no quotation marks, no stage directions and no preamble. You are "
+    "speaking aloud in a household, often about the astromech droid you "
+    "accompany, who does not speak."
 )
 
 
