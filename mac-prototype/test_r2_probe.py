@@ -1486,5 +1486,148 @@ class TestLegPositionIsReadOnlyForNow(GateControl):
         self.assertIsNone(resp["data"]["degrees"])
 
 
+class TestLinkLoss(unittest.TestCase):
+    """#17 findings 1, 2 and 4. Before these, a dropped link was invisible:
+    nothing noticed, nothing recovered, and the daemon answered every op with
+    a failure string forever while the comment in the keepalive's error handler
+    claimed "reconnect is handled above". Nothing reconnected."""
+
+    def test_a_fresh_session_has_not_lost_the_link(self):
+        r2 = make_r2()
+        self.assertFalse(r2.link_lost)
+        self.assertIsNone(r2.link_lost_at)
+
+    def test_the_callback_records_when_not_just_that(self):
+        """"Did it drop before or after my command?" is the first question of
+        any post-mortem, and the daemon log is --verbose-gated and off."""
+        r2 = make_r2()
+        r2._on_disconnect(None)
+        self.assertTrue(r2.link_lost)
+        self.assertIsInstance(r2.link_lost_at, float)
+
+    def test_a_second_disconnect_does_not_overwrite_the_first(self):
+        # Bleak may call back more than once; the FIRST moment is the useful
+        # one. Overwriting it would move the drop later than it happened.
+        r2 = make_r2()
+        r2._on_disconnect(None)
+        first = r2.link_lost_at
+        r2._on_disconnect(None)
+        self.assertEqual(r2.link_lost_at, first)
+
+    def test_the_callback_never_raises(self):
+        # It runs on bleak's delivery thread. An exception there is not
+        # something any of our code is positioned to catch.
+        r2 = make_r2()
+        r2.client = None
+        r2._on_disconnect(None)          # must not raise
+        self.assertTrue(r2.link_lost)
+
+    def test_send_refuses_fast_instead_of_paying_a_timeout(self):
+        """A batched phrase of six steps used to spend a full BLE failure per
+        step rediscovering the same dead link."""
+        r2 = make_r2()
+        r2.client = FakeClient(r2, echo)
+        r2._on_disconnect(None)
+        with self.assertRaises(P.LinkLost):
+            run(r2.send(P.DID_POWER, P.CID_POWER_WAKE))
+        self.assertEqual(r2.client.sent, [])     # nothing reached the wire
+
+    def test_link_loss_is_distinguishable_from_a_failed_op(self):
+        # Both used to surface as a BleakError string in a response body,
+        # which reads as "that command didn't work" rather than "there is no
+        # robot on the other end".
+        self.assertTrue(issubclass(P.LinkLost, RuntimeError))
+        r2 = make_r2()
+        r2.client = FakeClient(r2, echo)
+        r2._on_disconnect(None)
+        try:
+            run(r2.send(P.DID_POWER, P.CID_POWER_WAKE))
+        except P.LinkLost as e:
+            self.assertIn("link lost", str(e).lower())
+
+    def test_the_keepalive_stops_instead_of_spinning_on_a_dead_link(self):
+        """Without this it wakes a disconnected robot every 3 s forever."""
+        async def scenario():
+            r2 = make_r2()
+            r2.client = FakeClient(r2, echo)
+            r2.start_keepalive(period=0.01)
+            r2._on_disconnect(None)
+            await asyncio.wait_for(r2._keepalive, timeout=2.0)
+            return r2._keepalive.done()
+        self.assertTrue(run(scenario()))
+
+    def test_a_transient_keepalive_error_does_NOT_take_the_session_down(self):
+        """The other half of the same branch. A single dropped keepalive must
+        not end a live session -- that session is the only way to send stop."""
+        async def scenario():
+            r2 = make_r2()
+            calls = []
+
+            async def flaky():
+                calls.append(1)
+                raise RuntimeError("transient")
+
+            r2.wake = flaky
+            r2.start_keepalive(period=0.01)
+            await asyncio.sleep(0.08)
+            still_running = not r2._keepalive.done()
+            r2._keepalive.cancel()
+            return still_running, len(calls)
+        running, n = run(scenario())
+        self.assertTrue(running)
+        self.assertGreater(n, 1)          # kept trying
+
+    def test_link_loss_beats_idle_and_traffic_cannot_mask_it(self):
+        """Finding 2. `since_last` is reset by every request drained, so a
+        polling client holds it near zero forever -- a disconnected daemon
+        under that traffic never reaches its idle timeout and never exits."""
+        # Busy AND disconnected: the case that used to run forever.
+        self.assertEqual(P.daemon_exit_reason(True, 0.0, 900.0), "link_lost")
+        # Even a request that arrived this instant does not buy it time.
+        self.assertEqual(P.daemon_exit_reason(True, 0.001, 900.0), "link_lost")
+
+    def test_a_link_that_dropped_then_went_idle_reports_the_real_cause(self):
+        """Both conditions true is the case that fixes the ORDER, and it is
+        the likely one: the link drops, the client gives up, and the session
+        then sits idle. Reporting that as a timeout tells the operator their
+        session expired when in fact R2 vanished -- the exact misleading
+        diagnosis this change exists to remove. It also matters because the
+        link-lost branch drains queued requests with an honest error and the
+        idle branch does not."""
+        self.assertEqual(P.daemon_exit_reason(True, 9999.0, 900.0), "link_lost")
+
+    def test_idle_still_exits_a_healthy_but_unused_session(self):
+        self.assertEqual(P.daemon_exit_reason(False, 901.0, 900.0), "idle")
+        self.assertIsNone(P.daemon_exit_reason(False, 899.0, 900.0))
+
+    def test_a_healthy_busy_session_keeps_serving(self):
+        self.assertIsNone(P.daemon_exit_reason(False, 0.0, 900.0))
+
+    def test_exit_awaits_the_keepalive_it_cancelled(self):
+        """Cancel-without-await leaves a wake() writing against a closing
+        client and surfaces later as "Task exception was never retrieved"."""
+        class ClosingClient(FakeClient):
+            def __init__(self, r2, responder):
+                super().__init__(r2, responder)
+                self.disconnected = False
+
+            async def stop_notify(self, uuid):
+                pass
+
+            async def disconnect(self):
+                self.disconnected = True
+
+        async def scenario():
+            r2 = make_r2()
+            r2.client = ClosingClient(r2, echo)
+            r2.start_keepalive(period=0.01)
+            task = r2._keepalive
+            await r2.__aexit__(None, None, None)
+            return task.done(), r2.client.disconnected
+        done, disconnected = run(scenario())
+        self.assertTrue(done)             # awaited, not orphaned
+        self.assertTrue(disconnected)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

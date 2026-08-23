@@ -356,6 +356,15 @@ def parse(raw: bytes) -> Response:
     return Response(flags, did, cid, seq, err, bytes(rest))
 
 
+class LinkLost(RuntimeError):
+    """The BLE link dropped. Distinct from an op that failed while connected.
+
+    Both used to surface as a `BleakError` string in a response body, which
+    reads as "that command didn't work" when it actually means "there is no
+    robot on the other end any more" -- and the daemon kept serving either way.
+    """
+
+
 class R2:
     """Minimal R2-D2 session. Async context manager; disconnects cleanly."""
 
@@ -363,7 +372,12 @@ class R2:
         self.device = device
         # None when bleak is missing. Constructing an R2 stays legal so the
         # pure logic is testable; __aenter__ is where it fails loudly.
-        self.client = BleakClient(device) if BleakClient is not None else None
+        # `disconnected_callback` is the ONLY way we find out. Nothing polls
+        # the link, and the keepalive's failure path used to swallow the error
+        # and log "continuing" beside a comment claiming reconnect was handled
+        # elsewhere -- it was not handled anywhere.
+        self.client = (BleakClient(device, disconnected_callback=self._on_disconnect)
+                       if BleakClient is not None else None)
         self.verbose = verbose
         self._seq = 0
         self._rx = bytearray()
@@ -389,6 +403,30 @@ class R2:
         # the exit path has to know what THIS session turned on, so it can put
         # it back without clobbering state some other process owns.
         self.sensor_streaming: bool = False
+        # Set from bleak's thread the moment the link drops; read everywhere
+        # else. A bare timestamp assignment is atomic under CPython, so no lock
+        # -- and nothing here may block, because this runs on the callback
+        # thread that also delivers notifications.
+        self.link_lost_at: float | None = None
+
+    def _on_disconnect(self, _client=None) -> None:
+        """Called by bleak when the peripheral goes away. Must never raise.
+
+        Records WHEN, not just that: an operator asking "did it drop before or
+        after my command?" is the first question of any post-mortem, and the
+        daemon's own log is --verbose-gated and off by default.
+        """
+        if self.link_lost_at is None:
+            self.link_lost_at = time.time()
+        # print, not self._log: this is the one event worth seeing without
+        # --verbose. Everything after it is going to fail, and a session that
+        # goes quiet for an unexplained reason is the thing being fixed.
+        print(f"\n[{time.strftime('%H:%M:%S')}] !! BLE link lost — "
+              f"R2 disconnected. No further command can reach him.", flush=True)
+
+    @property
+    def link_lost(self) -> bool:
+        return self.link_lost_at is not None
 
     async def __aenter__(self) -> "R2":
         if self.client is None:
@@ -408,6 +446,14 @@ class R2:
     async def __aexit__(self, *exc) -> None:
         if self._keepalive:
             self._keepalive.cancel()
+            # AWAIT IT. Cancelling without awaiting leaves a wake() in flight
+            # writing against a closing client, and Python reports the orphan
+            # as "Task exception was never retrieved" long after the context
+            # that owned it is gone.
+            try:
+                await self._keepalive
+            except (asyncio.CancelledError, Exception):
+                pass
         try:
             await self.client.stop_notify(API_UUID)
         except Exception:
@@ -572,6 +618,15 @@ class R2:
         # CMD_SAFE_INTERVAL, with seqs reaching the wire out of order. R2 drops
         # commands sent faster than that interval, which shows up as a survey
         # item that "didn't work" rather than as an error.
+        # REFUSE FAST. Without this, every queued op pays a full BLE stack
+        # failure (or a 5 s response timeout) before reporting a problem that
+        # was already known -- a batched phrase of six steps spends half a
+        # minute discovering the same thing six times.
+        if self.link_lost:
+            raise LinkLost(
+                f"BLE link lost at {time.strftime('%H:%M:%S', time.localtime(self.link_lost_at))}; "
+                f"refusing to send DID={did:#04x} CID={cid:#04x}")
+
         async with self._tx_lock:
             seq = self._seq
             self._seq = (self._seq + 1) % 0xFF
@@ -628,9 +683,16 @@ class R2:
                 await asyncio.sleep(period)
                 try:
                     await self.wake()
+                except LinkLost:
+                    # The link is gone; there is nothing to keep alive. Exit
+                    # rather than spinning a wake() every 3 s forever.
+                    self._log("keepalive stopping: link lost")
+                    return
                 except Exception as e:
-                    # A dropped keepalive must never take the session down —
-                    # the poll loop keeps serving and reconnect is handled above.
+                    # Anything else is transient by assumption -- a single
+                    # dropped keepalive must not take a live session down.
+                    # (This branch used to claim "reconnect is handled above".
+                    # Nothing reconnected, and nothing noticed.)
                     self._log(f"keepalive error (continuing): {e}")
         self._keepalive = asyncio.create_task(loop())
 
@@ -916,6 +978,28 @@ async def cmd_animation(args) -> int:
 
 BRIDGE = Path(__file__).parent / ".bridge"
 REQ_DIR, RESP_DIR = BRIDGE / "requests", BRIDGE / "responses"
+
+
+def daemon_exit_reason(link_lost: bool, since_last: float,
+                       idle_timeout: float) -> str | None:
+    """Why the daemon should stop serving, or None to keep going.
+
+    Extracted from the poll loop so the PRECEDENCE is testable, because the
+    precedence is the whole fix. `since_last` is reset by every request the
+    daemon drains, so a client that polls -- a survey script, a monitor, a
+    retry loop -- holds `since_last` near zero indefinitely. A disconnected
+    daemon under that traffic never reaches its idle timeout and never exits;
+    it just answers every op with a failure string until someone notices.
+
+    So link loss is checked FIRST and is independent of traffic. The idle
+    timeout is a courtesy for a session nobody is using; it was never a
+    recovery mechanism and cannot be made into one.
+    """
+    if link_lost:
+        return "link_lost"
+    if since_last > idle_timeout:
+        return "idle"
+    return None
 # Deliberately NOT `*.json`: startup wipes every .json under requests/ and
 # responses/, and a lock that the wipe could delete is not a lock.
 LOCK = BRIDGE / "daemon.lock"
@@ -1616,7 +1700,30 @@ async def _run_daemon(args) -> int:
         last = heartbeat = time.monotonic()
         try:
             while True:
-                if time.monotonic() - last > args.idle_timeout:
+                # LINK FIRST, IDLE SECOND. The idle timeout cannot rescue a
+                # dead session: `last` is reset by every request drained, so a
+                # polling client keeps a disconnected daemon alive forever,
+                # answering each op with a failure string and never exiting.
+                # Link loss is terminal and is checked independently of
+                # traffic.
+                reason = daemon_exit_reason(
+                    r2.link_lost, time.monotonic() - last, args.idle_timeout)
+                if reason == "link_lost":
+                    # Answer whatever is already queued rather than vanishing:
+                    # a client blocked on a response file waits out its own
+                    # timeout otherwise, and reads the silence as a hung
+                    # daemon rather than a dropped robot.
+                    for req in sorted(REQ_DIR.glob("*.json")):
+                        req.unlink(missing_ok=True)
+                        (RESP_DIR / req.name).write_text(json.dumps({
+                            "ok": False, "op": "<link lost>",
+                            "error": "BLE link lost; the daemon is shutting "
+                                     "down. Restart it once R2 is reachable."},
+                            indent=2))
+                    print(f"\n[{time.strftime('%H:%M:%S')}] link lost — "
+                          f"disconnecting (default to stop)")
+                    break
+                if reason == "idle":
                     print(f"\n[{time.strftime('%H:%M:%S')}] idle "
                           f"{args.idle_timeout:.0f}s — disconnecting (default to stop)")
                     break
