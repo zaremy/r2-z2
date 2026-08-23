@@ -1,5 +1,18 @@
 # Waveshare ESP32-S3-Touch-AMOLED-1.8 — V1 vs V2
 
+> [!important]
+> **ANSWERED for our unit, 2026-08-23: this board is V2 (CO5300 + CST816).**
+> OBSERVED — `firmware/board_check/` probed the bus after the reset release:
+> `0x15` answered, `0x38` was silent, `0x20` present. Transcript:
+> `R2Z2-vault/Experiments/data/board-check-20260823-000316.log`.
+>
+> **The retailer listing said V1 and was wrong.** It named SH8601 + FT3168 in
+> the product title; both are absent. That is the strongest case this file makes
+> for its own rule — probe, never read the revision off a product page.
+>
+> The rest of this file is the method, and it still applies to any *other* unit.
+> A different board needs its own probe.
+
 **Resolve this before flashing anything third-party.** The two revisions
 share a part number, a product page, and a form factor, but ship *different
 display and touch controllers*.
@@ -99,7 +112,7 @@ included in this repository yet"). Software probe is the reliable method.
 | `examples/arduino-v2/*` | ❌ | ✅ | CO5300 + CST820 |
 | `Firmware/…-V2-FactoryXiaozhi_260601.bin` | ❌ | ✅ | Checked-in V2 factory image — the recovery path |
 | `Firmware/…-FactoryXiaozhi_250805.bin` | ✅ | ❌ | Original factory image |
-| **`vthinkxie` `-e waveshare-esp32s3-touch-amoled-1-8`** | ✅ **likely correct for our unit** | ❌ DO NOT FLASH | Listing says V1 — see the note at the top; still gated on the I²C probe |
+| **`vthinkxie` `-e waveshare-esp32s3-touch-amoled-1-8`** | ✅ correct for a V1 board | ❌ **DO NOT FLASH — this includes our unit** | Our board is V2 (OBSERVED 2026-08-23), so this column is the one that applies. An earlier version of this row read "likely correct for our unit" on the strength of the retailer listing, and pointed at a note that was not in this file. Both are corrected. |
 
 ### Why vthinkxie's 1.8" build is V1-only
 
