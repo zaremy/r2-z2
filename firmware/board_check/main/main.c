@@ -75,9 +75,18 @@ static scan_result_t scan_bus(i2c_master_bus_handle_t bus)
     return r;
 }
 
-static void report_variant(board_variant_t v)
+/* Called AFTER the bus scan, deliberately. An earlier version printed the
+ * D-005 ruling before the scan that corroborates it, so a transcript could read
+ * "D-005 HOLDS" directly above "AC2 FAIL" -- and a skimming reader takes the
+ * first one. A ruling never precedes its evidence. */
+static void report_variant(board_variant_t v, bool corroborated_ok)
 {
     printf("\n>>> BOARD VARIANT: %s\n", board_variant_to_name(v));
+    if (!corroborated_ok) {
+        printf(">>> NOT CORROBORATED by the bus scan above. Draw no conclusion\n"
+               ">>> about D-005 from this run.\n");
+        return;
+    }
     switch (v) {
     case BOARD_VARIANT_CO5300_CST816:
         printf(">>> V2. The BSP is native to this board. D-005 HOLDS.\n");
@@ -122,9 +131,9 @@ void app_main(void)
     esp_chip_info_t chip;
     esp_chip_info(&chip);
     uint32_t flash_size = 0;
-    esp_flash_get_size(NULL, &flash_size);
+    bool flash_ok = (esp_flash_get_size(NULL, &flash_size) == ESP_OK);
     uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    bool mac_ok = (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK);
 
     printf("\n================ board_check ================\n");
     printf("chip      : %s, %d core(s), silicon rev v%d.%d\n",
@@ -134,17 +143,27 @@ void app_main(void)
            (chip.features & CHIP_FEATURE_WIFI_BGN) ? "wifi " : "",
            (chip.features & CHIP_FEATURE_BLE) ? "ble " : "",
            (chip.features & CHIP_FEATURE_EMB_PSRAM) ? "emb-psram" : "");
-    printf("flash     : %" PRIu32 " bytes (%" PRIu32 " MB)\n",
-           flash_size, flash_size / (1024 * 1024));
+    /* Report a failed read as a failure, never as a value. A silent 0 here
+     * would be written into board-capabilities.md as an OBSERVED flash size --
+     * and resolving the 8 MB vs 16 MB conflict is half this app's job. */
+    if (flash_ok) {
+        printf("flash     : %" PRIu32 " bytes (%" PRIu32 " MB)\n",
+               flash_size, flash_size / (1024 * 1024));
+    } else {
+        printf("flash     : READ FAILED -- do not record a flash size from this run\n");
+    }
     printf("psram     : %u bytes\n", (unsigned)esp_psram_get_size());
-    printf("base MAC  : %02X:%02X:%02X:%02X:%02X:%02X\n",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (mac_ok) {
+        printf("base MAC  : %02X:%02X:%02X:%02X:%02X:%02X\n",
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        printf("base MAC  : READ FAILED\n");
+    }
 
     /* board_variant_detect() opens and deletes its own bus. The IO expander is
      * an external latch, so the reset release it performs survives that
      * teardown -- which is why the scan below still sees the touch device. */
     board_variant_t v = board_variant_detect();
-    report_variant(v);
 
     printf("\n");
     i2c_master_bus_handle_t bus = NULL;
@@ -157,18 +176,29 @@ void app_main(void)
         .flags = {.enable_internal_pullup = true},
     };
     if (i2c_new_master_bus(&cfg, &bus) != ESP_OK) {
+        /* Reachable: board_variant_detect() only WARNS if its own
+         * i2c_del_master_bus() fails (board_variant.c:112-115), which leaves
+         * I2C_NUM_0 occupied and makes this return ESP_ERR_INVALID_STATE.
+         * This branch must end in a STOP -- an earlier version fell through to
+         * the closing rule with no verdict at all, which reads as a pass. */
         ESP_LOGE(TAG, "could not open I2C bus for the scan and PMU read");
+        printf(">>> BOARD VARIANT: not reported -- the bus never opened.\n");
+        printf("\n---- gate on the SD step ----\n");
+        printf("STOP: no I2C bus, so there was no scan and no PMU read. This run\n"
+               "      proved NOTHING about the board. Power-cycle and re-run; the\n"
+               "      detector caches, so a reset is not enough.\n");
         printf("=============================================\n\n");
         while (1) vTaskDelay(pdMS_TO_TICKS(10000));
     }
 
     scan_result_t scan = scan_bus(bus);
-    bool ac12 = corroborated(v, scan);
+    bool variant_ok = corroborated(v, scan);
+    report_variant(v, variant_ok);
     pmu_status_t pmu = pmu_dump(bus);
     i2c_del_master_bus(bus);
 
     printf("\n---- gate on the SD step ----\n");
-    if (!ac12) {
+    if (!variant_ok) {
         printf("STOP: the variant is not corroborated by the bus scan.\n");
     }
     if (pmu != PMU_OK) {
@@ -177,7 +207,7 @@ void app_main(void)
                "      not a pass. Capture this transcript, power-cycle, re-run\n"
                "      once, and re-plan if it repeats.\n", pmu_status_to_name(pmu));
     }
-    if (ac12 && pmu == PMU_OK) {
+    if (variant_ok && pmu == PMU_OK) {
         printf("Variant corroborated and PMU readable. Cleared to proceed.\n");
     }
     printf("=============================================\n\n");

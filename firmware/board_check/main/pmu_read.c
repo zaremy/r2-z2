@@ -2,7 +2,6 @@
 
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "esp_log.h"
 
@@ -151,15 +150,15 @@ pmu_status_t pmu_dump(i2c_master_bus_handle_t bus)
         }
     }
     printf("0x%02X DCDC1_VOL    raw=0x%02X   %s  ~%u mV\n", REG_DC_VOL0, dcv[0],
-           (dc_on & 0x01) ? "ON " : "off", dc1_mv(dcv[0]));
+           (dc_on & 0x01) ? "ON " : "off", (unsigned)dc1_mv(dcv[0]));
     printf("0x%02X DCDC2_VOL    raw=0x%02X   %s  ~%u mV\n", REG_DC_VOL1, dcv[1],
-           (dc_on & 0x02) ? "ON " : "off", dc234_mv(dcv[1]));
+           (dc_on & 0x02) ? "ON " : "off", (unsigned)dc234_mv(dcv[1]));
     printf("0x%02X DCDC3_VOL    raw=0x%02X   %s  ~%u mV\n", REG_DC_VOL2, dcv[2],
-           (dc_on & 0x04) ? "ON " : "off", dc3_mv(dcv[2]));
+           (dc_on & 0x04) ? "ON " : "off", (unsigned)dc3_mv(dcv[2]));
     printf("0x%02X DCDC4_VOL    raw=0x%02X   %s  ~%u mV\n", REG_DC_VOL3, dcv[3],
-           (dc_on & 0x08) ? "ON " : "off", dc234_mv(dcv[3]));
+           (dc_on & 0x08) ? "ON " : "off", (unsigned)dc234_mv(dcv[3]));
     printf("0x%02X DCDC5_VOL    raw=0x%02X   %s  ~%u mV\n", REG_DC_VOL4, dcv[4],
-           (dc_on & 0x10) ? "ON " : "off", dc5_mv(dcv[4]));
+           (dc_on & 0x10) ? "ON " : "off", (unsigned)dc5_mv(dcv[4]));
 
     /* --- LDO block ------------------------------------------------------- */
     uint8_t l0 = 0, l1 = 0;
@@ -183,7 +182,7 @@ pmu_status_t pmu_dump(i2c_master_bus_handle_t bus)
             status = PMU_AMBIGUOUS;
         }
         bool on = (i <= 7) ? !!(l0 & (1u << i)) : !!(l1 & 0x01);
-        uint16_t mv = (i == 6) ? cpusldo_mv(v) : ldo100_mv(v);
+        unsigned mv = (i == 6) ? cpusldo_mv(v) : ldo100_mv(v);
         printf("0x%02X %-7s VOL  raw=0x%02X   %s  ~%u mV\n",
                reg, ldo_name[i], v, on ? "ON " : "off", mv);
     }

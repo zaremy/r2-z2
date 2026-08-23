@@ -35,13 +35,35 @@ the first flash:
 1. **The dumped factory image is byte-identical to the vendor's V2 recovery
    image** — `Firmware/ESP32-S3-Touch-AMOLED-1.8-V2-FactoryXiaozhi_260601.bin`,
    0.00% differing across bootloader, partition table, factory app, `ota_0` and
-   `assets`. Against the V1 image (`…FactoryXiaozhi_250805.bin`) the same
-   regions differ 57–95%. Factory-app SHA-256 `fd24fdd8…` matches V2 exactly;
-   V1's is `f3bdf13d…`.
-2. **The image links only V2 drivers.** `strings` finds `CST816S` (14) and
-   `CO5300` (31), including `esp_lcd_new_panel_co5300` and
-   `esp_lcd_touch_cst816s_del`. `FT3168` and `SH8601` — the V1 parts — appear
-   **zero** times.
+   `assets`. Against the V1 image (`…FactoryXiaozhi_250805.bin`), per region:
+   bootloader 57.1%, partition table 2.7%, factory app 90.8%, `ota_0` 95.0%,
+   `assets` 94.5%. Factory-app SHA-256 `fd24fdd8…` matches V2 exactly; V1's is
+   `f3bdf13d…`.
+
+   The partition table's 2.7% is the honest outlier and is stated rather than
+   folded into a range: two ESP-IDF partition tables are mostly identical
+   padding, so a small percentage there is expected and is not evidence of
+   similarity. The five figures are given individually because a "57–95%" range
+   — which an earlier draft of this section published — quietly excluded it.
+2. **The image links only V2 drivers.** `strings -a factory-backup.bin | grep -c`,
+   case-sensitive, per spelling:
+
+   | Spelling | Count | | Spelling | Count |
+   |---|---|---|---|---|
+   | `CO5300` | 1 | | `FT3168` | **0** |
+   | `co5300` | 30 | | `ft3168` | **0** |
+   | `CST816S` | 2 | | `SH8601` | **0** |
+   | `cst816` | 12 | | `sh8601` | **0** |
+
+   Symbols present include `esp_lcd_new_panel_co5300` and
+   `esp_lcd_touch_cst816s_del`. The V1 parts appear **zero** times in any
+   casing.
+
+   Counted per spelling on purpose. An earlier draft published "`CST816S` (14)"
+   and "`CO5300` (31)" — those were `grep -ci` totals across every casing,
+   attributed to one capitalisation each. The conclusion did not change, because
+   the V1 counts are zero case-insensitively too, but the numbers as written
+   were wrong and would not have reproduced.
 
 The step that makes this strong rather than suggestive: the factory demo
 **runs** on this board. A build that links the CO5300 panel and CST816S touch
