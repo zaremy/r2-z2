@@ -266,6 +266,59 @@ python3 -c "import sys; sys.path.insert(0,'voice'); import speak as S; \
   print(S.compose_line('R2 bumped into the doorframe again'))"
 ```
 
+## Talking to him — `talk.command`
+
+Double-click **`mac-prototype/talk.command`**. It brings the BLE link up and
+starts the conversation loop in one step.
+
+```
+wake -> capture -> transcribe -> reason -> speak
+ V1       V1          V4          V5       V6
+```
+
+It must be a `.command` launched from Finder, not a shell command: macOS
+attributes Bluetooth to the *responsible* process, and an agent-spawned shell
+is killed because `claude.app` carries no usage description. Terminal is
+responsible when launchd spawns it. This is also why an agent cannot start the
+link for you.
+
+Tunable by environment, all optional:
+
+| var | default | notes |
+|---|---|---|
+| `CEILING` | `stance` | `read`/`leds`/`audio`/`dome`/`stance`. Also the send ceiling |
+| `TURNS` | `8` | bounded on purpose; Ctrl-C works, it is a real terminal |
+| `DEVICE` | `BRIO` | input device name substring, matched by NAME not index |
+| `EXTRA` | `--animate` | set to empty for composed beats instead of animations |
+
+```bash
+CEILING=audio TURNS=3 EXTRA= open mac-prototype/talk.command
+```
+
+### What it guards
+
+- **A stale daemon is detected before launching another.** One holding the
+  radio makes the new one fail with a misleading "R2-D2 not found".
+- **Only animations measured as `no_leg_activity` in #12 are ever sent** — 36
+  of 56 emit WADDLE and can fell him. Keyed on the measurement, not on leg
+  position: the animation retracts the stabiliser itself, so pre-setting the
+  tripod is not a mitigation, and `get_leg_action` cannot sense stance anyway.
+- **A beat above the ceiling is degraded, not dropped**, and degrading only
+  ever removes motion.
+- **The mic is proved live before recording.** A held-open device returns
+  digital silence, which reads exactly like nobody speaking.
+- **The noise floor is sampled over 2 s and taken at the 20th percentile.** A
+  single 500 ms sample taken while R2 finished an animation once measured the
+  floor 25 dB high, which would have clipped every utterance in the session.
+
+### Known rough edges
+
+- **The dome walks.** Animation 0 turns it ~24° with no return, and the dome
+  has no home position, soevery wake drifts it further. A hand-composed wake
+  gesture with `return_to_start` would fix it; an authored animation cannot.
+- `input overflow — dropped audio` between turns: nothing drains the mic while
+  transcribing and speaking.
+
 ## Microphone permission — the agent CAN open it
 
 **OBSERVED 2026-08-17.** The BLE restriction does **not** extend to the
