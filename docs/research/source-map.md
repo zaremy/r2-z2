@@ -99,7 +99,24 @@ and touch revisions).
   `examples/arduino-v2/` (10 sketches, CO5300/CST820) — the explicit
   revision split on the Arduino side.
 - `Firmware/ESP32-S3-Touch-AMOLED-1.8-V2-FactoryXiaozhi_260601.bin` — a V2
-  factory image exists as a checked-in product asset.
+  factory image exists as a checked-in product asset. **Our board shipped with
+  exactly this image**, byte-identical across bootloader, partition table,
+  factory app, `ota_0` and `assets` — which is how the revision was settled
+  without flashing anything (2026-08-22, see
+  [board-capabilities.md](board-capabilities.md)).
+
+**Vendored into our history** — the one exception to "never vendor a clone",
+made because `reference/` is gitignored and this component must survive a fresh
+clone:
+
+| Ours | Upstream path @ `ed7c6a5` |
+|---|---|
+| `firmware/platform/board_revision/board_variant.c` | `examples/esp-idf/90_axp2101_pmu/components/board_variant/board_variant.c` |
+| `firmware/platform/board_revision/include/board_variant.h` | `…/components/board_variant/include/board_variant.h` |
+
+Unmodified, with SHA-256s recorded in
+`firmware/platform/board_revision/PROVENANCE.md` so drift is checkable by
+command rather than by eye.
 
 Warnings:
 - README explicitly states **no schematic is included** and that CI "does not
@@ -128,7 +145,9 @@ Warnings:
   would drive a CO5300 panel with an SH8601 init sequence and probe touch at
   0x38 where nothing answers.
 - Its board table claims 8 MB flash for the 1.8"; Waveshare's own
-  `sdkconfig.defaults` says 16 MB. UNKNOWN — resolve on hardware.
+  `sdkconfig.defaults` says 16 MB. **RESOLVED on hardware 2026-08-22 — 16 MB.**
+  `vthinkxie`'s figure is REFUTED for this unit; it was inferred from a part
+  number. See [board-capabilities.md](board-capabilities.md).
 
 ### anthropics/claude-desktop-buddy — optional integration
 

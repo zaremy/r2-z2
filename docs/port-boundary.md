@@ -200,6 +200,16 @@ SH8601/FT3168, V2 is CO5300/CST816 — same part number, same product page,
 different silicon. **Do not flash `vthinkxie` first**; its 1.8" target is
 V1-only.
 
+**One exception, and it is the instrument that satisfies this rule's own
+precondition.** The revision cannot be read from outside; it takes code running
+on the board. So exactly one **revision-neutral diagnostic of our own** may be
+flashed before the answer is known — no panel init, no display driver in the
+link (`nm | grep -ci 'co5300\|bsp_display'` prints `0`), and only after a
+verified full-flash backup. That is `firmware/board_check/`. The hazard both
+rules were written against is flashing **display or third-party** firmware
+built for the wrong panel, which is why each is followed by *"do not flash
+`vthinkxie`"* — a diagnostic that touches no panel is not that hazard.
+
 Detection is not the BSP's job, and this file said otherwise for three hours:
 it claimed *"the vendor BSP detects it at runtime, so the safe first flash is
 the vendor quickstart."* Half right, and the wrong half matters.

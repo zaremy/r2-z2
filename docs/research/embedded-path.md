@@ -158,7 +158,15 @@ scheduling constraint on a shared radio before we add Wi-Fi.
 
 In order, each independently verifiable:
 
-1. `00_board_check` → record chip/flash/PSRAM/BSP capabilities.
+0. **Back up the factory image and verify it** — `esptool.py read_flash 0 ALL`,
+   size must equal what `flash_id` reports, record the SHA-256. Recovery images
+   are revision-specific and the first flash is what reveals the revision, so
+   this is the one step that cannot be redone later. DONE 2026-08-22.
+1. **`firmware/board_check/`** (ours) → records chip/flash/PSRAM/MAC, board
+   variant, I²C inventory and the AXP2101 rails in one flash. It links no
+   display driver, which is what lets it run before the revision is known.
+   Supersedes the vendor's `00_board_check` for this step; see
+   [board-revision.md](board-revision.md).
 2. **Confirm the board revision** by running the vendored detector, not a
    manual scan. `board_variant_detect()` ships in
    `examples/esp-idf/90_axp2101_pmu/components/board_variant/board_variant.c`
