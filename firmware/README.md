@@ -1,13 +1,42 @@
 # firmware/ — ESP32-S3 backpack
 
-Not started. Foundation decided (D-005): **ESP-IDF v5.5.x + the managed BSP
-`waveshare/esp32_s3_touch_amoled_1_8 ^2.0.3`**, NimBLE in central role, LVGL 9.
+Bring-up started. Foundation decided (D-005): **ESP-IDF v5.5.x + the managed
+BSP `waveshare/esp32_s3_touch_amoled_1_8 ^2.0.3`**, NimBLE in central role,
+LVGL 9.
+
+What exists today:
+
+```
+platform/board_revision/   vendored revision detector (see its PROVENANCE.md)
+board_check/               read-only diagnostic: chip, PSRAM, flash, MAC,
+                           board variant, I²C inventory, AXP2101 rails
+```
+
+`board_check` links no display driver and initialises no panel — that is what
+lets it run before the revision is known (prerequisite 2 below).
 
 Prerequisites, in order:
 
-1. Install ESP-IDF v5.5.x (not present on this host).
-2. Confirm the board revision before flashing anything — see
-   `../docs/research/board-revision.md`. **Do not flash `vthinkxie` firmware.**
+1. Install ESP-IDF v5.5.x — **done**, v5.5.5 at `~/esp/esp-idf` (per-shell
+   `. ~/esp/esp-idf/export.sh`; the shell profile is deliberately untouched).
+2. Confirm the board revision before flashing anything **except one
+   revision-neutral diagnostic** — see `../docs/research/board-revision.md`.
+   **Do not flash `vthinkxie` firmware.**
+
+   The carve-out exists because the revision is only knowable by running code
+   on the board, so the rule as originally written forbade its own
+   precondition. A rule the first real task must quietly break is a rule that
+   stops being believed, so it is amended rather than ignored. The diagnostic
+   must satisfy **all** of:
+
+   - it initialises no panel controller, and **links no display driver** —
+     checked by command, not by reading:
+     `xtensa-esp32s3-elf-nm <elf> | grep -ci 'co5300\|bsp_display'` prints `0`;
+   - it is **ours**, built from this repo — never a third-party or vendor image;
+   - a **verified full-flash backup exists first** (size matches what
+     `esptool.py flash_id` reports, SHA-256 recorded).
+
+   `board_check/` is that diagnostic. Nothing else qualifies today.
 3. Follow the first embedded slice in `../docs/research/embedded-path.md`.
 
 **Read `../docs/port-boundary.md` before writing any of it.** The Mac
@@ -21,7 +50,7 @@ voltage, not by moving the dome.** The dome has no home position, ignores
 small commands while reporting success, and the obvious first test against it
 is one whose negative result means nothing.
 
-Planned layout (do not scaffold ahead of need):
+Planned layout for the rest (do not scaffold ahead of need):
 
 ```
 platform/  display · touch · power · audio · storage · imu · connectivity

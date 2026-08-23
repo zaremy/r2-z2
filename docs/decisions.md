@@ -619,10 +619,17 @@ question.
   ruling authored animations out as the library.
 - **`enable_idle_animations` on or off.** Off during bring-up so every motion is
   attributable in logs; re-evaluate as a feature afterwards.
-- **Board revision — confirm, do not assume.** Record `00_board_check` and
-  `08_i2c_tools` output here with a date.
-- **Flash size** — 8 MB (`vthinkxie`'s claim) vs 16 MB (Waveshare's
-  `sdkconfig.defaults`). Affects partitioning and OTA.
+- **Board revision — confirm, do not assume.** **V2 as of 2026-08-22, but
+  INFERRED, not yet OBSERVED on the bus.** The dumped factory image is
+  byte-identical to the vendor's V2 recovery image and links only CO5300 +
+  CST816S with zero V1 drivers; the factory demo runs, so the hardware matches
+  the drivers. Confirm with `firmware/board_check/` on the bus (`0x15` answers
+  after the reset release) and record that reading here. Evidence:
+  [board-capabilities.md](research/board-capabilities.md).
+- ~~**Flash size** — 8 MB (`vthinkxie`'s claim) vs 16 MB (Waveshare's
+  `sdkconfig.defaults`).~~ **RESOLVED 2026-08-22 — 16 MB, OBSERVED.**
+  `esptool.py flash_id` read it directly from the board and the full-image dump
+  is exactly 16,777,216 bytes. `vthinkxie`'s 8 MB is REFUTED for this unit.
 - **Persistence media** — NVS / LittleFS / microSD split.
 - **Keepalive period** — 3 s is inherited, not measured.
 - **Backpack power and mounting.** Entirely unaddressed and not a software

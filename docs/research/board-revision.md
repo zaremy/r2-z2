@@ -63,12 +63,26 @@ difference beyond the driver swap.
 
 ### Recommended first action on the board
 
-Flash `examples/esp-idf/00_board_check` (serial only, does not touch the
-panel), then `13_display_colorbar`, which prints
-`Detected <V2|original> board revision` and then renders. Both are first-party
-and revision-safe. `08_i2c_tools` is the belt-and-braces option: it dumps the
+**SUPERSEDED 2026-08-22 — flash `firmware/board_check/`, ours, not the vendor's
+`00_board_check`.** Ours folds in the same chip/flash/PSRAM/MAC dump, adds the
+bus scan and a read-only AXP2101 rail inventory, and — the reason it exists —
+**links no display driver at all**, which is what lets it run before the
+revision is known. Verify with
+`xtensa-esp32s3-elf-nm build/board_check.elf | grep -ci 'co5300\|bsp_display'`
+→ `0`. The vendor example depends on the BSP; ours depends only on the vendored
+`board_variant` detector.
+
+`13_display_colorbar` still comes *after* the revision is known, never before —
+it prints `Detected <V2|original> board revision` and then renders.
+`08_i2c_tools` survives only as the `UNKNOWN`-variant diagnostic: it dumps the
 whole bus, so you will see `0x15` vs `0x38`, plus `0x20` (expander), AXP2101,
 PCF85063A, QMI8658 and ES8311 addresses in one shot.
+
+The original wording — *"flash `00_board_check`, then `13_display_colorbar`,
+both first-party and revision-safe"* — is kept here because it was reasonable
+and is now wrong in one specific way: it treats "first-party" as the safety
+property. The safety property is **no panel driver in the link**, which is a
+different and checkable thing.
 
 **UNKNOWN** — whether a physical silkscreen/revision marking exists. The
 vendor repo contains **no schematic** (README: "A board-level schematic is not
@@ -118,21 +132,33 @@ not as our firmware base.
 **Flash size.** `vthinkxie`'s board table says the 1.8" is 8 MB flash (and it
 ships `no_ota_8mb.csv`); Waveshare's own
 `examples/esp-idf/14_lvgl_demo_v9/sdkconfig.defaults` sets
-`CONFIG_ESPTOOLPY_FLASHSIZE_16MB` with OPI/OCT PSRAM at 80 MHz. **UNKNOWN**
-which applies to our unit — `00_board_check` prints the real flash size and
-PSRAM state, so this resolves itself on first boot. It matters for partitioning
-and for whether OTA is affordable later.
+`CONFIG_ESPTOOLPY_FLASHSIZE_16MB` with OPI/OCT PSRAM at 80 MHz.
+
+**RESOLVED 2026-08-22 — 16 MB, and it took no flash at all.** `esptool.py
+flash_id` reports "Detected flash size: 16MB" read-only over the factory
+firmware, and the full-image dump is exactly 16,777,216 bytes. `vthinkxie`'s
+8 MB figure is **REFUTED** for this unit. PSRAM is 8 MB as claimed. Evidence
+and the partition layout: [board-capabilities.md](board-capabilities.md).
 
 ---
 
 ## Checklist for first power-on
 
+0. **Back up the factory image first, and verify it.** `esptool.py read_flash
+   0 ALL factory-backup.bin`, then check the size equals what `flash_id`
+   reported and record the SHA-256. This is the only step that cannot be redone
+   later: the recovery images are revision-specific, and it is the first flash
+   that tells you the revision. Without the backup, rollback is a plan rather
+   than a capability.
 1. Do **not** flash anything third-party yet.
-2. `idf.py -p <PORT> flash monitor` on `00_board_check` → record chip revision,
-   flash size, PSRAM init state, BSP capability flags, free heap.
-3. `08_i2c_tools` → record the full I²C address map.
+2. `idf.py -p <PORT> flash monitor` on **`firmware/board_check/`** (ours) →
+   records chip revision, flash size, PSRAM, base MAC, board variant, the full
+   I²C address map, and the AXP2101 rail inventory in one flash. Not the
+   vendor's `00_board_check`; see "Recommended first action" above.
+3. `08_i2c_tools` only if the variant reads `UNKNOWN` — the detector caches its
+   result, so a retry needs a **power cycle**, not a reset.
 4. `13_display_colorbar` → confirm the printed revision matches the probe, and
-   that the panel renders.
+   that the panel renders. Only after step 2 has reported.
 5. Record all of it in `docs/decisions.md` with the date. Every later "which
    board do I have" question should be answered from that record, not re-derived.
 

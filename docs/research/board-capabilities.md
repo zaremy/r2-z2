@@ -5,10 +5,56 @@ cross-referenced against `vthinkxie/claude-desktop-buddy-esp32` @ `61a0ce9`
 (third-party, V1). Revision differences are in
 [board-revision.md](board-revision.md).
 
-**Nothing here is measured — the board has not been connected.** No USB serial
-device was present on this host at init time (`ls /dev/cu.*` showed only
-Bluetooth/debug ports). Everything below is read from source and must be
-confirmed by `00_board_check` on first boot.
+**Partly measured as of 2026-08-22.** The board is connected at
+`/dev/cu.usbmodem2101` (native USB-JTAG, VID `0x303a` / PID `0x1001` — no
+bridge chip, no driver). The silicon inventory below is OBSERVED read-only over
+the factory firmware; the peripheral tables further down are still read from
+source and await `board_check` on first boot.
+
+### OBSERVED 2026-08-22 — `esptool.py flash_id`, read-only, nothing flashed
+
+| | |
+|---|---|
+| Chip | ESP32-S3 (QFN56), **silicon rev v0.2** |
+| PSRAM | **8 MB** embedded (AP_3v3) |
+| Flash | **16 MB**, manufacturer `0x20`, device `0x4018` |
+| eFuse flash mode | quad (4 data lines), 3.3 V |
+| Crystal | 40 MHz |
+| Base MAC | `28:84:85:90:B1:B0` |
+
+Note **silicon** revision v0.2 is not **board** revision V1/V2 — different
+things, similar names, and conflating them is the obvious mistake here.
+
+### Board revision: **V2** — INFERRED (strong), 2026-08-22
+
+Not yet OBSERVED on the bus; the OBSERVED test is `board_check` seeing `0x15`
+answer after the touch reset release (issue #79, AC1/AC2). But two independent
+lines of evidence agree, both derived from the full-flash backup taken before
+the first flash:
+
+1. **The dumped factory image is byte-identical to the vendor's V2 recovery
+   image** — `Firmware/ESP32-S3-Touch-AMOLED-1.8-V2-FactoryXiaozhi_260601.bin`,
+   0.00% differing across bootloader, partition table, factory app, `ota_0` and
+   `assets`. Against the V1 image (`…FactoryXiaozhi_250805.bin`) the same
+   regions differ 57–95%. Factory-app SHA-256 `fd24fdd8…` matches V2 exactly;
+   V1's is `f3bdf13d…`.
+2. **The image links only V2 drivers.** `strings` finds `CST816S` (14) and
+   `CO5300` (31), including `esp_lcd_new_panel_co5300` and
+   `esp_lcd_touch_cst816s_del`. `FT3168` and `SH8601` — the V1 parts — appear
+   **zero** times.
+
+The step that makes this strong rather than suggestive: the factory demo
+**runs** on this board. A build that links the CO5300 panel and CST816S touch
+drivers and contains no V1 driver at all could not drive V1 hardware, so the
+hardware matches the drivers present.
+
+Consequence: **D-005 Amendment A's reversal is not triggered** — the BSP being
+V2-only is a match, not a hazard. Confirm on the bus before treating it as
+OBSERVED.
+
+Backup: `~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes,
+SHA-256 `6f188fb9d35ee793a3423934a4fa4e7c1fef9cc9dae76f9f177dabe854a6cdb3`.
+Kept outside the repo — it is a vendor binary.
 
 ---
 
@@ -28,7 +74,14 @@ CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
 Octal (OPI) PSRAM at 80 MHz, 240 MHz dual-core, 1 kHz tick. `vthinkxie` calls
 the part **ESP32-S3R8 — 8 MB OPI PSRAM, 8 MB flash**; the flash figure
-conflicts with the 16 MB above. **UNKNOWN — resolve with `00_board_check`.**
+conflicts with the 16 MB above.
+
+**RESOLVED 2026-08-22 — flash is 16 MB.** `esptool.py flash_id` reports
+"Detected flash size: 16MB" on the physical board, and the full-image dump is
+exactly 16,777,216 bytes with the partition table's last entry ending at
+`0x1000000`. The `vthinkxie` 8 MB figure was inferred from a part number and is
+**REFUTED** for this board; PSRAM at 8 MB is correct. See the OBSERVED table at
+the top of this file.
 
 ESP32-S3 has **Wi-Fi 4 + Bluetooth LE 5** on a shared radio. Coexistence is
 supported by ESP-IDF but is a real scheduling constraint — see
