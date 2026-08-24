@@ -777,5 +777,188 @@ class TestConstantsMatchTheDaemon(unittest.TestCase):
             self.assertEqual(ast.literal_eval(a[name]), ours,
                              f"{name} disagrees with the daemon")
 
+class TestAC1DelightDiffersByState(unittest.TestCase):
+    """Identical touch input, two happiness levels, measurably different
+    beats — asserted against what reaches the BRIDGE, not against what the
+    beat declares about itself."""
+
+    def perform_at(self, happiness: float):
+        import r2_mood as M
+        h = M.Happiness(value=happiness, updated_at=1_700_000_000.0)
+        intensity = h.intensity(1_700_000_000.0)
+        bridge = B.FakeBridge()
+        beat = B.express_delight(intensity=intensity)
+        B.perform(beat, bridge, ceiling="dome", sleep=lambda _s: None,
+                  home=B.DomeHome())
+        return beat, bridge, intensity
+
+    def test_a_starved_r2_and_a_contented_one_send_different_things(self):
+        starved_beat, starved_bridge, si = self.perform_at(10.0)
+        content_beat, content_bridge, ci = self.perform_at(90.0)
+        self.assertGreater(si, ci, "intensity is the deficit")
+        self.assertNotEqual(len(starved_bridge.sent), len(content_bridge.sent),
+                            "same number of ops reached the bridge")
+        self.assertGreater(starved_beat.estimated_duration_s(),
+                           content_beat.estimated_duration_s())
+
+    def test_the_boundary_is_the_named_constant_not_a_literal(self):
+        below = B.express_delight(intensity=B.FULL_DELIGHT_INTENSITY - 0.01)
+        at = B.express_delight(intensity=B.FULL_DELIGHT_INTENSITY)
+        self.assertNotEqual(len(below.phrases), len(at.phrases))
+
+    def test_both_lengths_are_the_same_behaviour_not_two(self):
+        # Same channels, same pool, same rest colour. Only the length differs.
+        full = B.express_delight(intensity=1.0)
+        brief = B.express_delight(intensity=0.0)
+        def ops(b):
+            return {s.op for p in b.phrases for s in p.steps}
+        self.assertEqual(ops(full), ops(brief))
+        self.assertEqual(full.rest_colour, brief.rest_colour)
+        self.assertTrue(brief.name.startswith("express_delight"))
+
+    def test_intensity_outside_the_range_is_refused(self):
+        for bad in (-0.01, 1.01, 5.0):
+            with self.subTest(intensity=bad):
+                with self.assertRaises(ValueError):
+                    B.express_delight(intensity=bad)
+
+
+class TestAC5NothingAboveDomeReachesTheSendPath(unittest.TestCase):
+
+    def test_the_computed_tier_is_at_most_dome(self):
+        # COMPUTED from the steps, not declared. A beat cannot lie about this.
+        for i in (0.0, 0.49, 0.5, 1.0):
+            with self.subTest(intensity=i):
+                beat = B.express_delight(intensity=i)
+                self.assertLessEqual(B.tier_rank(beat.required_tier()),
+                                     B.tier_rank("dome"))
+
+    def test_no_step_names_a_forbidden_op(self):
+        for i in (0.0, 1.0):
+            for phrase in B.express_delight(intensity=i).phrases:
+                for step in phrase.steps:
+                    self.assertNotIn(step.op, B.FORBIDDEN_OPS)
+
+    # `Step.tier()` has TWO raise paths — the FORBIDDEN_OPS guard, and a
+    # fallback for ops missing from OP_TIER — and both raise ValueError.
+    # Since `animation` appears in neither table, a bare assertRaises is
+    # satisfied by the unknown-op path with the safety guard deleted.
+    # MEASURED: setting FORBIDDEN_OPS = () left all five AC5 tests green.
+    # So these assert on the REASON, not merely on the failure.
+    FORBIDDEN_REASON = "may not emit it"
+
+    def test_the_guard_still_refuses_an_animation(self):
+        # EMOTE_LAUGH (id 15) is hardware-confirmed as a laugh and is still
+        # excluded: an animation is a stance command whose contents cannot be
+        # inspected before sending, and EMOTE_YES — a nod — put R2 on the
+        # floor (D-010).
+        for op, params in (("animation", {"id": 15}),
+                           ("set_stance", {"legs": 3})):
+            with self.subTest(op=op):
+                with self.assertRaises(ValueError) as ctx:
+                    B.Step(op, params).tier()
+                self.assertIn(self.FORBIDDEN_REASON, str(ctx.exception),
+                              "refused as an UNKNOWN op, not a forbidden one "
+                              "— the safety guard is not what stopped it")
+
+    def test_both_forbidden_ops_are_actually_in_the_guard(self):
+        # The guard's contents, asserted directly. Emptying the tuple must
+        # fail here even if every other path still happens to raise.
+        self.assertIn("animation", B.FORBIDDEN_OPS)
+        self.assertIn("set_stance", B.FORBIDDEN_OPS)
+
+    def test_a_delight_beat_carrying_an_animation_cannot_be_built(self):
+        good = B.express_delight(intensity=1.0)
+        poisoned = B.Beat(
+            name="delight+animation",
+            phrases=good.phrases + (B.Phrase(
+                (B.Step("animation", {"id": 15}),), gap_s=0.0),),
+            rest_colour=good.rest_colour, interruptible=True, energy="low",
+            cooldown_s=1.0, evidence="test")
+        with self.assertRaises(ValueError) as ctx:
+            poisoned.validate()
+        self.assertIn(self.FORBIDDEN_REASON, str(ctx.exception))
+
+    def test_the_dome_gesture_clears_the_firmware_floor(self):
+        # Under ~10.5 deg is silently ignored AND returns ok (D-013), so a
+        # sub-threshold gesture is indistinguishable from a working one.
+        for i in (0.0, 1.0):
+            for phrase in B.express_delight(intensity=i).phrases:
+                for step in phrase.steps:
+                    if step.op == "dome":
+                        self.assertGreaterEqual(abs(step.params["delta"]),
+                                                B.MIN_DOME_TRAVEL_DEG)
+
+
+class TestAC7SoundVarietyHolds(unittest.TestCase):
+
+    def test_four_consecutive_fires_use_four_different_ids(self):
+        B.DELIGHT_SOUNDS._recent.clear()
+        ids = []
+        for _ in range(4):
+            beat = B.express_delight(intensity=1.0)
+            ids += [s.params["id"] for p in beat.phrases for s in p.steps
+                    if s.op == "sound"]
+        self.assertEqual(len(ids), 4, "expected exactly one sound per beat")
+        self.assertEqual(len(set(ids)), 4, f"a laugh repeated: {ids}")
+
+    def test_the_pool_is_the_laugh_family_not_excited(self):
+        # S1b REFUTED EXCITED as delight — it reads as cognition and
+        # thinking() already owns it. Using it here would make delight and
+        # deliberation indistinguishable by ear.
+        laughs = {v for k, v in B.R2_SOUNDS.items() if "LAUGH" in k}
+        self.assertEqual(set(B.DELIGHT_SOUNDS.ids), laughs)
+        excited = {v for k, v in B.R2_SOUNDS.items() if "EXCITED" in k}
+        self.assertEqual(set(B.DELIGHT_SOUNDS.ids) & excited, set())
+
+    def test_one_sound_per_beat_at_either_length(self):
+        for i in (0.0, 1.0):
+            beat = B.express_delight(intensity=i)
+            n = sum(1 for p in beat.phrases for s in p.steps if s.op == "sound")
+            self.assertEqual(n, 1, "two picks per beat would halve the period")
+
+
+class TestDelightLeavesTheStatusLayerAlone(unittest.TestCase):
+    """Expression rides on motion, sound, holo and logic — NOT hue. All seven
+    reachable corners are spent on status (D-012 Amendment A), so recolouring
+    the PSIs would assert a status that is not true."""
+
+    def front_writes(self, beat):
+        out = []
+        for p in beat.phrases:
+            for s in p.steps:
+                if s.op == "leds":
+                    ch = s.params["channels"]
+                    if any(k in ch for k in (str(B.LED_FRONT_R),
+                                             str(B.LED_FRONT_G),
+                                             str(B.LED_FRONT_B))):
+                        out.append(ch)
+        return out
+
+    def test_the_front_psi_is_written_exactly_once(self):
+        for i in (0.0, 1.0):
+            with self.subTest(intensity=i):
+                self.assertEqual(len(self.front_writes(
+                    B.express_delight(intensity=i))), 1)
+
+    def test_that_one_write_restores_the_rest_colour_it_was_given(self):
+        for rest in B.STATUS_COLOURS:
+            with self.subTest(rest=rest):
+                beat = B.express_delight(intensity=1.0, rest=rest)
+                got = self.front_writes(beat)[0]
+                for k, v in B.front(rest).items():
+                    self.assertEqual(got[k], v)
+
+    def test_expression_rides_on_holo_and_logic(self):
+        beat = B.express_delight(intensity=1.0)
+        touched = set()
+        for p in beat.phrases:
+            for s in p.steps:
+                if s.op == "leds":
+                    touched |= set(s.params["channels"])
+        self.assertIn(str(B.LED_HOLO), touched)
+        self.assertIn(str(B.LED_LOGIC), touched)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

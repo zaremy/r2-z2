@@ -44,6 +44,11 @@ mac-prototype/.bridge/
 # Survey harness state — runtime only
 mac-prototype/.survey/
 
+# Character state — happiness and anything that joins it (#85). Runtime, and
+# deliberately NOT device state: it is about how R2 has been treated, not
+# about the hardware, and it must not travel between machines in git.
+mac-prototype/.state/
+
 # Audio/media test material — large binaries, not project source
 testing/
 

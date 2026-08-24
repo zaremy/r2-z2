@@ -1330,7 +1330,7 @@ animation-id conflict; `DEFERRED` = requires locomotion.
 | `listen()` | — (composed) | — | small tilt, hold | holo on | READY |
 | `express_curious()` | `WWM_CURIOUS` | `R2_CHATTY_*` rising | ±15° alternating, pause between | holo flicker | NEEDS-SURVEY |
 | `express_happy()` | `WWM_HAPPY` | `R2_POSITIVE_*` | quick ±30° | front warm | NEEDS-SURVEY |
-| `express_excited()` | `WWM_EXCITED` / `EMOTE_EXCITED` | `R2_EXCITED_*` | fast sweep | front bright | NEEDS-SURVEY |
+| `express_excited()` | ~~`WWM_EXCITED` / `EMOTE_EXCITED`~~ | ~~`R2_EXCITED_*`~~ | ~~fast sweep~~ | ~~front bright~~ | **RETIRED** — see `behaviour-states.md`; S1b refuted EXCITED as delight and `express_delight()` (#85) replaces it |
 | `express_annoyed()` | `WMM_FRUSTRATED` | `R2_ANNOYED`, `R2_NEGATIVE_*` | sharp turn away | front red | NEEDS-SURVEY |
 | `express_sad()` | `WWM_SAD` | `R2_SAD_*` | droop, slow | dim | NEEDS-SURVEY |
 | `express_concerned()` | `WWM_CONCERN` | `R2_NEGATIVE_*` soft | slow scan | amber | NEEDS-SURVEY |

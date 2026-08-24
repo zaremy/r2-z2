@@ -976,6 +976,156 @@ class SessionBridge(ScriptedBridge):
         return super()._reply(step)
 
 
+class TestAC6TheNullCaseDoesNotFire(unittest.TestCase):
+    """A no-touch control produces zero delight beats and zero happiness
+    change — asserted BEFORE the first real trial and AGAIN at the end.
+
+    Both ends matter. A detector stuck on produces the loud answer and loud
+    reads as success (S1e returned a unanimous 10/10 and every trial was
+    void). A control only at the start cannot catch specificity that drifts
+    during the run; only at the end cannot gate the run at all.
+    """
+
+    def loop_with_mood(self, *, noisy=False):
+        import r2_mood as M
+        c = Clock()
+        b = ScriptedBridge(noisy=noisy)
+        wall = [1_700_000_000.0]
+        mood = M.Mood(clock=lambda: wall[0], persist=False)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          beat_factory=B.express_delight, mood=mood,
+                          now=c.now, sleep=c.sleep)
+        return loop, b, mood, wall
+
+    def test_a_control_before_any_trial_changes_nothing(self):
+        loop, bridge, mood, _ = self.loop_with_mood()
+        before = mood.level()
+        out = loop.control(R.CONTROL_S)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["outcome"], "timeout")
+        self.assertEqual(mood.level(), before, "happiness moved with no touch")
+        self.assertNotIn("sound", [s.op for s in bridge.sent])
+        self.assertNotIn("dome", [s.op for s in bridge.sent])
+
+    def test_control_then_trial_then_control_again(self):
+        loop, bridge, mood, wall = self.loop_with_mood()
+
+        opening = loop.control(R.CONTROL_S)
+        self.assertTrue(opening["ok"])
+        self.assertEqual(mood.level(), 0.0)
+
+        rec = loop.react()                      # the one real trial
+        self.assertTrue(rec["beat_ok"])
+        self.assertGreater(rec["happiness_delta"], 0.0)
+        after_trial = mood.level()
+        self.assertGreater(after_trial, 0.0)
+
+        # Count the ops a BEAT produces, not total traffic: the sensor feed
+        # polls through the same bridge, so a control legitimately sends
+        # reads. Asserting zero traffic would fail on a working control and
+        # teach the next person to loosen the test rather than trust it.
+        def expressive(b):
+            return sum(1 for s in b.sent if s.op in ("sound", "dome"))
+
+        sent_before = expressive(bridge)
+        closing = loop.control(R.CONTROL_S)
+        self.assertTrue(closing["ok"], "specificity drifted during the run")
+        self.assertEqual(expressive(bridge), sent_before,
+                         "the closing control produced a delight beat")
+        self.assertEqual(mood.level(), after_trial,
+                         "happiness moved during the closing control")
+
+    def test_a_stuck_detector_still_refuses_to_arm_with_a_mood_attached(self):
+        loop, _, mood, _ = self.loop_with_mood(noisy=True)
+        out = loop.control(5.0)
+        self.assertFalse(out["ok"])
+        self.assertEqual(mood.level(), 0.0)
+
+
+class TestMoodWiring(unittest.TestCase):
+
+    def build(self, happiness: float, *, fail: bool = False):
+        import r2_mood as M
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        if fail:
+            b.fail_on = "sound"
+        wall = [1_700_000_000.0]
+        mood = M.Mood(clock=lambda: wall[0], persist=False)
+        mood.state = M.Happiness(value=happiness, updated_at=wall[0])
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          beat_factory=B.express_delight, mood=mood,
+                          now=c.now, sleep=c.sleep)
+        return loop, b, mood
+
+    def test_intensity_is_read_before_the_rise_is_applied(self):
+        # A starved R2 must ANSWER as a starved R2, then be topped up. The
+        # other order tops him up first and he replies as though he had been
+        # fine all along, which makes the scalar pointless.
+        loop, _, mood = self.build(0.0)
+        rec = loop.react()
+        self.assertAlmostEqual(rec["intensity"], 1.0, places=3)
+        self.assertGreater(mood.level(), 0.0)
+
+    def test_a_starved_r2_gets_the_full_beat(self):
+        loop, bridge, _ = self.build(5.0)
+        loop.react()
+        self.assertEqual(sum(1 for s in bridge.sent if s.op == "dome"), 3)
+
+    def test_a_contented_r2_gets_the_brief_one(self):
+        loop, bridge, _ = self.build(95.0)
+        loop.react()
+        self.assertEqual(sum(1 for s in bridge.sent if s.op == "dome"), 2)
+
+    def test_the_same_touch_moves_a_lonely_r2_more(self):
+        _, _, lonely = self.build(0.0)
+        lonely_before = lonely.state.value
+        _l, _b, lm = self.build(0.0)
+        _l.react()
+        lonely_delta = lm.state.value - lonely_before
+
+        _c, _cb, cm = self.build(80.0)
+        _c.react()
+        content_delta = cm.state.value - 80.0
+
+        self.assertGreater(lonely_delta, content_delta)
+
+    def test_a_failed_beat_earns_no_happiness(self):
+        # He did not visibly respond. Crediting him would let a broken send
+        # path look like a well-treated robot.
+        loop, _, mood = self.build(0.0, fail=True)
+        rec = loop.react()
+        self.assertFalse(rec["beat_ok"])
+        self.assertEqual(rec["happiness_delta"], 0.0)
+        self.assertEqual(mood.level(), 0.0)
+
+    def test_a_loop_without_a_mood_still_works(self):
+        # The survey harnesses have no mood on purpose: a run that quietly
+        # raised happiness would make the instrument change what it measures.
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        rec = loop.react()
+        self.assertTrue(rec["beat_ok"])
+        self.assertIsNone(rec["intensity"])
+        self.assertIsNone(rec["happiness"])
+
+    def test_a_factory_that_takes_no_intensity_is_not_handed_one(self):
+        # express_curious would raise a TypeError from inside the status
+        # layer, mid-reaction, with a hand still on the robot.
+        import r2_mood as M
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        mood = M.Mood(clock=lambda: 1_700_000_000.0, persist=False)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          beat_factory=B.express_curious, mood=mood,
+                          now=c.now, sleep=c.sleep)
+        rec = loop.react()
+        self.assertTrue(rec["beat_ok"])
+        self.assertEqual(rec["beat"], "express_curious")
+
+
 def run() -> int:
     loaded = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
     res = unittest.TextTestRunner(verbosity=2).run(loaded)
