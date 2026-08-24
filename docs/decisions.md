@@ -926,10 +926,55 @@ acceptable *only* because it is confined:
 
 ### Rejected
 
-- **A home server now.** Correct destination, wrong time. It adds always-on
-  hardware to a project whose next milestone (S7) needs none, and it would let
-  the voice decision hold the Mac-retirement decision hostage. Retiring the Mac
-  and adding voice are separate projects and should stay that way.
+- **A home server now.** Correct destination, wrong time — see Amendment A for
+  what "wrong time" actually means. It would let the voice decision hold the
+  Mac-retirement decision hostage, and retiring the Mac and adding voice are
+  separate projects that should stay that way.
 - **Waiting for on-device STT to become viable.** MultiNet gives ~200 fixed
   commands, which is a remote control, not a conversation. Designing toward it
   would produce exactly the commandable appliance the character test forbids.
+
+### Amendment A — 2026-08-24: the trigger is ship, not an outage
+
+Operator correction, same day, before this landed. Three things above are
+stated more weakly than the facts support.
+
+**1. Cloud APIs are not a future choice. They are already running.**
+`mac-prototype/voice/` is built: `reason.py` (#46) turns heard text into a
+`Beat` through a closed tool schema, and `speak.py` (#47) is Threepio's voice
+on `gpt-4o-mini-tts`. So the decision above does not *select* an architecture
+for later — it **ratifies the one already in the tree** and says it continues.
+What remains future is voice **on the board**, which is S9. Voice on the Mac is
+S2 and partly done.
+
+**2. The home server exists, and the trigger is validation, not failure.**
+The body of this ADR frames the server as deferred with a cloud outage as the
+trigger to stop deferring. That is too passive and it inverts the real plan:
+
+> **Cloud is the development path. The home server is the production path.
+> The trigger is "validated, ship it" — not "the cloud broke".**
+
+The operator already owns the hardware. It is not a purchase, a design
+question, or a new dependency on the household; it is a box in the garage
+waiting for a reason to be switched on.
+
+Two consequences worth stating:
+
+- **The `CLAUDE.md` no-Pi concern largely dissolves.** That rule guards against
+  a Pi quietly becoming the brain in a project that has not earned one. It does
+  not apply to hardware already owned, running a stage of the pipeline that
+  provably cannot run on the MCU. The amendment obligation in *Consequences*
+  stands — write it down when it happens — but the bar it has to clear is much
+  lower than that section implies.
+- **The T3 exposure is time-boxed by design**, not merely tolerated. A cloud
+  dependency we intend to remove at ship is a different risk from one we intend
+  to keep. The outage trigger is still worth keeping as a *floor*: if the cloud
+  reaches the character before validation is done, the server comes forward.
+
+**3. The xiaozhi-and-BLE note in the warning box is badly worded.** "xiaozhi has
+no Bluetooth" reads as a claim about hardware and is not one — the ESP32-S3
+plainly has BLE, and the board plainly has the codec. The claim is about the
+**firmware**: xiaozhi never uses BLE, so it never had to schedule one radio
+against a continuous BLE central link *and* a continuous audio uplink at the
+same time. The board's capability is not in question. Only the "proven
+together" claim is, and that is the claim we would be borrowing.
