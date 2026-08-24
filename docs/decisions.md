@@ -833,3 +833,103 @@ row. Two consequences worth stating:
 - **Printing `ARMED` more loudly.** This was the original failure. The observer
   cannot see the console — the whole premise of `/survey-session` — and no
   amount of console formatting reaches a person whose hands are on the robot.
+
+---
+
+## D-015 — Voice's off-board compute is cloud APIs for now; a home server is deferred, not rejected
+
+**Date:** 2026-08-24 · **Status:** accepted · **Operator ruling** ·
+**Extends:** `intent.md` (cloud is for the unusual), D-011 (the backpack speaker
+may carry character audio)
+
+### Context
+
+Speech recognition does not fit on an ESP32-S3. That is not a tuning problem:
+Espressif's own AFE wake-word and AEC paths are hard-gated on PSRAM
+(`USE_AFE_WAKE_WORD`, `USE_AUDIO_PROCESSOR` → `depends on … && SPIRAM`), and
+they buy a *wake word plus a fixed command set* — not conversation. Every
+shipping ESP32 voice assistant, including the `xiaozhi` firmware that came on
+this board from the factory, streams audio off-device and does STT, the LLM and
+TTS elsewhere.
+
+So "the ESP32 is the brain" (`architecture.md`) is true of the character loop
+and cannot be true of the language path. Something else runs speech, and there
+were only ever two shapes:
+
+| | Cost |
+|---|---|
+| **Cloud APIs** | no new hardware; a live third-party dependency in the voice path |
+| **Home server** | survives any vendor; ~4 vCPU / 8 GB always-on, and `CLAUDE.md` says no Raspberry Pi without a documented forcing limitation |
+
+Full evidence and sources: vault `Reference/Assistant Landscape Research.md`.
+
+### Decision
+
+1. **Voice uses cloud APIs when it arrives.** Provider-agnostic behind the
+   existing cloud-client interface — this buys nothing if it hardwires a vendor.
+2. **Voice stays out of S7.** S7 is the behaviour engine on device and the point
+   at which the Mac stops being required. Voice remains at **S9**, where the
+   roadmap already had it.
+3. **A home server is deferred, not rejected.** The self-hosted path is known to
+   work and to be provider-swappable end to end (local ASR, local TTS, local
+   LLM). It is the intended destination, not a fallback.
+
+### The scoping that makes (1) acceptable
+
+Choosing cloud accepts the **T3 / Jibo exposure** on purpose — the failure mode
+that killed Jibo and Anki Vector was a server being switched off. It is
+acceptable *only* because it is confined:
+
+- **The local behaviour loop may never depend on it.** Idle, mood, boredom,
+  sleep/wake, quiet hours and reflexes run with no network, unchanged. This is
+  already `intent.md`'s rule; D-015 is why it is load-bearing rather than a
+  performance preference.
+- **Losing the cloud must degrade R2 to mute, not to dead.** If a voice outage
+  ever makes him less alive, this decision has failed and the home server is no
+  longer deferred.
+- **Voice here means character voice** — he hears you and Threepio answers
+  (#41, #47). It is **not** the assistant job. Timers, weather and smart-home
+  control remain out of scope; that job fails the character test and, on one
+  analog microphone with no DSP, fails on hardware anyway.
+
+### Consequences
+
+- **`CLAUDE.md`'s no-Pi rule is untouched today and will need amending, not
+  excepting, when the server lands.** The rule exists to stop a Pi becoming the
+  brain. A speech box is not the brain — but that distinction must be written
+  down at the time, as an amendment, rather than assumed by whoever is holding
+  the soldering iron. A rule quietly broken once stops being believed.
+- **The cloud client is now on the critical path for S9** and must be
+  provider-agnostic from its first line. Retrofitting that is how vendors become
+  identities.
+- **T2 headroom is a precondition and is still unmeasured.** BLE central +
+  Wi-Fi + TLS + LVGL on a PSRAM framebuffer + a continuous audio uplink has
+  never been run together. Cloud does not relieve this; it *is* the continuous
+  uplink. Measure before scheduling S9.
+
+> [!warning] The existence proof on this board does not cover this.
+> `xiaozhi` ran Wi-Fi, TLS, Opus streaming, on-device wake word and an LVGL
+> display together on this exact hardware — and it has **no Bluetooth at all**
+> (upstream #1426, #129 are open feature requests). The single hardest thing we
+> need, a shared 2.4 GHz radio serving a BLE central link *and* an audio
+> uplink, is precisely what the reference implementation never had to solve.
+
+### Reversed by
+
+- Any measurement showing BLE + Wi-Fi + TLS + audio cannot coexist with
+  acceptable R2 control latency — which makes the shape of the off-board
+  compute moot until the radio problem is solved.
+- A cloud provider outage that reaches the *character*, not just the language.
+  That is the trigger to stop deferring the home server.
+- Deciding voice should be usable with no internet at all, which is a different
+  product decision and would force the server immediately.
+
+### Rejected
+
+- **A home server now.** Correct destination, wrong time. It adds always-on
+  hardware to a project whose next milestone (S7) needs none, and it would let
+  the voice decision hold the Mac-retirement decision hostage. Retiring the Mac
+  and adding voice are separate projects and should stay that way.
+- **Waiting for on-device STT to become viable.** MultiNet gives ~200 fixed
+  commands, which is a remote control, not a conversation. Designing toward it
+  would produce exactly the commandable appliance the character test forbids.
