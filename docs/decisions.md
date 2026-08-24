@@ -978,3 +978,98 @@ plainly has BLE, and the board plainly has the codec. The claim is about the
 against a continuous BLE central link *and* a continuous audio uplink at the
 same time. The board's capability is not in question. Only the "proven
 together" claim is, and that is the claim we would be borrowing.
+
+---
+
+## D-016 — Three surfaces, and the web app is not a remote control
+
+**Date:** 2026-08-24 · **Status:** accepted · **Extends:** `CLAUDE.md` character
+boundary, D-012 · **Prompted by:** the northstar showing the whole product at once
+
+### Context
+
+`CLAUDE.md` draws the character boundary across **two** surfaces: R2's body is the
+character interface, and the backpack touchscreen is a service panel that is not a
+face. That boundary has held for every decision so far.
+
+Building the northstar put the entire product on one page for the first time, and a
+**third** surface walked in without ever having been ruled on: a web app. It had been
+implied for a while — `intent.md` lists provisioning and settings, the frame named a
+builder's job, and the MCP work assumes something calls the tools — but nothing said
+what it is, and more importantly nothing said what it must never be.
+
+An unruled surface is how the character leaks. The screen got an explicit prohibition
+precisely because it is the obvious place to put a face; the web app is the obvious
+place to put a **joystick**, and that is the more dangerous of the two.
+
+### Decision
+
+Three surfaces, each answering a different question, and the questions are what keep
+them apart:
+
+| Surface | Answers | Read | Forbidden |
+|---|---|---|---|
+| **His body** — dome, lights, sound, stance | *Is he alright?* and everything with personality | at a glance, across the room | anything with a face or text |
+| **The backpack panel** | *What is wrong, and can I fix it here?* | up close, deliberately, when the light already sent you | rendering him; anything needing a glance |
+| **The web app** | *Who is he becoming?* | sitting down, occasionally, by the owner | **being a remote control** |
+
+**The web app carries:** his state (mood, energy, boredom), his diary in his own
+terms rather than log lines, his memory of people and routine, the set of things he
+is able to notice, and housekeeping — Wi-Fi, quiet hours, how bold he may be.
+
+**The web app must never carry:** a drive pad, a "do X now" button, a behaviour
+trigger, or any control that makes him perform on demand.
+
+### Why the prohibition is the load-bearing half
+
+Two independent failures, and the web app is the only surface exposed to both:
+
+1. **It would make him commandable.** A button that reliably produces a behaviour
+   teaches the household that R2 obeys, and appliance-ness is not a mode you get to
+   leave. The body is safe from this because it has no buttons; the panel is safe
+   because everything on it is a *diagnostic* fired by an operator who is debugging,
+   not a household member who wants a trick.
+2. **It would move the character onto a screen.** Watching R2 do something *because
+   you pressed a thing in a browser* puts the interesting part in the browser. That
+   is the same failure `CLAUDE.md` forbids on the touchscreen, arriving through a
+   door nobody had thought to lock.
+
+The hardware-test surface is not an exception to this — it is the reason the panel
+exists rather than the web app. Firing an actuator is a **repair** action, performed
+at the droid, by someone holding him, at the place the safety ladder can see.
+
+### Consequences
+
+- **The access control already exists and is free.** MCP distinguishes tools exposed
+  to the model from tools registered with `AddUserOnlyTool`, which are hidden from it
+  and surfaced only to a client that asks for them. Service and housekeeping tools go
+  in the second set; the web app is the client that asks. The character/service split
+  becomes an authorisation boundary rather than a convention people have to remember.
+- **Provisioning and settings move off the panel**, which is the right home for them
+  anyway at 29 × 35 mm. This removes the single structural objection to the
+  instrument-panel launcher (nowhere to put settings) and the launcher choice should
+  be re-run with settings out of the panel's job description.
+- **The panel's job shrinks to one question**, which is what makes a watch-sized
+  screen viable at all.
+- **A new obligation on every future surface:** state what it must never do, not only
+  what it is for. The screen's prohibition was written down and held for months; the
+  web app's absence of one is why this ADR exists.
+
+### Reversed by
+
+- A household member wanting to ask R2 for something directly and finding no way to,
+  in a way that reads as a missing feature rather than as character. That is a real
+  signal, and the answer would be a *request he can decline*, not a button.
+- Discovering the panel genuinely needs settings on it — e.g. Wi-Fi provisioning that
+  cannot bootstrap without a local UI, which is plausible and unmeasured.
+
+### Rejected
+
+- **A phone app.** Adds a platform, a store, a signing identity and a review process
+  to a project whose whole durability argument is that nobody else can switch it off.
+  A local web page served to any browser has none of that.
+- **Settings on the panel.** Three or four touch targets fit on it. Spending them on
+  configuration rather than on the fault in front of you is the wrong trade.
+- **A "run behaviour" developer button, even hidden behind a debug flag.** Debug
+  affordances become product affordances; the panel's hardware-test surface already
+  covers the legitimate need, under the safety ladder, at the droid.
