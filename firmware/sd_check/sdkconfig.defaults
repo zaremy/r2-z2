@@ -1,0 +1,20 @@
+# Deliberately IDENTICAL to firmware/board_check/sdkconfig.defaults, which is
+# the only configuration OBSERVED to boot on this board (2026-08-23, and again
+# cold 2026-08-24 with the SD card inserted).
+#
+# The vendor's 09_sdmmc/sdkconfig.defaults additionally sets
+# CONFIG_FREERTOS_HZ=1000, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y and
+# CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y. With those three, this app hung during
+# app startup between "Disabling RNG early entropy source" and the octal_psram
+# banner -- i.e. in PSRAM init -- and hung hard enough to wedge the USB-Serial-
+# JTAG peripheral, so esptool could no longer reach download mode without the
+# BOOT button. The cache-line setting is the prime suspect because it is the one
+# that interacts with the PSRAM cache, but this has NOT been bisected: all three
+# were removed together. Do not re-add them casually; if you want them, add one
+# at a time and be ready to hold BOOT.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
