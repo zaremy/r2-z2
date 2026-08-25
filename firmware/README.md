@@ -1,6 +1,6 @@
 # firmware/ — ESP32-S3 backpack
 
-Bring-up started. Foundation decided (D-005): **ESP-IDF v5.5.x + the managed
+Bring-up in progress. Foundation decided (D-005): **ESP-IDF v5.5.x + the managed
 BSP `waveshare/esp32_s3_touch_amoled_1_8 ^2.0.3`**, NimBLE in central role,
 LVGL 9.
 
@@ -10,7 +10,13 @@ What exists today:
 platform/board_revision/   vendored revision detector (see its PROVENANCE.md)
 board_check/               read-only diagnostic: chip, PSRAM, flash, MAC,
                            board variant, I²C inventory, AXP2101 rails
+sd_check/                  microSD: mount, write, unmount, REMOUNT, re-read
 ```
+
+**`board_check/sdkconfig.defaults` is the known-good configuration for this
+board.** Copy it rather than a vendor example's — three settings the vendor SD
+example ships hang this board in PSRAM init and wedge USB recovery. Evidence in
+`../docs/research/board-capabilities.md`.
 
 `board_check` links no display driver and initialises no panel — that is what
 lets it run before the revision is known (prerequisite 2 below).

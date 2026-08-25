@@ -17,8 +17,8 @@ they may be the factory firmware's configuration rather than power-on defaults;
 and the `0x51` / `0x6B` identifications are inferred from the peripheral table,
 not from a constant this clone contains.
 
-**Still unmeasured: the microSD path** — no card in hand as of 2026-08-23. See
-issue #81.
+**The microSD path is measured too, 2026-08-24** — mounts, and content
+survives an unmount. See the SD section below. Issue #81.
 
 ### OBSERVED 2026-08-22 — `esptool.py flash_id`, read-only, nothing flashed
 
@@ -145,6 +145,78 @@ on the raw bytes and the constants.
 
 **Nothing the SD path needs is gated off**, under either reading. AC12 clears.
 
+### microSD — OBSERVED 2026-08-24
+
+`firmware/sd_check/` (ours). Transcript:
+`R2Z2-vault/Experiments/data/sd-check-20260824-224535.log`.
+
+| | |
+|---|---|
+| Card under test | `SD32G`, **SDHC**, 30436 MB |
+| Mount point | `/sdcard` (`BSP_SD_MOUNT_POINT`) |
+| Clock | 20.00 MHz (at the reported limit) |
+| Bus width | **1-bit** (`SSR: bus_width=1`) |
+| CSD | ver=2, sector_size=512, capacity=62333952, read_bl_len=9 |
+| Persistence across unmount | **PASS** |
+
+**The persistence result is the one that took work.** The vendor example
+(`09_sdmmc/main/sd_card_example_main.c`) reads at `:71` and unmounts at `:76` —
+its last read is *before* the unmount, so it never demonstrates that anything
+survives. `sd_check` does mount → write → read → **unmount → remount → re-read**,
+and the re-read compares exact bytes against a per-boot nonce from
+`esp_random()`. Without the nonce, a read-back could be satisfied by a previous
+run's file, which is a false pass no amount of re-running would expose.
+
+> [!warning]
+> **Long filenames are OFF, and the failure looks like a broken card.**
+> `CONFIG_FATFS_LFN_NONE` is the ESP-IDF default, so FAT 8.3 is all that works:
+> `fopen()` fails outright on any name longer than **8 characters before the
+> dot**. A first attempt used `r2z2_sd_check.txt` (13) and the write failed with
+> nothing whatever wrong with the card. The BSP prints
+> `Warning: Long filenames on SD card are disabled in menuconfig!` at every
+> mount, which is the tell.
+>
+> **This is a live constraint, not a test artifact.** Anything storing memories,
+> dated logs or per-session files on this card needs
+> `CONFIG_FATFS_LFN_HEAP` — `session-2026-08-24.json` is not a legal 8.3 name.
+> Left unset here on purpose; see the config warning below for why.
+
+**Bus width is 1-bit**, not 4-bit, so throughput has a ceiling roughly a quarter
+of what the interface could do. Not chased — nothing needs the bandwidth yet —
+but worth knowing before anything streams audio to the card.
+
+### Config that hangs this board — OBSERVED 2026-08-24, cost a manual recovery
+
+The vendor's `09_sdmmc/sdkconfig.defaults` carries three settings that
+`board_check`'s does not:
+
+```
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+```
+
+With those three, `sd_check` **hung during app startup** — the log stops between
+`Disabling RNG early entropy source` and the `octal_psram` banner, i.e. inside
+PSRAM init. No panic, no reboot loop, just silence.
+
+**The expensive part is what the hang does to recovery.** It wedges the
+USB-Serial-JTAG peripheral, so `esptool` can no longer reset the chip into
+download mode: `Failed to connect to ESP32-S3: No serial data received`, on
+`default_reset`, `usb_reset` and `no_reset` alike. This board is native USB-JTAG
+(VID `0x303a` / PID `0x1001`, no bridge chip), so **there is no UART-side
+DTR/RTS reset to fall back on.** Recovery required physically power-cycling the
+board; after a clean power-up `esptool` connected on the first try.
+
+Removing all three restored a clean boot. **NOT bisected** — the cache-line
+setting is the prime suspect because it is the one that interacts with the PSRAM
+cache, but that is a hypothesis, not a measurement. If you want any of them, add
+one at a time and expect to reach for the buttons.
+
+The rule this supports: **on this board, prefer the sdkconfig already OBSERVED
+to boot over the one the vendor example ships.** `firmware/board_check/` is the
+known-good reference; `firmware/sd_check/` now matches it exactly.
+
 ### Board revision: **V2** — OBSERVED 2026-08-23 (was INFERRED 2026-08-22)
 
 Not yet OBSERVED on the bus; the OBSERVED test is `board_check` seeing `0x15`
@@ -251,7 +323,7 @@ supported by ESP-IDF but is a real scheduling constraint — see
 | Audio codec | ES8311 | I²C ctrl + I²S data | `examples/esp-idf/12_i2s_codec/` |
 | Microphone | onboard, analog into ES8311 | I²S RX | `12_i2s_codec` sets `digital_mic = false` |
 | Speaker | amp gated by `BSP_POWER_AMP_IO` | — | `12_i2s_codec/main/*.c:134` |
-| Storage | microSD over SDMMC | `BSP_SD_CMD/CLK/D0` | `examples/esp-idf/09_sdmmc/` |
+| Storage | microSD over SDMMC | `BSP_SD_CMD/CLK/D0` | **OBSERVED 2026-08-24** — mounts, 1-bit, 20 MHz, survives unmount. `firmware/sd_check/` |
 | Wi-Fi | ESP32-S3 native | — | `examples/esp-idf/10_wifi_station/` |
 
 ### Pin map (V1/V2 common — OBSERVED)

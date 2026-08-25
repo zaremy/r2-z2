@@ -833,3 +833,243 @@ row. Two consequences worth stating:
 - **Printing `ARMED` more loudly.** This was the original failure. The observer
   cannot see the console — the whole premise of `/survey-session` — and no
   amount of console formatting reaches a person whose hands are on the robot.
+
+---
+
+## D-015 — Voice's off-board compute is cloud APIs for now; a home server is deferred, not rejected
+
+**Date:** 2026-08-24 · **Status:** accepted · **Operator ruling** ·
+**Extends:** `intent.md` (cloud is for the unusual), D-011 (the backpack speaker
+may carry character audio)
+
+### Context
+
+Speech recognition does not fit on an ESP32-S3. That is not a tuning problem:
+Espressif's own AFE wake-word and AEC paths are hard-gated on PSRAM
+(`USE_AFE_WAKE_WORD`, `USE_AUDIO_PROCESSOR` → `depends on … && SPIRAM`), and
+they buy a *wake word plus a fixed command set* — not conversation. Every
+shipping ESP32 voice assistant, including the `xiaozhi` firmware that came on
+this board from the factory, streams audio off-device and does STT, the LLM and
+TTS elsewhere.
+
+So "the ESP32 is the brain" (`architecture.md`) is true of the character loop
+and cannot be true of the language path. Something else runs speech, and there
+were only ever two shapes:
+
+| | Cost |
+|---|---|
+| **Cloud APIs** | no new hardware; a live third-party dependency in the voice path |
+| **Home server** | survives any vendor; ~4 vCPU / 8 GB always-on, and `CLAUDE.md` says no Raspberry Pi without a documented forcing limitation |
+
+Full evidence and sources: vault `Reference/Assistant Landscape Research.md`.
+
+### Decision
+
+1. **Voice uses cloud APIs when it arrives.** Provider-agnostic behind the
+   existing cloud-client interface — this buys nothing if it hardwires a vendor.
+2. **Voice stays out of S7.** S7 is the behaviour engine on device and the point
+   at which the Mac stops being required. Voice remains at **S9**, where the
+   roadmap already had it.
+3. **A home server is deferred, not rejected.** The self-hosted path is known to
+   work and to be provider-swappable end to end (local ASR, local TTS, local
+   LLM). It is the intended destination, not a fallback.
+
+### The scoping that makes (1) acceptable
+
+Choosing cloud accepts the **T3 / Jibo exposure** on purpose — the failure mode
+that killed Jibo and Anki Vector was a server being switched off. It is
+acceptable *only* because it is confined:
+
+- **The local behaviour loop may never depend on it.** Idle, mood, boredom,
+  sleep/wake, quiet hours and reflexes run with no network, unchanged. This is
+  already `intent.md`'s rule; D-015 is why it is load-bearing rather than a
+  performance preference.
+- **Losing the cloud must degrade R2 to mute, not to dead.** If a voice outage
+  ever makes him less alive, this decision has failed and the home server is no
+  longer deferred.
+- **Voice here means character voice** — he hears you and Threepio answers
+  (#41, #47). It is **not** the assistant job. Timers, weather and smart-home
+  control remain out of scope; that job fails the character test and, on one
+  analog microphone with no DSP, fails on hardware anyway.
+
+### Consequences
+
+- **`CLAUDE.md`'s no-Pi rule is untouched today and will need amending, not
+  excepting, when the server lands.** The rule exists to stop a Pi becoming the
+  brain. A speech box is not the brain — but that distinction must be written
+  down at the time, as an amendment, rather than assumed by whoever is holding
+  the soldering iron. A rule quietly broken once stops being believed.
+- **The cloud client is now on the critical path for S9** and must be
+  provider-agnostic from its first line. Retrofitting that is how vendors become
+  identities.
+- **T2 headroom is a precondition and is still unmeasured.** BLE central +
+  Wi-Fi + TLS + LVGL on a PSRAM framebuffer + a continuous audio uplink has
+  never been run together. Cloud does not relieve this; it *is* the continuous
+  uplink. Measure before scheduling S9.
+
+> [!warning] The existence proof on this board does not cover this.
+> `xiaozhi` ran Wi-Fi, TLS, Opus streaming, on-device wake word and an LVGL
+> display together on this exact hardware — and it has **no Bluetooth at all**
+> (upstream #1426, #129 are open feature requests). The single hardest thing we
+> need, a shared 2.4 GHz radio serving a BLE central link *and* an audio
+> uplink, is precisely what the reference implementation never had to solve.
+
+### Reversed by
+
+- Any measurement showing BLE + Wi-Fi + TLS + audio cannot coexist with
+  acceptable R2 control latency — which makes the shape of the off-board
+  compute moot until the radio problem is solved.
+- A cloud provider outage that reaches the *character*, not just the language.
+  That is the trigger to stop deferring the home server.
+- Deciding voice should be usable with no internet at all, which is a different
+  product decision and would force the server immediately.
+
+### Rejected
+
+- **A home server now.** Correct destination, wrong time — see Amendment A for
+  what "wrong time" actually means. It would let the voice decision hold the
+  Mac-retirement decision hostage, and retiring the Mac and adding voice are
+  separate projects that should stay that way.
+- **Waiting for on-device STT to become viable.** MultiNet gives ~200 fixed
+  commands, which is a remote control, not a conversation. Designing toward it
+  would produce exactly the commandable appliance the character test forbids.
+
+### Amendment A — 2026-08-24: the trigger is ship, not an outage
+
+Operator correction, same day, before this landed. Three things above are
+stated more weakly than the facts support.
+
+**1. Cloud APIs are not a future choice. They are already running.**
+`mac-prototype/voice/` is built: `reason.py` (#46) turns heard text into a
+`Beat` through a closed tool schema, and `speak.py` (#47) is Threepio's voice
+on `gpt-4o-mini-tts`. So the decision above does not *select* an architecture
+for later — it **ratifies the one already in the tree** and says it continues.
+What remains future is voice **on the board**, which is S9. Voice on the Mac is
+S2 and partly done.
+
+**2. The home server exists, and the trigger is validation, not failure.**
+The body of this ADR frames the server as deferred with a cloud outage as the
+trigger to stop deferring. That is too passive and it inverts the real plan:
+
+> **Cloud is the development path. The home server is the production path.
+> The trigger is "validated, ship it" — not "the cloud broke".**
+
+The operator already owns the hardware. It is not a purchase, a design
+question, or a new dependency on the household; it is a box in the garage
+waiting for a reason to be switched on.
+
+Two consequences worth stating:
+
+- **The `CLAUDE.md` no-Pi concern largely dissolves.** That rule guards against
+  a Pi quietly becoming the brain in a project that has not earned one. It does
+  not apply to hardware already owned, running a stage of the pipeline that
+  provably cannot run on the MCU. The amendment obligation in *Consequences*
+  stands — write it down when it happens — but the bar it has to clear is much
+  lower than that section implies.
+- **The T3 exposure is time-boxed by design**, not merely tolerated. A cloud
+  dependency we intend to remove at ship is a different risk from one we intend
+  to keep. The outage trigger is still worth keeping as a *floor*: if the cloud
+  reaches the character before validation is done, the server comes forward.
+
+**3. The xiaozhi-and-BLE note in the warning box is badly worded.** "xiaozhi has
+no Bluetooth" reads as a claim about hardware and is not one — the ESP32-S3
+plainly has BLE, and the board plainly has the codec. The claim is about the
+**firmware**: xiaozhi never uses BLE, so it never had to schedule one radio
+against a continuous BLE central link *and* a continuous audio uplink at the
+same time. The board's capability is not in question. Only the "proven
+together" claim is, and that is the claim we would be borrowing.
+
+---
+
+## D-016 — Three surfaces, and the web app is not a remote control
+
+**Date:** 2026-08-24 · **Status:** accepted · **Extends:** `CLAUDE.md` character
+boundary, D-012 · **Prompted by:** the northstar showing the whole product at once
+
+### Context
+
+`CLAUDE.md` draws the character boundary across **two** surfaces: R2's body is the
+character interface, and the backpack touchscreen is a service panel that is not a
+face. That boundary has held for every decision so far.
+
+Building the northstar put the entire product on one page for the first time, and a
+**third** surface walked in without ever having been ruled on: a web app. It had been
+implied for a while — `intent.md` lists provisioning and settings, the frame named a
+builder's job, and the MCP work assumes something calls the tools — but nothing said
+what it is, and more importantly nothing said what it must never be.
+
+An unruled surface is how the character leaks. The screen got an explicit prohibition
+precisely because it is the obvious place to put a face; the web app is the obvious
+place to put a **joystick**, and that is the more dangerous of the two.
+
+### Decision
+
+Three surfaces, each answering a different question, and the questions are what keep
+them apart:
+
+| Surface | Answers | Read | Forbidden |
+|---|---|---|---|
+| **His body** — dome, lights, sound, stance | *Is he alright?* and everything with personality | at a glance, across the room | anything with a face or text |
+| **The backpack panel** | *What is wrong, and can I fix it here?* | up close, deliberately, when the light already sent you | rendering him; anything needing a glance |
+| **The web app** | *Who is he becoming?* | sitting down, occasionally, by the owner | **being a remote control** |
+
+**The web app carries:** his state (mood, energy, boredom), his diary in his own
+terms rather than log lines, his memory of people and routine, the set of things he
+is able to notice, and housekeeping — Wi-Fi, quiet hours, how bold he may be.
+
+**The web app must never carry:** a drive pad, a "do X now" button, a behaviour
+trigger, or any control that makes him perform on demand.
+
+### Why the prohibition is the load-bearing half
+
+Two independent failures, and the web app is the only surface exposed to both:
+
+1. **It would make him commandable.** A button that reliably produces a behaviour
+   teaches the household that R2 obeys, and appliance-ness is not a mode you get to
+   leave. The body is safe from this because it has no buttons; the panel is safe
+   because everything on it is a *diagnostic* fired by an operator who is debugging,
+   not a household member who wants a trick.
+2. **It would move the character onto a screen.** Watching R2 do something *because
+   you pressed a thing in a browser* puts the interesting part in the browser. That
+   is the same failure `CLAUDE.md` forbids on the touchscreen, arriving through a
+   door nobody had thought to lock.
+
+The hardware-test surface is not an exception to this — it is the reason the panel
+exists rather than the web app. Firing an actuator is a **repair** action, performed
+at the droid, by someone holding him, at the place the safety ladder can see.
+
+### Consequences
+
+- **The access control already exists and is free.** MCP distinguishes tools exposed
+  to the model from tools registered with `AddUserOnlyTool`, which are hidden from it
+  and surfaced only to a client that asks for them. Service and housekeeping tools go
+  in the second set; the web app is the client that asks. The character/service split
+  becomes an authorisation boundary rather than a convention people have to remember.
+- **Provisioning and settings move off the panel**, which is the right home for them
+  anyway at 29 × 35 mm. This removes the single structural objection to the
+  instrument-panel launcher (nowhere to put settings) and the launcher choice should
+  be re-run with settings out of the panel's job description.
+- **The panel's job shrinks to one question**, which is what makes a watch-sized
+  screen viable at all.
+- **A new obligation on every future surface:** state what it must never do, not only
+  what it is for. The screen's prohibition was written down and held for months; the
+  web app's absence of one is why this ADR exists.
+
+### Reversed by
+
+- A household member wanting to ask R2 for something directly and finding no way to,
+  in a way that reads as a missing feature rather than as character. That is a real
+  signal, and the answer would be a *request he can decline*, not a button.
+- Discovering the panel genuinely needs settings on it — e.g. Wi-Fi provisioning that
+  cannot bootstrap without a local UI, which is plausible and unmeasured.
+
+### Rejected
+
+- **A phone app.** Adds a platform, a store, a signing identity and a review process
+  to a project whose whole durability argument is that nobody else can switch it off.
+  A local web page served to any browser has none of that.
+- **Settings on the panel.** Three or four touch targets fit on it. Spending them on
+  configuration rather than on the fault in front of you is the wrong trade.
+- **A "run behaviour" developer button, even hidden behind a debug flag.** Debug
+  affordances become product affordances; the panel's hardware-test surface already
+  covers the legitimate need, under the safety ladder, at the droid.
