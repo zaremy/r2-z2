@@ -90,6 +90,12 @@ DOME_UNDERSHOOT_DEG = 3.0
 # "small dome movement" in the bring-up order means 12 deg, not 3.
 MIN_DOME_TRAVEL_DEG = 12.0
 
+# Above this deficit a touch gets the full beat; below it, a brief
+# acknowledgement. One number, named, because #85 AC1 asserts the two sides
+# differ and a magic literal in the middle of a beat is not a decision anyone
+# can find later.
+FULL_DELIGHT_INTENSITY = 0.5
+
 # Which tier each op we are allowed to emit needs. A subset of r2_probe.OPS on
 # purpose: this layer may not reach for `animation` or `set_stance`, and the
 # safest way to express "may not" is to have no name for them.
@@ -244,6 +250,26 @@ THINKING_SOUNDS = SoundPool(
     "thinking",
     [_sid("R2_EXCITED_1"), _sid("R2_EXCITED_10"), _sid("R2_EXCITED_11")],
     evidence="OBSERVED S1b — heard as quick thinking / analyzing / quick reply",
+)
+
+# Delight. The EXCITED family was the obvious candidate and S1b REFUTED it:
+# those ids read as cognition, and `thinking()` above already owns them.
+# Using EXCITED here would make delight and deliberation indistinguishable by
+# ear, which is worse than having no delight beat at all.
+#
+# All four LAUGH ids go in because the family name and the reading agree for
+# once. Four is also the smallest pool that can satisfy #85 AC7 — four
+# consecutive fires, four different ids — and it only does so if the caller
+# asks for `avoid_last=3`. The default of 2 yields [1, 2, 3, 1]: the fourth
+# fire repeats the first, and a laugh that repeats every fourth time reads as
+# a recording rather than a reaction.
+DELIGHT_SOUNDS = SoundPool(
+    "delight",
+    [_sid("R2_LAUGH_1"), _sid("R2_LAUGH_2"),
+     _sid("R2_LAUGH_3"), _sid("R2_LAUGH_4")],
+    evidence="family label and heard reading agree; EMOTE_LAUGH (id 15) is "
+             "hardware-confirmed as a laugh but is an ANIMATION and excluded "
+             "(D-010) — these are sound ids, not stance commands",
 )
 
 
@@ -867,4 +893,111 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
     return beat
 
 
-VOCABULARY = {"express_curious": express_curious, "thinking": thinking}
+def express_delight(*, rest=BASE_NEUTRAL, intensity: float = 1.0,
+                    travel: float = 14.0) -> Beat:
+    """He was touched, and it landed. Composed from primitives (#85).
+
+    `intensity` is 0..1 and comes from `r2_mood`: it is the DEFICIT, how much
+    the contact meant to him, read BEFORE the touch is applied. A starved R2
+    gets the full beat; one petted a minute ago gets a short acknowledgement.
+    Same channels, same sound pool, fewer phrases — one behaviour at two
+    lengths, not two behaviours.
+
+    NO PSI COLOUR CHANGE, and this is the constraint that shapes everything
+    else. All seven reachable corners are spent on status (D-012 Amendment A),
+    so a delight beat that recoloured the PSIs would be asserting a status
+    that is not true. The front PSI is touched exactly once, in the last
+    phrase, restoring whatever status colour the layer handed in. Expression
+    rides on motion, sound, the holo (bit 7) and the logic panel (bit 3).
+
+    NOT `EMOTE_LAUGH`. Id 15 is hardware-confirmed as a laugh and is still
+    excluded: an animation is a stance command whose contents cannot be
+    inspected before sending, and `EMOTE_YES` — a *nod* — emitted WADDLE three
+    times and put R2 on the floor with `perform_leg_action` never called by us
+    (D-010). This beat fires with someone's hand on him, unsupervised,
+    possibly over a hard floor. `FORBIDDEN_OPS` already makes the animation
+    unreachable; #85 AC5 keeps that guard alive.
+
+    A LAUGH CANNOT FEEL QUICK, so this does not try. Every dome move takes
+    ~2.0-2.2 s regardless of distance and anything under ~10.5 deg is silently
+    ignored while returning ok (D-013). The register the hardware offers is
+    a slow rock, not a giggle — designing a fast one would be designing for
+    hardware we do not have.
+    """
+    if not 0.0 <= intensity <= 1.0:
+        raise ValueError(f"intensity {intensity} outside 0..1")
+    full = intensity >= FULL_DELIGHT_INTENSITY
+
+    # ONE pick per beat, whatever the length. Two picks in the full beat would
+    # halve the pool's effective period and make AC7's "four fires, four ids"
+    # depend on which pick you counted.
+    laugh = DELIGHT_SOUNDS.pick(avoid_last=3)
+
+    # Phrase 1 — the holo comes up and the logic panel lights. Brightness
+    # only: both are on/off-ish channels whose curve is too steep for
+    # anything subtle (D-012 Amendment A section 3).
+    opening = Phrase((
+        Step("leds", {"channels": {**holo(160 if full else 200),
+                                   **logic(255)}}),
+    ), gap_s=0.15)
+
+    # Phrase 2 — sound FIRST, then the turn. Audio onset is slower than the
+    # batch spacing, so starting the dome first puts the laugh in the pause
+    # after it rather than inside it. Learned the expensive way on
+    # express_curious, which had this backwards until hardware refuted it.
+    swing_out = Phrase((
+        Step("sound", {"id": laugh, "volume": 200}),
+        Step("dome", {"delta": travel, "settle": 0}),
+        Step("leds", {"channels": holo(255)}),
+    ), gap_s=DOME_MOVE_S)
+
+    closing_channels = {**front(rest), **holo(0), **logic(0)}
+
+    if full:
+        phrases = (
+            opening,
+            swing_out,
+            # Back across centre. Twice the travel so the return leg still
+            # clears the 12 deg floor on its own — a gesture that ends where
+            # it began needs a sub-threshold tidy-up move, and that is exactly
+            # the move the firmware discards.
+            Phrase((
+                Step("dome", {"delta": -travel * 2, "settle": 0}),
+                Step("leds", {"channels": holo(120)}),
+            ), gap_s=DOME_MOVE_S),
+            Phrase((
+                Step("dome", {"delta": travel, "settle": 0}),
+                Step("leds", {"channels": closing_channels}),
+            ), gap_s=0.0),
+        )
+    else:
+        phrases = (
+            opening,
+            swing_out,
+            Phrase((
+                Step("dome", {"delta": -travel, "settle": 0}),
+                Step("leds", {"channels": closing_channels}),
+            ), gap_s=0.0),
+        )
+
+    beat = Beat(
+        name="express_delight" + ("" if full else ":brief"),
+        phrases=phrases,
+        rest_colour=rest,
+        interruptible=True,
+        energy="low" if not full else "medium",
+        # Shorter than curious: this answers a hand, and a creature that
+        # cannot answer twice in a minute reads as broken rather than paced.
+        cooldown_s=12.0 if full else 6.0,
+        return_to_start=True,
+        evidence="COMPOSED (#85). Sound: R2_LAUGH_* family label and heard "
+                 "reading agree. Dome timing MEASURED (D-013): ~2.0-2.2 s per "
+                 "move, 12 deg floor. No PSI change (D-012 Amendment A).",
+        notes=f"intensity={intensity:.2f} -> {'full' if full else 'brief'}",
+    )
+    beat.validate()
+    return beat
+
+
+VOCABULARY = {"express_curious": express_curious, "thinking": thinking,
+              "express_delight": express_delight}

@@ -57,6 +57,7 @@ THE THREE THINGS THAT MAKE THIS HARD, none of which are the detection:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 import time
@@ -236,6 +237,23 @@ def ratios(window: list[dict], thresholds) -> dict[str, float]:
 # the loop
 # ---------------------------------------------------------------------------
 
+def _accepts(fn, name: str) -> bool:
+    """Does `fn` take a keyword called `name`?
+
+    `Reactive` is used with more than one beat factory. `express_curious`
+    takes no intensity and `express_delight` requires one, and passing an
+    unexpected keyword would be a TypeError raised from inside the status
+    layer, mid-reaction, with a hand still on the robot. Asking first is
+    duller than a try/except around a call that has already moved him.
+    """
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 class Reactive:
     """The closed loop. `now`/`sleep` are injected so the whole state machine
     runs in a unit test at no wall-clock cost -- which is the only reason the
@@ -245,10 +263,17 @@ class Reactive:
     def __init__(self, bridge, feed, thresholds, window_n, *,
                  ceiling: str = "dome", beat_factory=B.express_curious,
                  status: StatusLayer | None = None,
+                 mood=None,
                  now=time.monotonic, sleep=time.sleep):
         self.bridge, self.feed = bridge, feed
         self.thresholds, self.window_n = thresholds, window_n
         self.ceiling, self.beat_factory = ceiling, beat_factory
+        # OPTIONAL, unlike `status`. A mood is genuinely absent for the
+        # survey harnesses -- they measure the detector, and a run that
+        # quietly raised happiness would make the instrument change the thing
+        # it is measuring. `status` is different: it is never legitimately
+        # absent, which is why that one is constructed rather than defaulted.
+        self.mood = mood
         # Constructed rather than left None when absent. An optional status
         # layer is not a status layer: every call site would accept the
         # default and the wiring would be inert, which is the exact shape
@@ -351,9 +376,29 @@ class Reactive:
         # expression, it is not among the ten states, and
         # docs/behaviour-states.md is explicit that expression passes through
         # and hands the status back.
+        # INTENSITY IS READ BEFORE THE RISE IS APPLIED, so the beat reflects
+        # the state the touch FOUND him in rather than the state it produced.
+        # Reversed, a starved R2 would be topped up first and then answer as
+        # though he had been fine all along -- the one reading that makes the
+        # scalar pointless.
+        kwargs = {}
+        intensity = None
+        if self.mood is not None:
+            intensity = self.mood.intensity()
+            if _accepts(self.beat_factory, "intensity"):
+                kwargs["intensity"] = intensity
         result = self.status.express(self.beat_factory,
-                                     ceiling=self.ceiling, sleep=self.sleep)
+                                     ceiling=self.ceiling, sleep=self.sleep,
+                                     **kwargs)
         beat_ended = self.now()
+
+        # THE RISE IS APPLIED ONLY IF THE BEAT ACTUALLY RAN. A refused or
+        # failed beat means he did not visibly respond, and crediting him for
+        # contact he never acknowledged would let a broken send path look
+        # like a well-treated robot.
+        happiness_delta = 0.0
+        if self.mood is not None and result.get("ok"):
+            happiness_delta = self.mood.touch()
 
         # Everything in the ring now is the beat's own noise, not a hand.
         self.feed.flush()
@@ -375,6 +420,10 @@ class Reactive:
                 self.sleep(held)
         return {"settle": settle, "settle_s": settled_s,
                 "cooldown_held_s": round(held, 2),
+                "intensity": intensity,
+                "happiness_delta": round(happiness_delta, 4),
+                "happiness": (round(self.mood.level(), 2)
+                              if self.mood is not None else None),
                 "beat": result.get("beat"), "beat_ok": result.get("ok"),
                 "refused": result.get("refused"),
                 "beat_error": result.get("error"),
