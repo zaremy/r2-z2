@@ -299,6 +299,35 @@ Vault notes are Obsidian-native, not plain markdown dropped in a folder:
 - Conventions live in `Meta/Vault Conventions.md`; templates in `Templates/`.
   Only core plugins are enabled — do not write notes that require Dataview.
 
+## The working tree is usually somebody else's
+
+Concurrent sessions share one checkout, and the branch under you is routinely
+theirs. Across one session it read `main`, `s1f/touch-triggers-curious`,
+`d015-voice-cloud-apis` and `d017-panel-wake-frame` — none of them mine, and
+each carried uncommitted work I must not disturb.
+
+So **land from a worktree off `main`, never by committing where you stand:**
+
+```bash
+git worktree add -b feat/<thing> "$WT" origin/main
+```
+
+Two rules that cost something to learn:
+
+- **Copy the HUNK, not the file.** Copying an edited file carries everything
+  else in it, including another branch's unmerged commits. `docs/decisions.md`
+  came across at **+341 lines for a 67-line ADR**; the rest was two ADRs
+  belonging to a branch that had not merged. Rebuild from the base
+  (`git show origin/main:<path> > <path>`) and re-apply your own change, then
+  check `git diff --stat` against the size you expect.
+- **Renumber anything sequential.** ADRs and migrations get claimed by
+  unmerged branches. D-017 and D-018 existed only on someone else's branch, so
+  the new one is D-019 and `main` carries a temporary gap.
+
+Clean the shared tree only after proving your edits are byte-identical to what
+merged, and `git stash` rather than discard — `git checkout <file>` is guarded
+for a reason.
+
 ## Working agreements
 
 - `reference/` holds the upstream clones and is gitignored. Never vendor a
