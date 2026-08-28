@@ -270,6 +270,53 @@ class TestThresholdCalibration(unittest.TestCase):
         self.assertGreater(C.Segmenter.threshold_for(0.0), 0.0)
 
 
+class TestNoiseMarginOverride(unittest.TestCase):
+    """The margin is the dial between "he cannot hear me" and "the room is
+    speech". MEASURED live: with a guest in the room and the speaker a metre
+    from the built-in mic, speech landed ~11 dB above the floor and the 12 dB
+    default classified every frame as silence -- the utterance ended after the
+    hangover and the transcriber got [BLANK_AUDIO]."""
+
+    FLOOR = 0.001
+
+    def test_the_default_comes_from_the_class_constant_not_a_literal(self):
+        # Asserted against the CONSTANT so a caller that hardcodes the same
+        # number cannot silently make the constant dead. converse.py did
+        # exactly that: --noise-margin-db defaulted to a literal 12.0, so
+        # editing NOISE_MARGIN_DB had no effect through the only entry point
+        # anyone uses.
+        expected = self.FLOOR * (10 ** (C.Segmenter.NOISE_MARGIN_DB / 20.0))
+        self.assertAlmostEqual(C.Segmenter.threshold_for(self.FLOOR), expected)
+        self.assertAlmostEqual(
+            C.Segmenter.threshold_for(self.FLOOR, margin_db=None), expected)
+
+    def test_an_explicit_margin_overrides_the_default(self):
+        self.assertNotAlmostEqual(
+            C.Segmenter.threshold_for(self.FLOOR, margin_db=5.0),
+            C.Segmenter.threshold_for(self.FLOOR))
+
+    def test_a_smaller_margin_hears_quieter_speech(self):
+        loose = C.Segmenter.threshold_for(self.FLOOR, margin_db=5.0)
+        tight = C.Segmenter.threshold_for(self.FLOOR, margin_db=20.0)
+        self.assertLess(loose, tight)
+
+    def test_zero_margin_is_the_floor_itself(self):
+        self.assertAlmostEqual(
+            C.Segmenter.threshold_for(self.FLOOR, margin_db=0.0), self.FLOOR)
+
+    def test_the_live_failure_is_reproduced_and_the_override_fixes_it(self):
+        # floor -59.4 dBFS, speech -48 dBFS: 11.4 dB apart.
+        floor, speech = 0.00107, 0.00398          # -59.4 and -48.0 dBFS
+        self.assertLess(speech, C.Segmenter.threshold_for(floor),
+                        "the 12 dB default should MISS this speech")
+        self.assertGreater(speech,
+                           C.Segmenter.threshold_for(floor, margin_db=8.0),
+                           "an 8 dB margin should catch it")
+
+    def test_the_hard_floor_still_applies_to_digital_silence(self):
+        self.assertGreater(C.Segmenter.threshold_for(0.0, margin_db=0.0), 0.0)
+
+
 class TestWakeEngineSeam(unittest.TestCase):
     """The engine owns its frame size; nothing upstream may assume one."""
 

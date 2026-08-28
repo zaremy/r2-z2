@@ -297,9 +297,18 @@ class Segmenter:
     NOISE_MARGIN_DB = 12.0
 
     @classmethod
-    def threshold_for(cls, noise_rms: float) -> float:
-        """Speech threshold for a measured noise floor."""
-        return max(noise_rms * (10 ** (cls.NOISE_MARGIN_DB / 20.0)), 1e-5)
+    def threshold_for(cls, noise_rms: float,
+                      margin_db: float | None = None) -> float:
+        """Speech threshold for a measured noise floor.
+
+        `margin_db` overrides the class default. 12 dB assumes the speaker is
+        close to the microphone; with a busy room and someone a metre back,
+        speech can land ~11 dB above the floor and every frame then reads as
+        silence — the utterance ends after the hangover and the transcriber
+        gets nothing but [BLANK_AUDIO].
+        """
+        db = cls.NOISE_MARGIN_DB if margin_db is None else margin_db
+        return max(noise_rms * (10 ** (db / 20.0)), 1e-5)
 
     @classmethod
     def calibrate(cls, quiet_pcm: bytes, **kwargs) -> "Segmenter":

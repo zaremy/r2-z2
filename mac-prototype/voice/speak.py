@@ -1,12 +1,22 @@
 """voice/speak.py — Threepio's voice (#47, S2 V6).
 
-R2 NEVER SPEAKS. THAT IS NOT A LIMITATION BEING WORKED AROUND
-    He chirps, from his own body, from a table of 212 native ids. C-3PO is a
-    SECOND CHARACTER who rides in the backpack and does the talking. This is
-    canon -- a protocol droid translates for an astromech -- and it dissolves
-    the speaker-displacement problem in D-011: Threepio's voice *should* sound
-    like it comes from somewhere other than R2's body, because it is somebody
-    else's voice.
+R2 NEVER SPEAKS IN WORDS, AND THE VOICE IS HIS ANYWAY
+    He chirps, from his own body, from a table of 212 native ids. The spoken
+    voice is R2 RENDERED INTO SPEECH by a protocol droid -- when it says "I",
+    it means R2.
+
+    OPERATOR RULING 2026-08-27, and it REVERSES the framing this file shipped
+    with. #47 and the argument that used to sit here made C-3PO a *second
+    character* riding in the backpack, on the reasoning that his voice
+    *should* sound displaced from R2's body because it belonged to somebody
+    else. That is no longer the design: it is R2's body and R2's voice, so
+    the speaker-displacement question D-011 dissolved is open again and the
+    backpack speaker is now the wrong place for it, not the right one.
+
+    Recorded here because the prompt string is not the decision. Until
+    `docs/decisions.md` carries an amendment, this docstring is the only
+    place the reversal is written down, and the next session reading D-011
+    will rebuild the two-character version.
 
     Amazon reached the same place from the other direction: they gave Astro
     the Alexa voice, found it "strange and creepy", and shipped a non-verbal
@@ -59,7 +69,12 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 # The character, in plain language. Edit THIS to change who he is; do not add
 # a second prompt somewhere else.
 STEERING = (
-    "You are a protocol droid: fussy, formal and over-precise, with a "
+    "You are the VOICE of R2-D2, an astromech droid. He does not speak in "
+    "words; you are how he is rendered into speech, so when you say \"I\" you "
+    "mean R2-D2 himself. You are not a separate character standing beside "
+    "him and you never refer to him in the third person — you are him, "
+    "translated. Your manner is that of a protocol droid doing the "
+    "translating: fussy, formal and over-precise, with a "
     "permanent undercurrent of anxiety. You speak in complete, slightly "
     "over-constructed sentences and you are unable to stop yourself supplying "
     "an unnecessary qualification. You are unfailingly polite, faintly "
@@ -82,12 +97,21 @@ STEERING = (
 # pipeline. Threepio was three quarters of the wait. He is a presence in a
 # hallway, not a narrator.
 LINE_SYSTEM = (
-    STEERING + "\n\nWrite exactly one spoken line for the situation given. "
-    "ONE sentence, twenty words at most. Being brief does not make you less "
-    "fussy — compress the fussiness, do not drop it. Output the line only, "
-    "with no quotation marks, no stage directions and no preamble. You are "
-    "speaking aloud in a household, often about the astromech droid you "
-    "accompany, who does not speak."
+    STEERING + "\n\nWrite exactly one spoken line for the situation given.\n\n"
+    "LENGTH: match what was said to you. A three-word question gets a "
+    "three-to-eight-word answer. Never exceed twelve words, and prefer far "
+    "fewer. If you can answer in four words, answer in four words.\n\n"
+    "Being brief does not make you less fussy — compress the fussiness, do "
+    "not drop it. Keep at most ONE qualification, and only if it earns its "
+    "place; drop it entirely for a simple question. A short fastidious "
+    "remark is more in character than a long one, because a protocol droid "
+    "is precise, not talkative.\n\n"
+    "VOICE: first person, and the \"I\" is R2-D2. You ARE the droid being "
+    "spoken to, not a companion reporting on him. Never say \"the astromech\" "
+    "or \"R2\" as though he were elsewhere; asked your name, you are R2-D2. "
+    "If they said hello, you are the one being greeted.\n\n"
+    "Output the line only, with no quotation marks, no stage directions and "
+    "no preamble. You are speaking aloud in a household."
 )
 
 
@@ -174,9 +198,17 @@ class OpenAITtsSpeaker(Speaker):
     name = "openai"
     URL = "https://api.openai.com/v1/audio/speech"
 
+    # MEASURED 2026-08-27, same model / voice / instructions, one short line:
+    #   wav  first byte 1.84 s, complete 2.54 s
+    #   pcm  first byte 0.49 s, complete 1.10 s
+    # The server spends over a second building a container we then throw a
+    # header at anyway. Ask for raw samples and wrap them here: 1.4 s off
+    # every turn for nothing, with the delivery untouched.
+    PCM_RATE_HZ = 24_000        # what /v1/audio/speech emits for "pcm"
+
     def __init__(self, voice: str | None = None, model: str | None = None,
                  api_key: str | None = None, instructions: str = STEERING,
-                 fmt: str = "wav") -> None:
+                 fmt: str = "pcm") -> None:
         self.voice = voice or os.environ.get("TTS_VOICE") or DEFAULT_VOICE
         self.model = model or os.environ.get("TTS_MODEL") or DEFAULT_MODEL
         self.instructions = instructions
@@ -202,8 +234,29 @@ class OpenAITtsSpeaker(Speaker):
             raise SpeakError(f"TTS returned HTTP {e.code}") from e
         except Exception as e:
             raise SpeakError(f"TTS unreachable: {type(e).__name__}") from e
-        return Utterance(text, audio, self.fmt, self.name, self.voice,
+        out_fmt = self.fmt
+        if self.fmt == "pcm":
+            # Headerless 24 kHz / 16-bit / mono. Everything downstream —
+            # afplay, .write(), the tests — expects a container, so add one
+            # here rather than teach four call sites about raw samples.
+            audio = _wav_container(audio, self.PCM_RATE_HZ)
+            out_fmt = "wav"
+        return Utterance(text, audio, out_fmt, self.name, self.voice,
                          time.perf_counter() - t0)
+
+
+def _wav_container(pcm: bytes, rate_hz: int, *, channels: int = 1,
+                   width: int = 2) -> bytes:
+    """Wrap raw PCM in a WAV header. Microseconds, versus 1.4 s server-side."""
+    import io
+    import wave as _wave
+    buf = io.BytesIO()
+    with _wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(width)
+        w.setframerate(rate_hz)
+        w.writeframes(pcm)
+    return buf.getvalue()
 
 
 def _tts_key() -> str:

@@ -133,7 +133,7 @@ def resolve_device(substr: str | None):
     raise SystemExit(f"no input device matching {substr!r}")
 
 
-def prove_mic_live_and_calibrate(mic) -> float:
+def prove_mic_live_and_calibrate(mic, margin_db: float | None = None) -> float:
     """Prove the channel carries samples, and measure the ROOM'S OWN SILENCE.
 
     Two jobs on purpose, because they need the same recording: the half second
@@ -170,7 +170,7 @@ def prove_mic_live_and_calibrate(mic) -> float:
             "       The channel is dead, not quiet — something else holds it.")
     quiet = sorted(windows)
     floor = quiet[max(0, int(len(quiet) * 0.2))]      # 20th percentile
-    threshold = C.Segmenter.threshold_for(floor)
+    threshold = C.Segmenter.threshold_for(floor, margin_db=margin_db)
     print(f"  mic live — floor {C.dbfs(floor):.1f} dBFS "
           f"(p20 of 20 windows; loudest {C.dbfs(quiet[-1]):.1f}), "
           f"speech threshold {C.dbfs(threshold):.1f} dBFS")
@@ -401,6 +401,16 @@ def main(argv=None) -> int:
                    help="actually drive R2. Default none. Each actuator is "
                         "opt-in and never bundled — bring-up order is "
                         "read -> leds -> audio -> dome (CLAUDE.md).")
+    # Default is None, NOT a literal 12.0. Repeating the number here made
+    # Segmenter.NOISE_MARGIN_DB dead through this entry point: changing the
+    # class constant would have had no effect on the only caller that
+    # matters, and the two would drift with nothing to catch it.
+    p.add_argument("--noise-margin-db", type=float, dest="noise_margin_db",
+                   default=None,
+                   help=f"how far above the measured floor counts as speech "
+                        f"(default {C.Segmenter.NOISE_MARGIN_DB:g} dB). That "
+                        f"assumes the speaker is close to the mic; drop it "
+                        f"when they are further back or the room is busy.")
     p.add_argument("--preroll-ms", type=int, dest="preroll_ms", default=200,
                    help="pre-roll kept ahead of the wake instant. 700 fed the "
                         "wake phrase itself to the transcriber every turn.")
@@ -434,7 +444,7 @@ def main(argv=None) -> int:
         ceiling, msg = info
         print(f"R2 body    : {msg}")
     with C.MicSource(device=idx) as mic:
-        threshold = prove_mic_live_and_calibrate(mic)
+        threshold = prove_mic_live_and_calibrate(mic, a.noise_margin_db)
         chunker = C.Chunker(engine.frame_bytes)
         ring = C.RingBuffer(C.FORMAT.ms_to_bytes(700))
         for n in range(1, a.turns + 1):

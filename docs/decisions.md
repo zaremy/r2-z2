@@ -1073,3 +1073,70 @@ at the droid, by someone holding him, at the place the safety ladder can see.
 - **A "run behaviour" developer button, even hidden behind a debug flag.** Debug
   affordances become product affordances; the panel's hardware-test surface already
   covers the legitimate need, under the safety ladder, at the droid.
+
+---
+
+## D-019 — The spoken voice is R2's, not a second character's
+**2026-08-27** · *operator ruling* · **amends D-011, supersedes the framing in #47**
+
+**Decision.** The synthesised voice speaks **as R2, in the first person**. It is
+him rendered into speech by a protocol droid, not a companion standing beside
+him. Asked its name, it answers R2-D2. It never refers to him in the third
+person.
+
+Operator ruling, verbatim: *"c3po is voice of r2d2, not next to r2d2."*
+
+### What this reverses
+
+#47 built `speak()` on the opposite premise, and said so explicitly: C-3PO as a
+**second character** who rides in the backpack and does the talking, with the
+argument that his voice *should* sound displaced from R2's body **because it
+belongs to somebody else**. That framing was load-bearing — it is what let
+D-011 treat the speaker-displacement question as dissolved rather than
+answered, and it is why Amazon's Astro precedent (a non-verbal body with speech
+demoted to a visibly separate character) read as supporting evidence.
+
+It no longer applies. If the voice is R2's own, then sound emitted a few
+centimetres behind and above his dome is **his** voice coming from not-quite
+his mouth, and the displacement question D-011 set aside is open again.
+
+### What survives from D-011
+
+The decision that the backpack speaker *may* carry character audio stands, and
+so do its three constraints: R2's 212 native ids stay primary, authored audio is
+co-timed with dome motion, and the screen boundary is untouched.
+
+The co-timing constraint gets **more** load-bearing, not less. D-011 called a
+still dome during backpack audio "the configuration most likely to break the
+illusion" when the voice belonged to someone else. Now that it is R2's own
+voice, a still dome is the configuration that makes it sound like a speaker
+taped to a robot.
+
+### What is now UNKNOWN again
+
+- **Whether a first-person voice survives the displacement.** D-011's evidence
+  ran both ways and was settled by a taste judgement made about a *second*
+  character. That judgement does not transfer, and it has not been re-made
+  against the new framing. No playtest has been run since the change.
+- **Whether the `ballad` voice still fits.** It was auditioned across all
+  thirteen candidates against the OLD steering prompt (#66). The character
+  brief has changed; the audition is stale by the rule recorded with it. The
+  full set is retained at
+  `R2Z2-vault/.../Experiments/data/threepio-audition-20260818/` so
+  re-judging costs nothing.
+- **Whether "C-3PO" is still the right description at all.** The prompt
+  deliberately names no performer, and the model volunteers "C-3PO" from its
+  own knowledge. Under the old framing that was a character; under this one it
+  is a *register*, and the naming may want revisiting.
+
+### Why this is recorded rather than left in the prompt
+
+The change reached production as two edited strings in `voice/speak.py` during
+a live demo. Nothing else in the repo knew. A future session reading D-011 and
+#47 would have found the two-character premise stated as settled, in two
+places, and rebuilt it — the same failure this repo has already recorded as
+*"a doc can go wrong without being edited."*
+
+*Reversed by:* a playtest where the first-person voice reads as ventriloquism
+rather than as him — the cheap version is the same line delivered first person
+and third person, back to back, to someone who has not seen this file.
