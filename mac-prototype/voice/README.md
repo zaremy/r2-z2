@@ -256,6 +256,30 @@ An audition overrides it at the **call site**, never by weakening the default:
 speak(line, quiet_hours=QuietHours(enabled=False))
 ```
 
+### And he does not speak when he is not here
+
+Same rule, second gate (**D-020**). Under D-019 the voice is R2's own, so
+`speak()` refuses unless it is told he is reachable — and `Embodiment.present`
+defaults to **False**, which makes a bare `speak("...")` refuse.
+
+That default is deliberate. Assuming presence is wrong in the direction that
+reaches a household; assuming absence is wrong only in the direction of
+silence. It was not hypothetical: the voice spoke three times unprompted with
+R2 powered down (OBSERVED 2026-08-27), and it read as *random* precisely
+because the chirp and the dome turn that would have made a misfire legible
+were the parts that were missing.
+
+`converse.py` answers the readiness question **once per turn**, not once per
+run — `bridge` is resolved at startup and a daemon can die at any point after.
+
+```python
+speak(line, embodiment=Embodiment(present=r2_is_present(bridge)))
+speak(line, embodiment=Embodiment(enabled=False))   # audition, no droid
+```
+
+This gate stops the symptom, not the cause: the wake word's false-accept rate
+is still unmeasured (#42 AC3).
+
 ### Generating audio and making noise are separate decisions
 
 `play_audio` defaults to `False`. The one that makes a sound is the one you

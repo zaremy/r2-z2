@@ -1421,3 +1421,72 @@ places, and rebuilt it — the same failure this repo has already recorded as
 *Reversed by:* a playtest where the first-person voice reads as ventriloquism
 rather than as him — the cheap version is the same line delivered first person
 and third person, back to back, to someone who has not seen this file.
+
+---
+
+## D-020 — The voice is gated on R2 being reachable
+**2026-08-28** · *operator ruling* · **follows D-019** · implements the gate in
+`voice/speak.py`
+
+**Decision.** Synthesised speech is **refused unless R2 is reachable**. The gate
+lives inside `speak()`, next to quiet hours, and defaults to refusing. The only
+override is `--audition`, the same escape hatch quiet hours already has.
+
+### What forced it
+
+OBSERVED 2026-08-27: the voice spoke **three times, unprompted, with R2 powered
+down and no animation**. Reported by the operator.
+
+Operator ruling: the voice must be gated on R2 readiness.
+
+Under D-019 the voice is **his**, in the first person. A first-person line with
+no droid behind it is not a degraded feature, it is a different and worse one —
+a disembodied voice in a room with nothing visible producing it.
+
+### What this reverses
+
+An earlier session decoupled the speech path from BLE **deliberately**, and
+reported it as a feature: *"only Threepio was still working, because he needs no
+robot."* That was the right instinct for keeping the module severable and the
+wrong outcome for the household. It is reversed.
+
+### Why the gate is in `speak()` and not in `converse.py`
+
+The same reason quiet hours is (`speak.py`, "QUIET HOURS ARE ENFORCED HERE"):
+a guard held by a caller is not a guard. `FORBIDDEN_OPS` was once enforced on
+the construction path and every caller that skipped construction skipped the
+check. Sound is the output that reaches a household through a closed door, so
+both gates sit where the sound is made.
+
+`Embodiment.present` therefore defaults to **False**. The asymmetry is the
+point: assuming presence is wrong in the direction that reaches a household,
+assuming absence is wrong only in the direction of silence.
+
+### Readiness is asked per turn, not per run
+
+`converse.py` resolves `bridge` once at startup and never revisits it, so
+`bridge is not None` only means a daemon held the bridge **when the run
+started**. `send_r2` and `send_animation` already re-check liveness before
+sending; the speech path did not check at all. `r2_is_present()` asks the same
+question the same way — including the `hasattr(bridge, "daemon")` guard, so a
+`FakeBridge` in a dry test is not read as a dead droid.
+
+### What this does NOT fix
+
+- **The false-accept rate is still UNKNOWN.** This gate stops the *symptom*;
+  the *frequency* is unmeasured. #42 AC3 (a 30-minute ambient sample) has been
+  deferred twice and never run. The `r2d2` model publishes **4.69 false
+  accepts/hour**, so three in a day is well inside expected — the gate must not
+  be read as evidence the wake word improved.
+- **A false wake while R2 IS up still produces a full reply to nothing** —
+  animation, chirp and speech. `misheard` already exists in `r2_lights.STATES`
+  and is the honest signal. Not done here.
+
+### Evidence
+
+5 mutations, 0 survivors: flipping the default to present, deleting the gate,
+hardcoding presence at the caller, and reading both an absent bridge and a dead
+daemon as present each turn the suite red. 611 tests pass.
+
+*Reversed by:* a decision that the voice is a companion rather than R2 himself,
+which would reopen D-019 first.

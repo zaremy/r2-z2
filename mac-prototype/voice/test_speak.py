@@ -17,6 +17,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import r2_behavior as B
 import speak as S
 
+# `speak()` refuses unless told R2 is reachable, so every test that needs to
+# get PAST that gate says so explicitly. Tests asserting a different failure
+# must pass this, or they pass for the wrong reason -- which is exactly what
+# happened to the two AC2 tests below when the gate was added.
+PRESENT = S.Embodiment(present=True)
+
 
 class TestQuietHours(unittest.TestCase):
     """#47 AC3. V7 owns the policy; this is the floor beneath it."""
@@ -59,24 +65,86 @@ class TestQuietHours(unittest.TestCase):
         # Deliberate, operator-initiated listening. The override is a
         # parameter at the call site, NOT a weaker default.
         utt = S.speak("Testing.", speaker=S.StubSpeaker(),
-                      quiet_hours=S.QuietHours(enabled=False), now=self.at(2))
+                      quiet_hours=S.QuietHours(enabled=False),
+                      embodiment=PRESENT, now=self.at(2))
         self.assertEqual(utt.text, "Testing.")
 
     def test_the_gate_is_on_by_default(self):
         self.assertTrue(S.QuietHours().enabled)
 
 
+class TestHeDoesNotSpeakWithoutABody(unittest.TestCase):
+    """D-019: the voice is R2's own, in the first person. OBSERVED
+    2026-08-27 -- it spoke three times unprompted with him powered down.
+
+    The illegal case is asserted FIRST and the legal ones after it, because
+    a table of legal inputs passes with the guard deleted."""
+
+    def day(self, h=15):
+        return datetime(2026, 8, 18, h)
+
+    # -- the case that must be refused -----------------------------------
+    def test_speak_refuses_when_R2_is_absent(self):
+        spk = S.StubSpeaker()
+        with self.assertRaises(S.NotEmbodiedError):
+            S.speak("Oh dear.", speaker=spk, embodiment=S.Embodiment(present=False),
+                    now=self.day())
+        self.assertEqual(spk.calls, [], "it synthesised anyway")
+
+    def test_the_bare_default_refuses_too(self):
+        # The gate has to hold for a caller that passes nothing, because that
+        # caller is the one that has not thought about it.
+        spk = S.StubSpeaker()
+        with self.assertRaises(S.NotEmbodiedError):
+            S.speak("Oh dear.", speaker=spk, now=self.day())
+        self.assertEqual(spk.calls, [])
+
+    def test_absent_is_the_default_not_present(self):
+        self.assertFalse(S.Embodiment().present)
+        self.assertTrue(S.Embodiment().enabled)
+        self.assertFalse(S.Embodiment().ready())
+
+    # -- and the ones that must not be -----------------------------------
+    def test_it_speaks_when_he_is_there(self):
+        utt = S.speak("Testing.", speaker=S.StubSpeaker(),
+                      embodiment=PRESENT, now=self.day())
+        self.assertEqual(utt.text, "Testing.")
+
+    def test_an_explicit_audition_can_override_it(self):
+        utt = S.speak("Testing.", speaker=S.StubSpeaker(),
+                      embodiment=S.Embodiment(enabled=False), now=self.day())
+        self.assertEqual(utt.text, "Testing.")
+
+    def test_refusing_is_not_a_fault_but_IS_a_SpeakError_subclass(self):
+        self.assertTrue(issubclass(S.NotEmbodiedError, S.SpeakError))
+
+    def test_quiet_hours_still_wins_when_both_would_refuse(self):
+        # Both gates are non-faults, but they are not interchangeable: a
+        # caller that special-cases one must not silently get the other.
+        with self.assertRaises(S.QuietHoursError):
+            S.speak("Oh dear.", speaker=S.StubSpeaker(),
+                    embodiment=S.Embodiment(present=False),
+                    now=datetime(2026, 8, 18, 2))
+
+
 class TestAC2FailureNeverLeavesHimWaiting(unittest.TestCase):
 
     def test_an_unreachable_tts_raises(self):
-        with self.assertRaises(S.SpeakError):
+        # assertRaises(SpeakError) alone is not enough: NotEmbodiedError and
+        # QuietHoursError are both subclasses, so this passed with the TTS
+        # never reached. Assert the REASON.
+        with self.assertRaises(S.SpeakError) as cm:
             S.speak("hi", speaker=S.StubSpeaker(error=S.SpeakError("TTS unreachable")),
-                    now=datetime(2026, 8, 18, 15))
+                    embodiment=PRESENT, now=datetime(2026, 8, 18, 15))
+        self.assertIn("TTS unreachable", str(cm.exception))
+        self.assertNotIsInstance(cm.exception, S.NotEmbodiedError)
 
     def test_a_speaker_slower_than_the_timeout_raises(self):
-        with self.assertRaises(S.SpeakError):
+        with self.assertRaises(S.SpeakError) as cm:
             S.speak("hi", speaker=S.StubSpeaker(delay=30.0), timeout=1.0,
-                    now=datetime(2026, 8, 18, 15))
+                    embodiment=PRESENT, now=datetime(2026, 8, 18, 15))
+        self.assertIn("timeout", str(cm.exception))
+        self.assertNotIsInstance(cm.exception, S.NotEmbodiedError)
 
     def test_the_shared_error_beat_returns_him_to_neutral(self):
         # Same beat V5 uses — one definition of "we failed, go neutral".
@@ -214,7 +282,7 @@ class TestSpeakDoesNotMakeNoiseUnlessAsked(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             S.speak("hello", speaker=S.StubSpeaker(), out_dir=d,
-                    now=datetime(2026, 8, 18, 15))
+                    embodiment=PRESENT, now=datetime(2026, 8, 18, 15))
             self.assertTrue(list(Path(d).glob("line.*")))
 
 
