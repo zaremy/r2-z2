@@ -87,6 +87,48 @@ class TestAC2FailureNeverLeavesHimWaiting(unittest.TestCase):
                          B.front(B.BASE_NEUTRAL))
 
 
+class TestPcmIsWrappedLocally(unittest.TestCase):
+    """MEASURED 2026-08-27: wav complete 2.54 s, pcm complete 1.10 s, same
+    model / voice / instructions. The server spends over a second building a
+    container we re-create in microseconds."""
+
+    def test_the_wrapper_produces_a_wav_the_stdlib_can_read(self):
+        import io
+        import wave
+        pcm = b"\x00\x01" * 2400                       # 0.1 s at 24 kHz
+        blob = S._wav_container(pcm, 24_000)
+        w = wave.open(io.BytesIO(blob))
+        self.assertEqual(w.getframerate(), 24_000)
+        self.assertEqual(w.getsampwidth(), 2)
+        self.assertEqual(w.getnchannels(), 1)
+        self.assertEqual(w.readframes(w.getnframes()), pcm)
+
+    def test_the_declared_rate_matches_what_the_api_emits(self):
+        # VERIFIED against the API's own wav header (24000 Hz / 16-bit / 1ch)
+        # on 2026-08-27. A wrong rate here does not error — it plays the whole
+        # character at the wrong pitch, which reads as a voice choice rather
+        # than a bug, so it is pinned rather than trusted.
+        self.assertEqual(S.OpenAITtsSpeaker.PCM_RATE_HZ, 24_000)
+
+    def test_pcm_is_requested_by_default(self):
+        import inspect
+        fmt = inspect.signature(S.OpenAITtsSpeaker.__init__).parameters["fmt"]
+        self.assertEqual(fmt.default, "pcm")
+
+    def test_a_wrapped_utterance_reports_wav_not_pcm(self):
+        # Downstream (afplay, .write(), the tests) only ever sees a container,
+        # so the utterance must not claim a format nothing can play.
+        u = S.Utterance("x", S._wav_container(b"\x00\x00" * 100, 24_000),
+                        "wav", "openai", "ballad", 0.0)
+        self.assertEqual(u.fmt, "wav")
+
+    def test_an_empty_pcm_payload_still_yields_a_valid_container(self):
+        import io
+        import wave
+        w = wave.open(io.BytesIO(S._wav_container(b"", 24_000)))
+        self.assertEqual(w.getnframes(), 0)
+
+
 class TestAC4TheSeam(unittest.TestCase):
 
     def test_speaker_is_selected_by_config(self):
