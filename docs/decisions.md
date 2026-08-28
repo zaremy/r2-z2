@@ -1076,6 +1076,287 @@ at the droid, by someone holding him, at the place the safety ladder can see.
 
 ---
 
+## D-017 — The panel is an instrument, and its wake frame is the top row drawn large
+
+**Date:** 2026-08-24 · **Status:** accepted · **Operator ruling** ·
+**Extends:** D-016 (three surfaces), `CLAUDE.md` character boundary
+
+### Context
+
+Five launcher designs were explored for the backpack panel. Two were eliminated by
+the operator early (a long scroll and a permanent log tail). Of the three left, the
+shotgun narrowed to two: a **status face** showing one thing with drill-in, and an
+**instrument panel** showing four fixed rows.
+
+Two things settled it, and neither existed when the options were drawn.
+
+**1. D-016 moved settings and provisioning to the web app.** The single structural
+objection to fixed rows was that four of them leave nowhere for configuration. That
+objection is gone, and the panel gets to answer one question properly.
+
+**2. There may be two batteries — and this argument is CONDITIONAL on that.**
+
+> [!warning] **Corrected by review before landing. An UNKNOWN had graduated to a
+> premise.**
+> An earlier draft asserted two batteries as fact. `research/board-capabilities.md:430`
+> records the opposite: *"how power is supplied (own battery via AXP2101, or tapped
+> from R2) are entirely unaddressed"*, and this file's own open-items list still
+> carries **"Backpack power and mounting. Entirely unaddressed."** The AXP2101 is a
+> power-management IC and is present either way; it does not evidence a cell.
+>
+> `CLAUDE.md` requires every claim to be labelled OBSERVED / INFERRED / UNKNOWN and
+> forbids an INFERRED claim silently graduating. This one graduated. It is relabelled
+> here rather than quietly deleted, because the failure is more instructive than the
+> fact.
+
+**If** the backpack carries its own cell, then there are two batteries failing in
+opposite directions — if his dies the panel still reports it, if the pack's dies the
+panel dies with it — which makes the most common real question **comparative**, and a
+one-thing-at-a-time face is structurally unable to answer a comparative question.
+
+**If** the backpack is tapped from R2, there is one battery, the failure modes are not
+opposite, and this argument contributes nothing.
+
+**The decision does not depend on which it is**, which is why it still stands: reason
+1 alone — settings leaving the panel — already removes the only structural objection to
+fixed rows. What changes is that D-017 rests on **one** leg rather than two until the
+power question is answered. The `PACK` row is provisional on the same condition; if it
+turns out there is one battery, the row is dropped and storage returns to it.
+
+**Tracked in #93**, because a condition with no resolution path stays conditional
+forever and the `PACK` row keeps propagating as though it were settled. It is minutes
+of work: look at the board for a cell, or read the PMU's battery registers on and off
+USB.
+
+### Decision
+
+**The panel is the instrument: a fixed header plus four rows that never scroll and
+never reorder.** Position is how you find things.
+
+**Its wake frame is the most severe row, drawn large and untappable.** Not a separate
+screen, not a summary, not a composed message — the same row, enlarged. The full rows
+arrive on the second beat, once the operator has clearly decided to look.
+
+Rows: **LINK · R2 · PACK · BRAIN**. Storage moves to the menu.
+
+### Why the wake frame is an enlargement and not a face
+
+The watch pattern is right and we take it: the first frame after a wake owes you the
+condition and nothing else — no controls, nothing tappable. It is a safety property
+here as much as a design one, because a glance that lands a thumb on a row is a glance
+that can arm something which moves him.
+
+But a *face* needs a priority function: something that decides what "most wrong"
+means at runtime, is right every time, and gives the operator no way to see what it
+discarded. **An enlargement needs only a static rank over a closed set**, which is a
+different and much smaller thing.
+
+**That rank is defined here, because it did not previously exist.** An earlier draft
+of this ADR claimed "severity ordering already exists" — it does not.
+`behaviour-states.md` gives every state a colour and a rate and never orders them
+against each other, and a review caught the claim before this landed. The ordering is
+therefore *introduced* by this decision rather than inherited by it, and saying so is
+the difference between a justification and a rationalisation:
+
+```
+danger  >  offline  >  attention  >  misheard  >  waiting  >  thinking  >  listen  >  idle  >  sleep
+```
+
+Nine states, fixed at author time, no inputs. It is a constant, not a computation —
+which is what keeps it on the enlargement side of the line. **If it ever needs to
+consider anything at runtime — recency, how many rows are bad, what the operator was
+last looking at — it has become the face this decision rejected, and that is a new
+decision.**
+
+The failure mode is therefore **predictable rather than clever**: with two things
+wrong it still shows one, and it shows the higher-ranked one, every time, for a reason
+anyone can read off the list.
+
+### Consequences
+
+- **Two of the states are already faces and stay that way.** Offline and danger throw
+  the rows away entirely and show one condition with one action — with no link there
+  are no readings, and four dashes would be theatre. This decision makes that the
+  documented exception rather than an inconsistency.
+- **No priority function gets built.** If one is ever wanted, it is a new decision with
+  its own reversal case, not a quiet extension of this one.
+- **The menu button lives in the header on every screen**, including the two that
+  replace the rows. An escape hatch that disappears in the states you most need it is
+  not an escape hatch. This is also the bootstrap route D-016 depends on: Wi-Fi cannot
+  be configured from a web app that needs Wi-Fi.
+
+  **This is D-016's own reversal condition firing, and it is named here rather than
+  left implicit.** D-016 moved settings off the panel and listed as a reversal
+  *"Wi-Fi provisioning that cannot bootstrap without a local UI"*. That is exactly
+  what the menu is. It is a **scoped** reversal — Wi-Fi and pairing only, everything
+  else stays in the browser — not a quiet re-opening of the panel to configuration.
+- **Hold-to-arm survives only while it is labelled.** Apple retired Force Touch — an
+  entire sensor — because the gesture was undiscoverable, and replaced it with visible
+  controls. Ours is legible: an armed row prints `HOLD 1.2s` where its value would be,
+  so the affordance occupies space it was already using. **If that label is ever
+  dropped for tidiness, this becomes Force Touch and should be deleted.**
+
+### Reversed by
+
+- A priority function turning out to be needed for a real state we have not modelled —
+  in which case the wake frame becomes a face and this decision is superseded, not
+  amended.
+- The wake measurement going badly. What wakes the screen is **unmeasured**: touch
+  always works, but lift-to-wake assumes a device that only moves when a person moves
+  it, and this one is strapped to something that drives itself. If wake turns out to be
+  unreliable, a two-beat reveal may be one beat too many.
+
+### Rejected
+
+- **The status face as the default.** It wins the two questions asked most — *is he
+  alright* and *what is wrong* — at zero taps. But those are the questions **the LED
+  already answered** before anyone walked over. By the time the panel is being read at
+  all, the question has become comparative, and that is the face's structural weakness.
+- **No wake frame at all.** Simplest, and it loses the property the whole thing is for:
+  a glance should not be able to arm an actuator.
+- **Settings on the panel.** Three or four touch targets fit. Spending them on
+  configuration rather than on the fault in front of you is the wrong trade — D-016.
+
+---
+
+## D-018 — He always answers. What changes is how, never whether
+
+**Date:** 2026-08-25 · **Status:** accepted · **Operator ruling** ·
+**Supersedes:** the unruled "can he refuse?" proposal · **Implemented by:** #85
+
+### Context
+
+A rule was needed for the question every future feature raises: does this make R2 feel
+like a creature, or like an appliance? Three candidates were put up — *can he refuse*,
+*does it fire every time*, and *no rule*. All three were wrong, and the first two were
+wrong in the same way: **they made unreliability the marker of character.**
+
+That was my framing and it does not survive contact with the evidence this project
+already gathered. The habituation evidence recorded in
+`Plan/Product Frame.md` (§HMW) found **predictability** drives trust and bonding,
+while unpredictable behaviour suppressed both. That was recorded, an HMW
+asking for unpredictability was struck because of it, and then the same instinct came
+straight back as a proposed *rule*. A droid that might ignore you is not mysterious.
+He is broken, and you cannot tell the difference from outside.
+
+### Decision
+
+**R2 always responds. The variation is in HOW he responds, never in WHETHER.**
+
+Which gives the test its real axis, and it is not determinism:
+
+> **An appliance's response is a function of the trigger alone.
+> A creature's response is a function of the trigger AND its own state.**
+
+A feature is **character** if his mood, energy, boredom, recent history or posture
+change what comes back. It is a **gadget** if the same trigger produces the same output
+regardless of how he has been.
+
+### Worked cases
+
+| Feature | Verdict | Why |
+|---|---|---|
+| Touch → delight | **character** | Always fires. Magnitude depends on how starved he was (#85) |
+| "Hey R2" wake word | **character** | Always answers. Asleep he is slow and grumpy; mid-something he finishes first |
+| Walk past → he looks up | **character** | Always notices. How much depends on how long he has been alone |
+| Door sensor → perk up, identically | **gadget** | Output is a pure function of the door |
+| 3pm dentist reminder | **gadget** | Must fire identically regardless of mood — that is what a reminder *is* |
+| 7am wake chirp | **character**, if it varies | Same clock trigger; grumpy before coffee, brighter later |
+
+Note what the axis does that the rejected ones could not: it **allows a wake word**,
+which "nothing fires every time" banned outright, and it **blocks a reminder**, which
+"can he refuse" let through because a delayed action is not obviously obedience.
+
+### How mood shows up: it picks the flavour, never the presence
+
+Operator, sharpening this the moment it was written: *"the thing that makes him
+interesting isn't whether he responds — it's HOW he responds. If in low mood he can
+use a grumpy sound, but the response is still required."*
+
+So mood is a **selector over renderings of a mandatory response**, not a gate on
+whether one happens:
+
+```
+trigger  ->  response IS REQUIRED  ->  mood picks which rendering
+                                        happy   -> R2_LAUGH_*, holo up, full gesture
+                                        neutral -> shorter acknowledgement
+                                        grumpy  -> a put-upon variant, still an answer
+```
+
+**The binding rule is just this: he always reacts, and the response varies with his
+state.** Nothing more is required.
+
+**#85 has landed and it does NOT yet satisfy the rule.** `express_delight` takes an
+intensity read from the mood *before* the touch is applied, and `react()` passes it —
+the shape is right. But #86 merged (`db59f0a`) with the feature **inert on the live
+path**, and it is inert on `main` as this is written: `r2_reactive.py:796` builds
+`Reactive(...)` without `mood=` or `beat_factory=`, so the defaults win and nothing
+calls any of it. `:714` still computes the required tier from `express_curious`, the
+wrong behaviour.
+
+A review posted on #86 named both before it merged. They were not fixed. That makes
+this the **second** time the project has shipped a correct, tested, reviewed layer that
+nothing calls — #83 wrote the rule after the first one, from the LED epic, and its line
+holds: *correctness does not detect deadness.*
+
+So the rule stated in this ADR currently has **zero** working implementations, and the
+nearest one is three lines away. Tracked in #97.
+
+**Distinct willing/grumpy renderings are DEFERRED to #92**, not adopted here. They
+would put a two-rendering cost on every behaviour authored from now on, and the
+library is small enough that the tax would exceed the benefit. Intensity variation
+carries the rule today; richer performance is worth doing when a playtest shows it is
+needed, and D-018's own reversal clause already notes that whether state variation is
+*perceptible* has never been tested.
+
+One constraint recorded now because it will be forgotten later: **"grumpy" will be
+composed, not an authored animation.** Authored animations are
+  `FORBIDDEN_OPS` — they drive leg actions whose contents cannot be inspected before
+  sending, and `EMOTE_YES`, a *nod*, put him on the floor (D-010). A grumpy rendering
+  is a sound family, a slower or smaller dome gesture above the 12° floor, and the
+  brightness channels — the same vocabulary as the willing one, performed differently.
+
+The failure mode this forecloses is the one that would otherwise creep in: a low mood
+quietly becoming a reason not to answer. It is not. It is a reason to answer *badly*,
+which is a completely different and much more characterful thing.
+
+### Consequences
+
+- **Every feature needs his state consulted before it responds.** #85's happiness
+  scalar is the first instance, and it is enough. The rest of the mood model arrives
+  as behaviours need it — not before.
+- **"He might not bother" is retired as a design device.** Anywhere that phrasing
+  appears — the northstar's walk-past scene, the six-moments comparison — it is now
+  wrong and needs correcting.
+- **Reliability is not the enemy of character; state-independence is.** A droid can be
+  perfectly dependable and still feel alive, which is a much easier product to live
+  with and a much easier one to debug.
+- **The rule is mechanical enough to end arguments**, which the earlier candidates were
+  not: ask whether the output could differ tomorrow given identical input. If not, it is
+  a gadget.
+
+### Reversed by
+
+- A behaviour that plainly reads as alive while being a pure function of its trigger,
+  which would mean the axis is wrong rather than the behaviour.
+- **Nothing implementing the rule ever landing.** The rule currently has zero shipped
+  instances. If it is still at zero when the next few behaviours are authored, it is
+  governance without practice and should be deleted rather than kept as decoration.
+- Finding that state-dependence is imperceptible in practice — that the variation is
+  real in the state store and invisible in the room. That is a playtest, and it has not
+  been run.
+
+### Rejected
+
+- **"Can he refuse?"** — makes ignoring you a feature. Contradicts the habituation
+  evidence, and an unresponsive droid is indistinguishable from a broken one.
+- **"Nothing that fires every time."** — bans a wake word, since being deterministic is
+  what a wake word is for, while catching nothing this rule misses.
+- **No rule.** The argument then gets relitigated per feature, which is what writing it
+  down was for.
+
+---
+
 ## D-019 — The spoken voice is R2's, not a second character's
 **2026-08-27** · *operator ruling* · **amends D-011, supersedes the framing in #47**
 
