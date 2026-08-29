@@ -39,6 +39,20 @@ QUIET HOURS ARE ENFORCED HERE, NOT ONLY UPSTREAM
     guard (D-013). Sound is the one output that reaches a sleeping household
     through a closed door, so the gate is *also* here, defaulting to on. V7
     may still decide earlier and more cleverly; this is the floor.
+
+HE DOES NOT SPEAK WITHOUT A BODY
+    The same rule, a second time. D-019 made the voice R2's own, in the first
+    person, so a line delivered while he is unreachable is not R2 saying
+    something -- it is a disembodied voice in a room with nothing visible
+    producing it. OBSERVED 2026-08-27: three unprompted utterances with R2
+    powered down. They read as random precisely because the chirp and the
+    dome move that would have made a misfire legible were the parts that
+    were missing.
+
+    `converse.py` gating its own call would be a policy held by a caller, and
+    the next caller will not hold it -- exactly the shape quiet hours is here
+    to avoid. So presence is asserted at the point the sound is made, and
+    `Embodiment` defaults to absent.
 """
 
 from __future__ import annotations
@@ -123,6 +137,10 @@ class QuietHoursError(SpeakError):
     """Refused because the household is asleep. Not a fault."""
 
 
+class NotEmbodiedError(SpeakError):
+    """Refused because R2 is not there to speak through. Not a fault."""
+
+
 @dataclass(frozen=True)
 class QuietHours:
     """A nightly window in which nothing is voiced.
@@ -142,6 +160,29 @@ class QuietHours:
         if self.start <= self.end:
             return self.start <= t < self.end
         return t >= self.start or t < self.end        # window crosses midnight
+
+
+@dataclass(frozen=True)
+class Embodiment:
+    """Whether R2 is present for the voice to belong to.
+
+    `present` defaults to FALSE, which makes a bare `speak()` refuse. That is
+    deliberate and it is the asymmetry that matters: assuming presence is
+    wrong in the direction that reaches a household, and assuming absence is
+    wrong only in the direction of silence.
+
+    `enabled=False` is the audition escape hatch, the same one
+    `QuietHours(enabled=False)` provides, for judging the voice with no droid
+    on the desk.
+    """
+
+    present: bool = False
+    enabled: bool = True
+
+    def ready(self) -> bool:
+        if not self.enabled:
+            return True
+        return self.present
 
 
 @dataclass(frozen=True)
@@ -328,10 +369,13 @@ def play(path: Path) -> None:
 def speak(text: str, *, speaker: Speaker | None = None,
           timeout: float = DEFAULT_TIMEOUT_S,
           quiet_hours: QuietHours | None = None,
+          embodiment: Embodiment | None = None,
           out_dir: Path | None = None,
           play_audio: bool = False,
           now: datetime | None = None) -> Utterance:
-    """Say a line. Raises QuietHoursError rather than waking the house.
+    """Say a line, or refuse. Two gates, both non-faults when they fire:
+    `QuietHoursError` rather than wake the house, `NotEmbodiedError` rather
+    than speak as a droid who is not there.
 
     `play_audio` defaults to FALSE. Generating audio and playing it are
     separate decisions, and the one that makes noise should be the one you
@@ -342,6 +386,10 @@ def speak(text: str, *, speaker: Speaker | None = None,
         raise QuietHoursError(
             f"quiet hours {gate.start:%H:%M}-{gate.end:%H:%M}; not voicing "
             f"{text[:40]!r}")
+    body = embodiment if embodiment is not None else Embodiment()
+    if not body.ready():
+        raise NotEmbodiedError(
+            f"R2 is not reachable; not voicing {text[:40]!r} on his behalf")
     speaker = speaker or create_speaker()
     utt = speaker.synthesize(text, timeout)
     if utt.latency_s > timeout:

@@ -1143,6 +1143,78 @@ class TestOnlyOneDaemonCanHoldTheBridge(unittest.TestCase):
         P.BRIDGE, P.LOCK, P.REQ_DIR, P.RESP_DIR = self.saved
         self.tmp.cleanup()
 
+    # -- the lock says a PROCESS lives; `connected` says the LINK is up ----
+    def test_a_fresh_lock_does_NOT_claim_connected(self):
+        # The illegal read first. This is the whole defect: the lock is taken
+        # before the BLE scan, so anything treating it as reachability is
+        # wrong for at least the scan window (10 s default).
+        P.acquire_daemon_lock("read")
+        held = json.loads(P.LOCK.read_text())
+        self.assertNotIn("connected", held)
+        self.assertFalse(held.get("connected"))
+
+    def test_marking_connected_sets_the_flag_and_names_the_droid(self):
+        P.acquire_daemon_lock("dome")
+        P.mark_daemon_connected("D2-1234")
+        held = json.loads(P.LOCK.read_text())
+        self.assertTrue(held["connected"])
+        self.assertEqual(held["droid"], "D2-1234")
+        self.assertIsInstance(held["connected_at"], float)
+
+    def test_marking_connected_preserves_the_pid(self):
+        # release_daemon_lock refuses to drop a lock that is not ours, so a
+        # rewrite that dropped the pid would strand the lock forever.
+        P.acquire_daemon_lock("read")
+        P.mark_daemon_connected("D2-1234")
+        self.assertEqual(json.loads(P.LOCK.read_text())["pid"], P.os.getpid())
+        P.release_daemon_lock()
+        self.assertFalse(P.LOCK.exists())
+
+    def test_it_refuses_to_mark_a_lock_owned_by_someone_else(self):
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.LOCK.write_text(json.dumps({"pid": 1, "ceiling": "read",
+                                      "started": 0}))
+        P.mark_daemon_connected("D2-1234")
+        self.assertNotIn("connected", json.loads(P.LOCK.read_text()))
+
+    def test_marking_with_no_lock_at_all_is_a_no_op_not_a_crash(self):
+        P.LOCK.parent.mkdir(parents=True, exist_ok=True)
+        P.mark_daemon_connected("D2-1234")
+        self.assertFalse(P.LOCK.exists())
+
+    def test_it_leaves_no_temp_file_behind(self):
+        # os.replace, not write-in-place: a torn read parses as "no daemon"
+        # and would cut the voice off mid-session for no reason.
+        P.acquire_daemon_lock("read")
+        P.mark_daemon_connected("D2-1234")
+        leftovers = [p.name for p in P.LOCK.parent.iterdir()
+                     if p.name != "daemon.lock"]
+        self.assertEqual(leftovers, [])
+
+    def test_the_daemon_ACTUALLY_MARKS_connected_and_does_it_AFTER_wake(self):
+        """The two mutations that survived the first battery.
+
+        `_run_daemon` needs a real droid, so nothing here can drive it. That
+        left BOTH failure modes green: deleting the call entirely (the flag is
+        never written, the voice is mute forever, and the layer is inert in the
+        exact way `CLAUDE.md` records for the LED stack), and marking connected
+        BEFORE `wake()` (which re-opens a smaller version of the bug this whole
+        change exists to close).
+
+        A source-order assertion is weak and is not a substitute for driving
+        the daemon. It is, however, the only thing that fails when someone
+        deletes the call, and a weak test on a live path beats a strong test
+        on a dead one."""
+        import inspect
+        src = inspect.getsource(P._run_daemon)
+        self.assertIn("mark_daemon_connected(", src,
+                      "the daemon never records the link; the flag is dead")
+        self.assertLess(src.index("await r2.wake()"),
+                        src.index("mark_daemon_connected("),
+                        "marked connected BEFORE wake() — that is the bug again")
+        self.assertLess(src.index("r2.start_keepalive()"),
+                        src.index("mark_daemon_connected("))
+
     def test_first_acquire_succeeds_and_records_the_ceiling(self):
         self.assertIsNone(P.acquire_daemon_lock("read"))
         held = json.loads(P.LOCK.read_text())

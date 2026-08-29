@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""voice/converse.py — the whole loop, on the Mac, with R2 powered off.
+"""voice/converse.py — the whole loop, on the Mac.
 
     wake -> capture -> transcribe -> reason -> speak
      V1       V1          V4          V5       V6
@@ -21,6 +21,14 @@ QUIET HOURS MUST BE OVERRIDDEN EXPLICITLY
     `speak()` refuses between 22:00 and 08:00. This script does not weaken
     that default; it makes you pass `--audition` to get past it, and says so
     on every run.
+
+AND HE DOES NOT TALK WHEN HE IS NOT HERE
+    Under D-019 the voice is R2's own. `speak()` therefore refuses unless it
+    is told he is reachable, and this loop answers that question ONCE PER
+    TURN rather than once per run: `bridge` is resolved at startup and a
+    daemon can die at any point after, which `send_r2` already knew and the
+    speech path did not. Same `--audition` override, for judging the voice
+    with no droid on the desk.
 """
 
 from __future__ import annotations
@@ -248,6 +256,30 @@ def send_r2(behaviour, bridge, ceiling) -> str:
         return f"send failed: {type(e).__name__}: {e}"
 
 
+def r2_is_present(bridge) -> bool:
+    """Is R2 reachable RIGHT NOW, not merely at launch?
+
+    Two separate ways this is false, and the second cost a review round:
+
+    1. `bridge` is resolved once in `main` and never revisited, so `bridge is
+       not None` only means a daemon held the bridge when the run STARTED.
+    2. Holding the bridge is not being connected. `acquire_daemon_lock` runs
+       before the BLE scan (10 s default) and the lock outlives a scan that
+       FAILS, so `daemon() is not None` — the test `send_r2` uses — is true
+       for a droid that is powered off. Require the `connected` flag that
+       `mark_daemon_connected` writes only after `wake()` returns.
+
+    The `hasattr` guard stays: `FakeBridge` has no daemon at all, and a test
+    double must not read as a dead droid.
+    """
+    if bridge is None:
+        return False
+    if not hasattr(bridge, "daemon"):
+        return True                 # a test double; see the test by that name
+    held = bridge.daemon()
+    return bool(held) and bool(held.get("connected"))
+
+
 def one_turn(mic, engine, chunker, ring, transcriber, speaker, args, n,
              threshold, bridge, ceiling) -> bool:
     """Wait for the wake word, then run the loop once. False to stop."""
@@ -351,8 +383,15 @@ def handle(utt, transcriber, speaker, args, bridge, ceiling) -> bool:
         line = line_future.result(timeout=args.timeout * 2)
         print(f'    C3PO  "{line}"', flush=True)
         gate = SPK.QuietHours(enabled=not args.audition)
-        SPK.speak(line, speaker=speaker, quiet_hours=gate, play_audio=True)
+        body = SPK.Embodiment(present=r2_is_present(bridge),
+                              enabled=not args.audition)
+        SPK.speak(line, speaker=speaker, quiet_hours=gate, embodiment=body,
+                  play_audio=True)
     except SPK.QuietHoursError as e:
+        print(f"    C3PO  (silent) {e}")
+    except SPK.NotEmbodiedError as e:
+        # Deliberately NOT an error beat. Refusing is the correct outcome,
+        # and it is caught above SpeakError because it is a subclass of it.
         print(f"    C3PO  (silent) {e}")
     except SPK.SpeakError as e:
         print(f"    C3PO  speech failed: {e}")
@@ -443,6 +482,17 @@ def main(argv=None) -> int:
     else:
         ceiling, msg = info
         print(f"R2 body    : {msg}")
+    # Say it at launch rather than letting the first refusal explain it. The
+    # per-turn check still decides; this is only the heads-up.
+    if not r2_is_present(bridge) and not a.audition:
+        why = "not sending — pass --send to drive him" if bridge is None else (
+            "a daemon holds the bridge but has not connected yet (it may "
+            "still be scanning, or the scan failed)")
+        print(f"R2 ABSENT ({why}).\n"
+              f"           The voice is his (D-019), so it stays SILENT until "
+              f"he is reachable.\n"
+              f"           This self-heals: the next turn after he connects "
+              f"speaks. --audition overrides.")
     with C.MicSource(device=idx) as mic:
         threshold = prove_mic_live_and_calibrate(mic, a.noise_margin_db)
         chunker = C.Chunker(engine.frame_bytes)

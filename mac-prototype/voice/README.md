@@ -256,6 +256,50 @@ An audition overrides it at the **call site**, never by weakening the default:
 speak(line, quiet_hours=QuietHours(enabled=False))
 ```
 
+### And he does not speak when he is not here
+
+Same rule, second gate (**D-020**). Under D-019 the voice is R2's own, so
+`speak()` refuses unless it is told he is reachable — and `Embodiment.present`
+defaults to **False**, which makes a bare `speak("...")` refuse.
+
+That default is deliberate. Assuming presence is wrong in the direction that
+reaches a household; assuming absence is wrong only in the direction of
+silence. It was not hypothetical: the voice spoke three times unprompted with
+R2 powered down (OBSERVED 2026-08-27), and it read as *random* precisely
+because the chirp and the dome turn that would have made a misfire legible
+were the parts that were missing.
+
+`converse.py` answers the readiness question **once per turn**, not once per
+run — `bridge` is resolved at startup and a daemon can die at any point after.
+
+```python
+speak(line, embodiment=Embodiment(present=r2_is_present(bridge)))
+speak(line, embodiment=Embodiment(enabled=False))   # audition, no droid
+```
+
+This gate stops the symptom, not the cause: the wake word's false-accept rate
+is still unmeasured (#42 AC3).
+
+**Holding the lock is not being connected.** The daemon takes the lock
+(`r2_probe.py:1641`) *before* it scans for R2 (`:1690`, 10 s default) and drops
+it only after a failed scan returns — so for that whole window R2 can be
+powered off while the lock says a daemon lives. Gating on the lock alone let
+the voice talk to an empty room, which is the bug, not the fix. So the daemon
+now calls `mark_daemon_connected()` after `wake()` returns, and
+`r2_is_present()` requires that `connected` flag.
+
+> [!warning]
+> **Restart the daemon after pulling this.** One started earlier writes no
+> `connected` field, so the voice stays silent until you restart it. That is
+> the safe direction, and it is deliberate: treating a missing field as
+> "old daemon, assume connected" would preserve the exact hole being closed.
+> Only you can restart it — macOS gives Bluetooth to the responsible process.
+
+**`--send none` is mute, and that is correct.** It is the argparse default, so
+a bare `python voice/converse.py` refuses every line. With no bridge there is
+no way to ask whether he is connected, and speaking blind is what D-019
+forbids. The startup banner names which case you are in and what to pass.
+
 ### Generating audio and making noise are separate decisions
 
 `play_audio` defaults to `False`. The one that makes a sound is the one you

@@ -115,6 +115,58 @@ class TestBridgeOpening(unittest.TestCase):
             self.assertIn("no daemon", why)
 
 
+class TestTheVoiceNeedsTheBody(unittest.TestCase):
+    """`bridge` is resolved once in `main`; a daemon can die any time after.
+    `send_r2` re-checks before sending, and until #97's sibling bug the
+    speech path did not check at all."""
+
+    def bridge(self, record):
+        class Stub:
+            def daemon(self):
+                return record
+        return Stub()
+
+    def test_no_bridge_at_all_is_not_present(self):
+        self.assertFalse(CV.r2_is_present(None))
+
+    def test_a_bridge_whose_daemon_died_is_not_present(self):
+        self.assertFalse(CV.r2_is_present(self.bridge(None)))
+
+    # -- the one a whole review round was spent on ------------------------
+    def test_a_daemon_that_holds_the_lock_but_has_NOT_connected_is_absent(self):
+        # `acquire_daemon_lock` runs BEFORE the BLE scan (r2_probe.py:1641 vs
+        # :1690, 10 s default) and the lock outlives a scan that FAILS. So a
+        # live lock is true for a droid that is powered off, and gating on it
+        # let the voice speak into an empty room -- the exact reported bug.
+        self.assertFalse(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "started": 0})))
+
+    def test_an_explicit_connected_false_is_absent_too(self):
+        self.assertFalse(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "connected": False})))
+
+    def test_only_a_CONNECTED_daemon_is_present(self):
+        self.assertTrue(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "connected": True})))
+
+    def test_a_test_double_is_not_mistaken_for_a_dead_droid(self):
+        # FakeBridge has no `daemon` at all. Reading that as "absent" would
+        # make every dry test silent, which is the failure mode the same
+        # hasattr guard exists for in send_r2.
+        self.assertTrue(CV.r2_is_present(B.FakeBridge()))
+
+    def test_the_speech_path_actually_routes_through_the_check(self):
+        # The guard lives in speak(), but a guard nothing calls with a live
+        # value is decoration. This asserts the wiring: delete either half in
+        # handle() and this fails. Source-level on purpose -- driving handle()
+        # needs a mic, a transcriber and two model calls.
+        import inspect
+        src = inspect.getsource(CV.handle)
+        self.assertIn("r2_is_present(bridge)", src)
+        self.assertIn("embodiment=", src)
+        self.assertIn("NotEmbodiedError", src)
+
+
 class TestBeatDegradation(unittest.TestCase):
     """A beat above the ceiling is degraded, not dropped — `reason()` almost
     always returns a dome angle, so rejecting outright made `--send audio`

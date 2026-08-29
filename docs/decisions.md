@@ -1421,3 +1421,154 @@ places, and rebuilt it — the same failure this repo has already recorded as
 *Reversed by:* a playtest where the first-person voice reads as ventriloquism
 rather than as him — the cheap version is the same line delivered first person
 and third person, back to back, to someone who has not seen this file.
+
+---
+
+## D-020 — The voice is gated on R2 being reachable
+**2026-08-28** · *operator ruling* · **follows D-019** · implements the gate in
+`voice/speak.py`
+
+**Decision.** Synthesised speech is **refused unless R2 is reachable**. The gate
+lives inside `speak()`, next to quiet hours, and defaults to refusing. The only
+override is `--audition`, the same escape hatch quiet hours already has.
+
+### What forced it
+
+OBSERVED 2026-08-27: the voice spoke **three times, unprompted, with R2 powered
+down and no animation**. Reported by the operator.
+
+Operator ruling: the voice must be gated on R2 readiness.
+
+Under D-019 the voice is **his**, in the first person. A first-person line with
+no droid behind it is not a degraded feature, it is a different and worse one —
+a disembodied voice in a room with nothing visible producing it.
+
+### What this reverses
+
+An earlier session decoupled the speech path from BLE **deliberately**, and
+reported it as a feature: *"only Threepio was still working, because he needs no
+robot."* That was the right instinct for keeping the module severable and the
+wrong outcome for the household. It is reversed.
+
+### Why the gate is in `speak()` and not in `converse.py`
+
+The same reason quiet hours is (`speak.py`, "QUIET HOURS ARE ENFORCED HERE"):
+a guard held by a caller is not a guard. `FORBIDDEN_OPS` was once enforced on
+the construction path and every caller that skipped construction skipped the
+check. Sound is the output that reaches a household through a closed door, so
+both gates sit where the sound is made.
+
+`Embodiment.present` therefore defaults to **False**. The asymmetry is the
+point: assuming presence is wrong in the direction that reaches a household,
+assuming absence is wrong only in the direction of silence.
+
+**Say what this is, precisely: a safe DEFAULT, not an unbypassable guard.**
+`speak()` has no bridge and cannot see BLE, so it takes the caller's word via
+`Embodiment(present=...)`. A caller can still pass `present=True` and make
+noise — exactly as it can pass `QuietHours(enabled=False)`. What the placement
+buys is that a caller who passes *nothing* is refused. An earlier draft of
+this ADR called it a guard outright; a cross-model review was right that the
+word claims more than the code does.
+
+### Readiness is asked per turn, not per run
+
+`converse.py` resolves `bridge` once at startup and never revisits it, so
+`bridge is not None` only means a daemon held the bridge **when the run
+started**. `send_r2` and `send_animation` already re-check liveness before
+sending; the speech path did not check at all. `r2_is_present()` asks the same
+question the same way — including the `hasattr(bridge, "daemon")` guard, so a
+`FakeBridge` in a dry test is not read as a dead droid.
+
+### The readiness signal was wrong. FIXED — the daemon now records the link
+
+**MEASURED 2026-08-28, in review, before this ever ran in the house.**
+`daemon.lock` proves a daemon PROCESS is alive. It does not prove R2 is
+CONNECTED, and those come apart by design:
+
+- `acquire_daemon_lock()` is called at `r2_probe.py:1641`, **before**
+  `_run_daemon` reaches the BLE scan at `r2_probe.py:1690`.
+- The lock record is `{"pid", "ceiling", "started"}` — nothing about the link.
+- The scan's `--timeout` defaults to **10.0 s**, and the lock is released only
+  by `cmd_daemon`'s `finally`, i.e. AFTER a failed scan returns.
+
+So with R2 powered off, there is a window of at least ten seconds in which the
+lock exists, `r2_is_present()` returns True, and the voice speaks anyway — the
+exact reported symptom. Worse, `talk.command:41-45` polls for that lock file,
+breaks the moment it appears, sleeps 2 s and launches `converse.py`, which
+puts the primary user path INSIDE the window.
+
+**The fix, operator ruling 2026-08-28: the daemon records it.**
+`mark_daemon_connected()` rewrites the lock with `connected: true` — and does
+it only after `await r2.wake()` returns, i.e. after the link is genuinely up.
+`r2_is_present()` now requires that flag, so holding the lock is no longer
+enough. The rewrite goes through `os.replace`, because a torn read parses as
+"no daemon" and would cut the voice off mid-session for no reason, and it
+preserves `pid`, because `release_daemon_lock` refuses to drop a lock that is
+not its own.
+
+> [!warning]
+> **A daemon already running when this lands writes no `connected` field, so
+> the voice stays silent until it is restarted.** Safe direction, but it looks
+> exactly like a regression if you meet it unprepared. Only the operator can
+> restart the daemon (macOS gives Bluetooth to the responsible process), so
+> this is a step in the upgrade, not something the code can paper over. It was
+> a deliberate choice to fail closed rather than treat a missing field as
+> "old daemon, assume connected" — that reading would preserve the exact hole
+> being closed.
+
+Two mutations survived the first battery and both were this shape: deleting
+the call site, and marking connected BEFORE `wake()`. Neither could be caught
+by a behavioural test, because `_run_daemon` needs a real droid — so the call
+site is pinned by a source-order assertion instead. Weak, and stated as weak;
+it is the only thing that fails when someone deletes the call, and a weak test
+on a live path beats a strong one on a dead layer.
+
+### `--send none` makes the loop mute, and on reflection that is CORRECT
+
+`--send` defaults to `"none"`, `open_bridge("none")` returns `None`, so a bare
+`python voice/converse.py` refuses every line. VERIFIED by execution, not read.
+`open_bridge` collapses two different states into `None` — *the operator opted
+out of driving R2* and *R2 is unreachable*. The first reading suggested this
+was a defect to fix by letting `--send none` speak. It is not: with no bridge
+at all there is no way to ask whether he is connected, so speaking would be
+speaking blind, which is the thing D-019 forbids. It stays mute, and the
+startup banner now names which of the two it is and what to pass. The cost is
+real — the bare `python voice/converse.py` dev loop is silent unless you pass
+`--send` or `--audition` — and it is accepted knowingly.
+
+`talk.command` is unaffected; it passes `CEILING=stance`.
+
+### What this does NOT fix
+
+- **The false-accept rate is still UNKNOWN.** This gate stops the *symptom*;
+  the *frequency* is unmeasured. #42 AC3 (a 30-minute ambient sample) has been
+  deferred twice and never run. The `r2d2` model publishes **4.69 false
+  accepts/hour**, so three in a day is well inside expected — the gate must not
+  be read as evidence the wake word improved.
+- **A false wake while R2 IS up still produces a full reply to nothing** —
+  animation, chirp and speech. `misheard` already exists in `r2_lights.STATES`
+  and is the honest signal. Not done here.
+
+### Evidence
+
+5 mutations, 0 survivors: flipping the default to present, deleting the gate,
+hardcoding presence at the caller, and reading both an absent bridge and a dead
+daemon as present each turn the suite red. 611 tests pass.
+
+**That first battery proved the gate was load-bearing and NOT that it asked
+the right question** — all five mutations took `daemon.lock` as ground truth
+for "R2 is here", the very assumption that turned out to be false. A green
+suite around a wrong premise is the sibling of *a guard on the construction
+path is not a guard*, one layer up, and it is why the review caught this and
+the tests did not.
+
+After the fix: **6 mutations, 0 survivors** — reverting to the old
+lock-only check, writing `connected` as False, deleting the ownership check,
+dropping the pid on rewrite, deleting the call site, and moving the mark
+before `wake()`. **620 tests pass.** Still Mac-prototype only, still no CI,
+and the daemon path itself is unexercised by any test because it needs a
+droid: the first real evidence will be the operator restarting the daemon and
+watching the voice stay silent until R2 answers.
+
+*Reversed by:* a decision that the voice is a companion rather than R2 himself,
+which would reopen D-019 first.
