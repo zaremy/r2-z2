@@ -1,0 +1,7 @@
+# Layered over a vendor example's sdkconfig.defaults. Turns OFF the two
+# settings that put code and rodata in PSRAM. CLAUDE.md records that vendor
+# examples shipping these hang this board in PSRAM init and wedge USB
+# recovery; 00_bsp_quickstart ships both and booted to total serial silence
+# while 13_display_colorbar (which ships neither) runs fine.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n

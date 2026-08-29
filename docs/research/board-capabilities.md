@@ -413,6 +413,65 @@ confirmation of the whole capability surface — run it first.
 first-party code, before we write a line of our own driver. The brief's
 instinct to reuse rather than rewrite is well supported by the evidence.
 
+## 3b. S4 display bring-up — OBSERVED 2026-08-29
+
+**The panel renders. First pixels in this project.**
+
+`reference/.../examples/esp-idf/13_display_colorbar`, unmodified, built against
+ESP-IDF **v5.5.5** and flashed to the board. Serial reported the full path and
+the **operator confirmed colour bars on the glass by eye** — the claim is
+OBSERVED on real hardware, not inferred from a returning draw call.
+
+```
+display_colorbar: Detected V2 board revision
+display_colorbar: Initialize CO5300 over QSPI
+co5300_spi: LCD panel create success, version: 2.1.0
+display_colorbar: Drawing RGB565 color bars
+```
+
+Two things that settle open questions:
+
+- **V2, confirmed by a third independent instrument.** The example runs its own
+  CST816 probe at `0x15` and printed "Detected V2 board revision", agreeing
+  with `board_variant.c` and with the I²C bus map above.
+- **The panel needs no IO-expander or PMU setup to light.** This example never
+  writes `0x20` or `0x34`, and passes `reset_gpio_num = GPIO_NUM_NC`. It works
+  anyway. So `BIT0 = LCD_RST` / `BIT1 = DSI_PWR_EN` being behind the expander
+  does **not** mean firmware must drive them for display; the vendor BSP never
+  calls `esp_io_expander_set_level` either. Recorded because the opposite was
+  assumed mid-session and was wrong.
+
+### `00_bsp_quickstart` does NOT boot — UNRESOLVED
+
+Same board, same toolchain, minutes apart. It builds clean and flashes clean
+(`Hash of data verified`), then emits **zero serial bytes — not even bootloader
+output**, where `13_display_colorbar` prints its full boot log on the same port.
+
+Eliminated:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| PSRAM XIP settings hang init | rebuilt with `CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n`, `CONFIG_SPIRAM_RODATA=n` | still silent |
+| Console routed elsewhere | diffed `CONFIG_ESP_CONSOLE_*` against the working example | **identical** |
+| Chip bricked / USB recovery wedged | `esptool.py chip_id` | answers normally |
+
+Zero bytes including no bootloader output points *earlier* than the app —
+`CONFIG_PARTITION_TABLE_CUSTOM=y` with its own `partitions.csv` is the
+untested difference and the next thing to try. Not chased further because the
+display question was already answered by the colorbar.
+
+> [!note]
+> `firmware/sdkconfig.no-psram-xip.defaults` exists to layer over a vendor
+> example without patching the gitignored clone:
+> `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;<that file>" build`.
+
+### Factory image restored
+
+`~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes, sha256
+`6f188fb9…54a6cdb3` verified before *and* after writing. Operator confirmed the
+stock Xiaozhi UI is back. **The backup is proven good** — it has now survived a
+real restore, which is worth more than the checksum alone.
+
 ## 4. Gaps and cautions
 
 - **No schematic in the repo.** Vendor README says so, and adds that CI
