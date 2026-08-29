@@ -431,15 +431,33 @@ display_colorbar: Drawing RGB565 color bars
 
 Two things that settle open questions:
 
-- **V2, confirmed by a third independent instrument.** The example runs its own
-  CST816 probe at `0x15` and printed "Detected V2 board revision", agreeing
-  with `board_variant.c` and with the I²C bus map above.
-- **The panel needs no IO-expander or PMU setup to light.** This example never
-  writes `0x20` or `0x34`, and passes `reset_gpio_num = GPIO_NUM_NC`. It works
-  anyway. So `BIT0 = LCD_RST` / `BIT1 = DSI_PWR_EN` being behind the expander
-  does **not** mean firmware must drive them for display; the vendor BSP never
-  calls `esp_io_expander_set_level` either. Recorded because the opposite was
-  assumed mid-session and was wrong.
+- **V2 agreed again — by a second independent IMPLEMENTATION, not a third
+  instrument.** The example printed "Detected V2 board revision" from its own
+  `detect_v2_board()`. That is the *same* `0x15` heuristic `board_variant.c`
+  and the bus map already use, re-implemented, which is what
+  `board-revision.md:70` already calls it. Agreement between three readings of
+  one heuristic is not three instruments, and calling it that would inflate
+  the evidence.
+- **The panel lit without THIS app touching the expander or PMU — and that is
+  NOT the same as "no setup is needed". INFERRED, with a known confound.**
+  What is OBSERVED: `13_display_colorbar` never writes `0x20` or `0x34`, passes
+  `reset_gpio_num = GPIO_NUM_NC`, and the bars appeared. The Waveshare BSP file
+  likewise only creates the TCA9554 handle and never calls
+  `esp_io_expander_set_level`.
+
+  **The confound:** `board_variant.c:56-63` — run by `board_check` in an
+  earlier session — *does* drive the expander, writing `IO_EXPANDER_OUTPUT_MASK`
+  and so asserting `LCD_RST` and `DSI_PWR_EN`. Every reset since has been a
+  *chip* reset (`rst:0x15 USB_UART_CHIP_RESET`), never a PMU or board power
+  cycle, which is the same caveat this file already records for the AXP2101
+  rails above. The expander's output latches plausibly survived, so the
+  colorbar may have inherited an already-enabled panel rather than proving it
+  needs nothing.
+
+  **The test nobody has run: power the board down fully, then flash and boot
+  ONLY the colorbar.** Until then, "the minimal path lights a cold board" is
+  unproven. Recorded this way because the opposite was first assumed, then
+  over-corrected into an equally unearned claim.
 
 ### `00_bsp_quickstart` does NOT boot — UNRESOLVED
 
@@ -455,10 +473,31 @@ Eliminated:
 | Console routed elsewhere | diffed `CONFIG_ESP_CONSOLE_*` against the working example | **identical** |
 | Chip bricked / USB recovery wedged | `esptool.py chip_id` | answers normally |
 
-Zero bytes including no bootloader output points *earlier* than the app —
-`CONFIG_PARTITION_TABLE_CUSTOM=y` with its own `partitions.csv` is the
-untested difference and the next thing to try. Not chased further because the
-display question was already answered by the colorbar.
+**Cause UNKNOWN.** Zero bytes *including no bootloader output* points earlier
+than the app — which also argues against the partition table, since the
+bootloader must run (and print) before it can parse one.
+
+There are **sixteen** settings in `00_bsp_quickstart/sdkconfig.defaults`
+absent from the colorbar's, and only two were tested:
+
+```
+CONFIG_SPIRAM=y                      CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_SPIRAM_MODE_OCT=y             CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_SPIRAM_SPEED_80M=y            CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y   CONFIG_FREERTOS_HZ=1000
+CONFIG_SPIRAM_RODATA=y               CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_LV_* (fonts, perf monitor, FAST_MEM_USE_IRAM)
+```
+
+**Note especially that PSRAM itself was never ruled out.** Only the two XIP
+settings were disabled; `CONFIG_SPIRAM=y` stayed on, and the colorbar ships no
+PSRAM settings at all. And three of the others —
+`CONFIG_FREERTOS_HZ=1000`, `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y`,
+`CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y` — are **exactly the trio this file
+already records at "Config that hangs this board", OBSERVED 2026-08-24, which
+cost a manual recovery.** They are the prime suspects, not the partition table.
+
+Not chased further because the display question was already answered.
 
 > [!note]
 > `firmware/sdkconfig.no-psram-xip.defaults` exists to layer over a vendor
@@ -467,10 +506,18 @@ display question was already answered by the colorbar.
 
 ### Factory image restored
 
-`~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes, sha256
-`6f188fb9…54a6cdb3` verified before *and* after writing. Operator confirmed the
-stock Xiaozhi UI is back. **The backup is proven good** — it has now survived a
-real restore, which is worth more than the checksum alone.
+`~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes.
+
+Precisely what was checked, because "verified" without a named surface is worth
+nothing: the file's sha256 was computed **before** writing and matched its
+`.sha256` sidecar; `esptool` then reported `Hash of data verified`, which is its
+own check of the data it transferred. **The flash was never read back and
+re-hashed afterwards.** An earlier draft of this section claimed the sha was
+"verified before *and* after writing". It was not.
+
+What IS proven, and by the strongest available instrument: the operator
+confirmed the stock Xiaozhi UI came back on screen. The backup restores to a
+working system.
 
 ## 4. Gaps and cautions
 
