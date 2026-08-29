@@ -1074,6 +1074,35 @@ def acquire_daemon_lock(ceiling: str) -> dict | None:
     return _read_lock() or {"pid": -1, "ceiling": "unknown", "started": 0}
 
 
+def mark_daemon_connected(name: str | None = None) -> None:
+    """Record that the BLE LINK IS UP — not merely that this process started.
+
+    The lock is taken in `cmd_daemon` BEFORE the scan, and the scan defaults to
+    10 s and can fail outright. So the lock's mere existence proves a daemon
+    PROCESS is alive and says nothing about R2. Any reader that treats it as
+    reachability — `converse.py` gating speech on it — talks to an empty room
+    for the whole scan window, which is the bug D-020 exists to stop and did
+    not, until this field existed.
+
+    Written via `os.replace` so a concurrent reader never sees a torn record.
+    A half-written lock parses as "no daemon", which is the safe direction but
+    would still make the voice cut out mid-session for no reason.
+
+    Only ever widens the record: `pid` is preserved, because
+    `release_daemon_lock` refuses to drop a lock that is not ours.
+    """
+    held = _read_lock()
+    if held is None or held.get("pid") != os.getpid():
+        return
+    held["connected"] = True
+    held["connected_at"] = time.time()
+    if name:
+        held["droid"] = name
+    tmp = LOCK.parent / (LOCK.name + ".tmp")
+    tmp.write_text(json.dumps(held))
+    os.replace(tmp, LOCK)
+
+
 def release_daemon_lock() -> None:
     """Drop the lock, but only if it is still ours.
 
@@ -1694,6 +1723,9 @@ async def _run_daemon(args) -> int:
     async with R2(hits[0], verbose=args.verbose) as r2:
         await r2.wake()
         r2.start_keepalive()
+        # Only NOW is the droid actually reachable. Anything gating on the
+        # lock before this point was gating on "a python process exists".
+        mark_daemon_connected(hits[0].name)
         print(f"\n>>> READY — holding session with {hits[0].name}. "
               f"Every command is logged below.\n")
 

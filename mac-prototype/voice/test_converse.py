@@ -120,20 +120,34 @@ class TestTheVoiceNeedsTheBody(unittest.TestCase):
     `send_r2` re-checks before sending, and until #97's sibling bug the
     speech path did not check at all."""
 
+    def bridge(self, record):
+        class Stub:
+            def daemon(self):
+                return record
+        return Stub()
+
     def test_no_bridge_at_all_is_not_present(self):
         self.assertFalse(CV.r2_is_present(None))
 
     def test_a_bridge_whose_daemon_died_is_not_present(self):
-        class DeadBridge:
-            def daemon(self):
-                return None
-        self.assertFalse(CV.r2_is_present(DeadBridge()))
+        self.assertFalse(CV.r2_is_present(self.bridge(None)))
 
-    def test_a_live_daemon_is_present(self):
-        class LiveBridge:
-            def daemon(self):
-                return 4242
-        self.assertTrue(CV.r2_is_present(LiveBridge()))
+    # -- the one a whole review round was spent on ------------------------
+    def test_a_daemon_that_holds_the_lock_but_has_NOT_connected_is_absent(self):
+        # `acquire_daemon_lock` runs BEFORE the BLE scan (r2_probe.py:1641 vs
+        # :1690, 10 s default) and the lock outlives a scan that FAILS. So a
+        # live lock is true for a droid that is powered off, and gating on it
+        # let the voice speak into an empty room -- the exact reported bug.
+        self.assertFalse(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "started": 0})))
+
+    def test_an_explicit_connected_false_is_absent_too(self):
+        self.assertFalse(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "connected": False})))
+
+    def test_only_a_CONNECTED_daemon_is_present(self):
+        self.assertTrue(CV.r2_is_present(
+            self.bridge({"pid": 1, "ceiling": "dome", "connected": True})))
 
     def test_a_test_double_is_not_mistaken_for_a_dead_droid(self):
         # FakeBridge has no `daemon` at all. Reading that as "absent" would

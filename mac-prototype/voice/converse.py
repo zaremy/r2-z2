@@ -259,18 +259,25 @@ def send_r2(behaviour, bridge, ceiling) -> str:
 def r2_is_present(bridge) -> bool:
     """Is R2 reachable RIGHT NOW, not merely at launch?
 
-    `bridge` is resolved once in `main` and never revisited, so `bridge is
-    not None` only means a daemon held the bridge when the run started. The
-    same liveness question `send_r2` and `send_animation` ask before sending
-    is the one the voice has to ask before speaking, so it is asked the same
-    way -- including the `hasattr` guard, because `FakeBridge` has no daemon
-    and a test double must not read as a dead droid.
+    Two separate ways this is false, and the second cost a review round:
+
+    1. `bridge` is resolved once in `main` and never revisited, so `bridge is
+       not None` only means a daemon held the bridge when the run STARTED.
+    2. Holding the bridge is not being connected. `acquire_daemon_lock` runs
+       before the BLE scan (10 s default) and the lock outlives a scan that
+       FAILS, so `daemon() is not None` — the test `send_r2` uses — is true
+       for a droid that is powered off. Require the `connected` flag that
+       `mark_daemon_connected` writes only after `wake()` returns.
+
+    The `hasattr` guard stays: `FakeBridge` has no daemon at all, and a test
+    double must not read as a dead droid.
     """
     if bridge is None:
         return False
-    if hasattr(bridge, "daemon") and bridge.daemon() is None:
-        return False
-    return True
+    if not hasattr(bridge, "daemon"):
+        return True                 # a test double; see the test by that name
+    held = bridge.daemon()
+    return bool(held) and bool(held.get("connected"))
 
 
 def one_turn(mic, engine, chunker, ring, transcriber, speaker, args, n,
@@ -478,8 +485,14 @@ def main(argv=None) -> int:
     # Say it at launch rather than letting the first refusal explain it. The
     # per-turn check still decides; this is only the heads-up.
     if not r2_is_present(bridge) and not a.audition:
-        print("R2 ABSENT: the voice is his (D-019), so it will stay SILENT "
-              "until he is reachable. Pass --audition to override.")
+        why = "not sending — pass --send to drive him" if bridge is None else (
+            "a daemon holds the bridge but has not connected yet (it may "
+            "still be scanning, or the scan failed)")
+        print(f"R2 ABSENT ({why}).\n"
+              f"           The voice is his (D-019), so it stays SILENT until "
+              f"he is reachable.\n"
+              f"           This self-heals: the next turn after he connects "
+              f"speaks. --audition overrides.")
     with C.MicSource(device=idx) as mic:
         threshold = prove_mic_live_and_calibrate(mic, a.noise_margin_db)
         chunker = C.Chunker(engine.frame_bytes)

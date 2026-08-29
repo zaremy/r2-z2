@@ -280,18 +280,25 @@ speak(line, embodiment=Embodiment(enabled=False))   # audition, no droid
 This gate stops the symptom, not the cause: the wake word's false-accept rate
 is still unmeasured (#42 AC3).
 
+**Holding the lock is not being connected.** The daemon takes the lock
+(`r2_probe.py:1641`) *before* it scans for R2 (`:1690`, 10 s default) and drops
+it only after a failed scan returns — so for that whole window R2 can be
+powered off while the lock says a daemon lives. Gating on the lock alone let
+the voice talk to an empty room, which is the bug, not the fix. So the daemon
+now calls `mark_daemon_connected()` after `wake()` returns, and
+`r2_is_present()` requires that `connected` flag.
+
 > [!warning]
-> **Two known holes, both found in review before this ran in the house (D-020).**
->
-> 1. **`daemon.lock` is not proof of a connection.** The daemon writes the lock
->    (`r2_probe.py:1641`) before it scans for R2 (`:1690`, 10 s default), and
->    releases it only after a failed scan returns. For that window R2 can be
->    powered off and `r2_is_present()` still says yes. `talk.command` polls for
->    that exact file, so the primary path starts inside the window.
-> 2. **`--send none` mutes the loop.** It is the argparse default, so a bare
->    `python voice/converse.py` refuses every line. `open_bridge` returns `None`
->    both when the operator opted out of driving R2 and when R2 is unreachable;
->    only the second is what the gate is for.
+> **Restart the daemon after pulling this.** One started earlier writes no
+> `connected` field, so the voice stays silent until you restart it. That is
+> the safe direction, and it is deliberate: treating a missing field as
+> "old daemon, assume connected" would preserve the exact hole being closed.
+> Only you can restart it — macOS gives Bluetooth to the responsible process.
+
+**`--send none` is mute, and that is correct.** It is the argparse default, so
+a bare `python voice/converse.py` refuses every line. With no bridge there is
+no way to ask whether he is connected, and speaking blind is what D-019
+forbids. The startup banner names which case you are in and what to pass.
 
 ### Generating audio and making noise are separate decisions
 

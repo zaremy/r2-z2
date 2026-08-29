@@ -1479,7 +1479,7 @@ sending; the speech path did not check at all. `r2_is_present()` asks the same
 question the same way — including the `hasattr(bridge, "daemon")` guard, so a
 `FakeBridge` in a dry test is not read as a dead droid.
 
-### The readiness signal is still WRONG, and this is a known hole
+### The readiness signal was wrong. FIXED — the daemon now records the link
 
 **MEASURED 2026-08-28, in review, before this ever ran in the house.**
 `daemon.lock` proves a daemon PROCESS is alive. It does not prove R2 is
@@ -1497,17 +1497,46 @@ exact reported symptom. Worse, `talk.command:41-45` polls for that lock file,
 breaks the moment it appears, sleeps 2 s and launches `converse.py`, which
 puts the primary user path INSIDE the window.
 
-What the gate does fix: no daemon at all, and a daemon that dies mid-run. What
-it does not fix: a daemon that is up and scanning, or one whose scan already
-failed. **Until the daemon records connection state, this is a partial fix.**
+**The fix, operator ruling 2026-08-28: the daemon records it.**
+`mark_daemon_connected()` rewrites the lock with `connected: true` — and does
+it only after `await r2.wake()` returns, i.e. after the link is genuinely up.
+`r2_is_present()` now requires that flag, so holding the lock is no longer
+enough. The rewrite goes through `os.replace`, because a torn read parses as
+"no daemon" and would cut the voice off mid-session for no reason, and it
+preserves `pid`, because `release_daemon_lock` refuses to drop a lock that is
+not its own.
 
-### `--send none` makes the loop mute, and that is a second known hole
+> [!warning]
+> **A daemon already running when this lands writes no `connected` field, so
+> the voice stays silent until it is restarted.** Safe direction, but it looks
+> exactly like a regression if you meet it unprepared. Only the operator can
+> restart the daemon (macOS gives Bluetooth to the responsible process), so
+> this is a step in the upgrade, not something the code can paper over. It was
+> a deliberate choice to fail closed rather than treat a missing field as
+> "old daemon, assume connected" — that reading would preserve the exact hole
+> being closed.
+
+Two mutations survived the first battery and both were this shape: deleting
+the call site, and marking connected BEFORE `wake()`. Neither could be caught
+by a behavioural test, because `_run_daemon` needs a real droid — so the call
+site is pinned by a source-order assertion instead. Weak, and stated as weak;
+it is the only thing that fails when someone deletes the call, and a weak test
+on a live path beats a strong one on a dead layer.
+
+### `--send none` makes the loop mute, and on reflection that is CORRECT
 
 `--send` defaults to `"none"`, `open_bridge("none")` returns `None`, so a bare
 `python voice/converse.py` refuses every line. VERIFIED by execution, not read.
 `open_bridge` collapses two different states into `None` — *the operator opted
-out of driving R2* and *R2 is unreachable* — and only the second is what this
-ADR is about. `talk.command` is unaffected; it passes `CEILING=stance`.
+out of driving R2* and *R2 is unreachable*. The first reading suggested this
+was a defect to fix by letting `--send none` speak. It is not: with no bridge
+at all there is no way to ask whether he is connected, so speaking would be
+speaking blind, which is the thing D-019 forbids. It stays mute, and the
+startup banner now names which of the two it is and what to pass. The cost is
+real — the bare `python voice/converse.py` dev loop is silent unless you pass
+`--send` or `--audition` — and it is accepted knowingly.
+
+`talk.command` is unaffected; it passes `CEILING=stance`.
 
 ### What this does NOT fix
 
@@ -1526,13 +1555,20 @@ ADR is about. `talk.command` is unaffected; it passes `CEILING=stance`.
 hardcoding presence at the caller, and reading both an absent bridge and a dead
 daemon as present each turn the suite red. 611 tests pass.
 
-**Read that for exactly what it is.** It proves the gate the tests describe is
-load-bearing. It does NOT prove the gate answers the right question — every
-one of those mutations and tests takes `daemon.lock` as ground truth for
-"R2 is here", which is the assumption the section above shows to be false. A
-green suite around a wrong premise is the failure mode this repo already
-recorded as *a guard on the construction path is not a guard*; this is its
-sibling, one layer up.
+**That first battery proved the gate was load-bearing and NOT that it asked
+the right question** — all five mutations took `daemon.lock` as ground truth
+for "R2 is here", the very assumption that turned out to be false. A green
+suite around a wrong premise is the sibling of *a guard on the construction
+path is not a guard*, one layer up, and it is why the review caught this and
+the tests did not.
+
+After the fix: **6 mutations, 0 survivors** — reverting to the old
+lock-only check, writing `connected` as False, deleting the ownership check,
+dropping the pid on rewrite, deleting the call site, and moving the mark
+before `wake()`. **620 tests pass.** Still Mac-prototype only, still no CI,
+and the daemon path itself is unexercised by any test because it needs a
+droid: the first real evidence will be the operator restarting the daemon and
+watching the voice stay silent until R2 answers.
 
 *Reversed by:* a decision that the voice is a companion rather than R2 himself,
 which would reopen D-019 first.
