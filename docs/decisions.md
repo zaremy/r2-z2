@@ -1506,6 +1506,22 @@ enough. The rewrite goes through `os.replace`, because a torn read parses as
 preserves `pid`, because `release_daemon_lock` refuses to drop a lock that is
 not its own.
 
+**MEASURED ON HARDWARE 2026-08-29, first run after the fix landed.** The
+window is not a reading of the source, it was watched live:
+
+```
+09:34:00  lock taken   {"pid": 59098, "ceiling": "dome", "started": ...}   <- no "connected"
+09:34:12  connected    {..., "connected": true, "droid": "D2-6F6B"}
+          BLIND WINDOW 11.95 s
+```
+
+At t+5 s the lock existed and carried no `connected` field, which is exactly
+the state the old check read as "R2 is present". `talk.command:41-45` polls for
+that file every second, breaks on first sight and sleeps 2 s, so it would have
+launched `converse.py` at roughly t+3 s — **about nine seconds inside the
+window**. The 10 s figure inferred from `--timeout` was close; the measured
+value is ~12 s because the scan is followed by connect and `wake()`.
+
 > [!warning]
 > **A daemon already running when this lands writes no `connected` field, so
 > the voice stays silent until it is restarted.** Safe direction, but it looks
