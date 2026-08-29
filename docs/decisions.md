@@ -1462,6 +1462,14 @@ both gates sit where the sound is made.
 point: assuming presence is wrong in the direction that reaches a household,
 assuming absence is wrong only in the direction of silence.
 
+**Say what this is, precisely: a safe DEFAULT, not an unbypassable guard.**
+`speak()` has no bridge and cannot see BLE, so it takes the caller's word via
+`Embodiment(present=...)`. A caller can still pass `present=True` and make
+noise — exactly as it can pass `QuietHours(enabled=False)`. What the placement
+buys is that a caller who passes *nothing* is refused. An earlier draft of
+this ADR called it a guard outright; a cross-model review was right that the
+word claims more than the code does.
+
 ### Readiness is asked per turn, not per run
 
 `converse.py` resolves `bridge` once at startup and never revisits it, so
@@ -1470,6 +1478,36 @@ started**. `send_r2` and `send_animation` already re-check liveness before
 sending; the speech path did not check at all. `r2_is_present()` asks the same
 question the same way — including the `hasattr(bridge, "daemon")` guard, so a
 `FakeBridge` in a dry test is not read as a dead droid.
+
+### The readiness signal is still WRONG, and this is a known hole
+
+**MEASURED 2026-08-28, in review, before this ever ran in the house.**
+`daemon.lock` proves a daemon PROCESS is alive. It does not prove R2 is
+CONNECTED, and those come apart by design:
+
+- `acquire_daemon_lock()` is called at `r2_probe.py:1641`, **before**
+  `_run_daemon` reaches the BLE scan at `r2_probe.py:1690`.
+- The lock record is `{"pid", "ceiling", "started"}` — nothing about the link.
+- The scan's `--timeout` defaults to **10.0 s**, and the lock is released only
+  by `cmd_daemon`'s `finally`, i.e. AFTER a failed scan returns.
+
+So with R2 powered off, there is a window of at least ten seconds in which the
+lock exists, `r2_is_present()` returns True, and the voice speaks anyway — the
+exact reported symptom. Worse, `talk.command:41-45` polls for that lock file,
+breaks the moment it appears, sleeps 2 s and launches `converse.py`, which
+puts the primary user path INSIDE the window.
+
+What the gate does fix: no daemon at all, and a daemon that dies mid-run. What
+it does not fix: a daemon that is up and scanning, or one whose scan already
+failed. **Until the daemon records connection state, this is a partial fix.**
+
+### `--send none` makes the loop mute, and that is a second known hole
+
+`--send` defaults to `"none"`, `open_bridge("none")` returns `None`, so a bare
+`python voice/converse.py` refuses every line. VERIFIED by execution, not read.
+`open_bridge` collapses two different states into `None` — *the operator opted
+out of driving R2* and *R2 is unreachable* — and only the second is what this
+ADR is about. `talk.command` is unaffected; it passes `CEILING=stance`.
 
 ### What this does NOT fix
 
@@ -1487,6 +1525,14 @@ question the same way — including the `hasattr(bridge, "daemon")` guard, so a
 5 mutations, 0 survivors: flipping the default to present, deleting the gate,
 hardcoding presence at the caller, and reading both an absent bridge and a dead
 daemon as present each turn the suite red. 611 tests pass.
+
+**Read that for exactly what it is.** It proves the gate the tests describe is
+load-bearing. It does NOT prove the gate answers the right question — every
+one of those mutations and tests takes `daemon.lock` as ground truth for
+"R2 is here", which is the assumption the section above shows to be false. A
+green suite around a wrong premise is the failure mode this repo already
+recorded as *a guard on the construction path is not a guard*; this is its
+sibling, one layer up.
 
 *Reversed by:* a decision that the voice is a companion rather than R2 himself,
 which would reopen D-019 first.

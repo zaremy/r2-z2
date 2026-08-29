@@ -280,6 +280,19 @@ speak(line, embodiment=Embodiment(enabled=False))   # audition, no droid
 This gate stops the symptom, not the cause: the wake word's false-accept rate
 is still unmeasured (#42 AC3).
 
+> [!warning]
+> **Two known holes, both found in review before this ran in the house (D-020).**
+>
+> 1. **`daemon.lock` is not proof of a connection.** The daemon writes the lock
+>    (`r2_probe.py:1641`) before it scans for R2 (`:1690`, 10 s default), and
+>    releases it only after a failed scan returns. For that window R2 can be
+>    powered off and `r2_is_present()` still says yes. `talk.command` polls for
+>    that exact file, so the primary path starts inside the window.
+> 2. **`--send none` mutes the loop.** It is the argparse default, so a bare
+>    `python voice/converse.py` refuses every line. `open_bridge` returns `None`
+>    both when the operator opted out of driving R2 and when R2 is unreachable;
+>    only the second is what the gate is for.
+
 ### Generating audio and making noise are separate decisions
 
 `play_audio` defaults to `False`. The one that makes a sound is the one you
