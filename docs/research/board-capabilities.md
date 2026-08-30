@@ -499,6 +499,28 @@ cost a manual recovery.** They are the prime suspects, not the partition table.
 
 Not chased further because the display question was already answered.
 
+**Narrowed 2026-08-30, from the factory image.** The board's own factory firmware
+is **ESP-Brookesia on LVGL 9**, and it boots and renders — verified by restoring
+it and confirming the stock UI by eye. The image carries its own component paths:
+
+```
+./components/brookesia_app_calculator/esp_brookesia_app_calculator.cpp
+./components/brookesia_core/gui/lvgl/esp_brookesia_lv_container.cpp
+esp_brookesia::systems::phone::RecentsScreen
+```
+
+`strings` counts: 74 Brookesia, 160 LVGL, 8 SquareLine.
+
+That rules out a whole class of cause. **LVGL, PSRAM and the CO5300 display
+stack all work on this hardware** — a shipped LVGL 9 application runs on it
+daily. So `00_bsp_quickstart`'s silence is a defect of *that example* (its
+partition table, its BSP version pin, or its own init order), not of the board,
+the framework, or PSRAM. The three-setting trio above remains the prime suspect
+for a hang, but the failure is now known to be example-scoped.
+
+This also settles a question this file could not answer before: **LVGL on this
+board is OBSERVED, not inferred.**
+
 > [!note]
 > `firmware/sdkconfig.no-psram-xip.defaults` exists to layer over a vendor
 > example without patching the gitignored clone:
