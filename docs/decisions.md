@@ -1661,5 +1661,48 @@ following is established:
 
 An OS integration study answers these before any implementation is specced.
 
+### Amendment A — 2026-08-30, same day: the premise above is MISATTRIBUTED
+
+Partition forensics run hours after this ADR was filed show the emoji face does
+**not** belong to ESP-Brookesia. The board carries **two complete applications**:
+
+```
+factory  @0x110000  esp-brookesia  v1      built 2026-05-27  IDF v5.5.4
+ota_0    @0x690000  xiaozhi        v2.2.6  built 2026-05-26  IDF v5.5.4
+```
+
+String counts across the two images, `brookesia` vs `xiaozhi`:
+
+```
+emoji_collection    0 / 1      WakeNet   0 / 8      afe_   0 / 50
+MultiNet            0 / 4      Opus      0 / 46
+```
+
+The face, and the entire speech stack with it, are **xiaozhi's**. And
+`otadata` is fully erased, so the bootloader falls through to `factory`:
+**the device boots the Brookesia launcher, and xiaozhi does not run by default.**
+
+**What that does to the argument.** This ADR justified owning idle by saying a
+rival *character* owns the screen at rest. That is not what happens. At rest the
+device shows a **launcher home screen** — neutral chrome, not a competing
+character. The decision may still be right, but the reason given for it above is
+not the reason.
+
+Two claims made elsewhere on the strength of the original premise are also wrong
+and are withdrawn here:
+
+- *"Building on Brookesia gives us an on-device wake word."* It does not. The
+  speech stack is xiaozhi's, in a different application.
+- *"The OS's idle state is an animated emoji face."* It is the launcher.
+
+**Status: the ruling stands as recorded, the rationale does not.** Owning idle is
+still defensible — a launcher grid is not what a droid's back should show, and
+D-017 still wants an instrument there. But that is a weaker and different claim
+than the one filed, and it deserves the operator's re-confirmation rather than a
+quiet rewrite by the author of the mistake.
+
 *Reversed by:* the study showing idle cannot be owned without forking the
-framework, at a cost the operator judges worse than living with the host's face.
+framework, at a cost the operator judges worse than living with the host's
+launcher — or by the operator deciding a neutral launcher at rest is acceptable,
+which the corrected premise makes a much more reasonable position than it looked
+when this was filed.
