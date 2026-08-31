@@ -62,7 +62,7 @@ table below, except where a citation is given:
 
 | Addr | Part | Basis |
 |---|---|---|
-| `0x15` | CST816 touch (V2) | OBSERVED — `board_variant.c:20`, and the detector's own verdict |
+| `0x15` | CST820 touch (V2) | OBSERVED — `board_variant.c:20`; part-number register `0xA7` reads `0xB7` = CST820 (2026-08-31) |
 | `0x18` | ES8311 audio codec | `ES8311_CODEC_DEFAULT_ADDR (0x30)` in `espressif__esp_codec_dev/device/include/es8311_codec.h:18` — that is the **8-bit** address; `0x30 >> 1 = 0x18` |
 | `0x20` | TCA9554-class IO expander | OBSERVED — `board_variant.c:19` |
 | `0x34` | AXP2101 PMU | OBSERVED — chip-ID register `0x03` read back `0x4A`, matching `AXP2101Constants.h:5` |
@@ -280,6 +280,95 @@ SHA-256 `6f188fb9d35ee793a3423934a4fa4e7c1fef9cc9dae76f9f177dabe854a6cdb3`.
 Kept outside the repo — it is a vendor binary.
 
 ---
+
+### Touch returns coordinates — OBSERVED 2026-08-31, `firmware/touch_check` on hardware
+
+Issue #103 gap A3. Until this run the touch controller had only ever *answered an
+address probe*. No driver had read a point off it, while the entire panel
+interaction design assumed it worked.
+
+**It works.** 174 logged samples, operator driving, `firmware/touch_check`
+polling registers `0x01`–`0x06` at 50 Hz. The raw capture is committed at
+`firmware/touch_check/results/a3-touch-2026-08-31.txt` and every figure below
+is re-derivable with `results/analyse.py` — the firmware itself only tracks a
+running count and min/max, so the distinct-value counts and monotonic runs are
+post-processing and would otherwise be unauditable assertions. The chip-ID read
+has its own transcript, `results/identify-2026-08-31.txt`:
+
+| A3 acceptance criterion | Result |
+|---|---|
+| Coordinate changes with touch position | **Yes** — 116 distinct x, 113 distinct y over 174 points |
+| A drag is a moving sequence, not one point repeated | **Yes** — longest strictly-monotonic run of 16 contiguous samples, in both x and y |
+| Coordinates recorded against the 368×448 space | x `1..362`, y `1..447` |
+
+> [!note]
+> Two harness artifacts, both of which produced a wrong number before being
+> caught. **One:** `touch_check` prints a sample only when x or y **changed**, so
+> "no repeated identical points" is true by construction and is evidence of
+> nothing. **Two:** the original capture predates the firmware's `LIFT` marker,
+> so consecutive lines in it can belong to two *different* touches. An
+> unconstrained longest-run over that file reports **22** — but that run contains
+> a 197 px jump and spans a lift, so it is not a drag. The published 16 is the
+> longest run within a single stroke, and is unchanged whether strokes are cut at
+> 25, 40 or 50 px, so it does not depend on that threshold. `analyse.py` enforces
+> the segmentation; the firmware now emits `LIFT` so future captures carry the
+> boundary explicitly. That marker is a large improvement, not a guarantee — it
+> is one `fingers == 0` read on a 20 ms poll, so a transient zero can split a
+> real stroke and a brief lift between two polls can still be missed. Keep the
+> discontinuity split as a backstop.
+
+**The 16 px V2 column offset does NOT apply to touch.** `V2_PANEL_X_GAP = 0x10`
+shifts the *display*; a driver that also added it to touch would be wrong by
+16 px everywhere. This is decisive rather than inferred: **five samples arrived
+below x = 16**, which is impossible if the offset were applied. Do not add the
+gap to touch coordinates.
+
+**That is the whole of what this measures.** It refutes the offset; it does not
+establish full-scale calibration or linearity. The x axis never reached either
+endpoint — `1..362` is where the operator's finger started and stopped, not
+where the digitiser does — so the working assumption of a 1:1 map onto `0..367`
+is *reasonable and unverified at the edges*. y did reach 447, the last row.
+Anything that depends on exact edge behaviour (an edge-swipe affordance, a
+hit target flush to the bezel) needs a deliberate corner-to-corner calibration
+run first.
+
+**The fitted part reports `CST820`.** Chip-ID register `0xA7` returns `0xB7`, and
+the vendor's own bundled driver maps that value —
+`CST816S 0xB4`, `CST816T 0xB5`, `CST816D 0xB6`, **`CST820 0xB7`** — at
+`examples/arduino-v2/libraries/SensorLib/src/touch/TouchDrvCST816.h:105-109` in
+waveshareteam/ESP32-S3-Touch-AMOLED-1.8 @ `ed7c6a5` (`source-map.md:13`). That
+path lives under `reference/`, which is **gitignored by design** — the repo
+never vendors upstream clones — so it is pinned by SHA rather than committed. That settles
+which half of the naming disagreement in `board-revision.md:43-45` describes
+*this* board: the marketing name `CST820`, not the ESP-IDF code's `CST816`.
+Nothing about the driver changes — the register block is identical across the
+family (`libraries/Arduino_DriveBus/src/touch_chip/Arduino_CST816x.h:58-66`, same clone and SHA) — but note that our own
+`BOARD_VARIANT_CO5300_CST816` is named after a sibling part, not the fitted one.
+Renaming it is cosmetic and deliberately not done here.
+
+**The gesture register is UNRESOLVED — do not read the numbers as a rate.**
+Register `0x01` reported a gesture on 4 of the 174 *logged* points (`slide-left`
+×2, `slide-right` ×2) and never a `tap`. That is not a gesture rate, and the
+absent tap is an artifact of the instrument, not a property of the chip: the
+firmware logs only when x or y **changed**, and a tap holds its coordinates
+still, so this harness **cannot see a tap by construction**. A latched gesture
+value could equally be re-counted across a moving drag.
+
+What this does establish is only that the register is wired and does fire.
+Settling it needs a run that logs *every poll* rather than every change — cheap,
+and worth doing before the panel's swipe navigation depends on it. Until then
+derive swipes from the coordinate stream, which is measured.
+
+> [!warning]
+> **Reading serial output from this board is the hard part, not the firmware.**
+> Its only port is the ESP32-S3 native USB-Serial/JTAG. A plain `pyserial` open
+> resets the chip into the ROM downloader, and esptool's *"Hard resetting via RTS
+> pin"* is a no-op because there is no RTS line — so the app is not running while
+> you listen. Six consecutive negative readings were taken this way before a
+> known-good app (`13_display_colorbar`, verifiable by eye) was flashed as a
+> positive control and produced the *identical* silence. Procedure that works is
+> in `CLAUDE.md`; the short version is `idf.py flash`, then attach with
+> `idf_monitor --no-reset` in a reattach loop, never a bare `pyserial` open.
 
 ## 1. Silicon and memory
 
