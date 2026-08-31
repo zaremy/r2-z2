@@ -1701,6 +1701,22 @@ D-017 still wants an instrument there. But that is a weaker and different claim
 than the one filed, and it deserves the operator's re-confirmation rather than a
 quiet rewrite by the author of the mistake.
 
+### Amendment B — 2026-08-30: re-confirmed on the corrected premise
+
+The operator re-confirmed after reading Amendment A. **The decision holds.**
+
+So the record should be read as: we own idle **not** because a rival character
+was there, but because a launcher grid is the wrong resting face for a droid,
+and because D-017 already wants an instrument on that glass. The original
+justification was wrong on the facts; the ruling survives on a narrower and more
+honest one.
+
+This makes the burn-in question urgent rather than academic. Owning idle means a
+**static instrument panel lit for months** on an OLED, and nothing in this
+project has ever considered image retention. That is now the first design
+constraint on the resting frame, not an afterthought — see the gap register on
+#101 (E1).
+
 *Reversed by:* the study showing idle cannot be owned without forking the
 framework, at a cost the operator judges worse than living with the host's
 launcher — or by the operator deciding a neutral launcher at rest is acceptable,
