@@ -1588,3 +1588,78 @@ watching the voice stay silent until R2 answers.
 
 *Reversed by:* a decision that the voice is a companion rather than R2 himself,
 which would reopen D-019 first.
+
+---
+
+## D-021 — The idle state of the backpack screen is ours
+**2026-08-30** · *operator ruling* · **amends the scope of D-017**
+
+**Decision.** R2Z2 owns what the backpack screen shows **at rest**, not merely
+what it shows when summoned. The host OS's own resting face is replaced, not
+coexisted with.
+
+Operator ruling: *"we need to own idle."*
+
+### What forced it
+
+The board's factory firmware is **ESP-Brookesia**, and its idle state is an
+animated emoji face. OBSERVED in the factory image, which carries an
+`emoji_collection` of six expressions:
+
+```
+neutral.png · happy.png · sad.png · angry.png · surprised.png · sleepy.png
+```
+
+Brookesia calls this **AI Expression** (`brookesia_expression_emote`) —
+"expression switching and animation playback control". It is a first-class
+feature of the framework, aimed at exactly this class of device.
+
+### Why this is a character decision, not a layout one
+
+**Whatever owns idle owns the character.** The resting state is what the
+household sees by default, without asking for anything. If we ship as an app
+that must be launched, then the droid's backpack spends almost all of its life
+showing a *generic assistant's* emoji face — a second character, louder than
+ours because it is always there, and not ours.
+
+That is worse than either alternative. Two characters on one droid is a failure
+the whole character boundary exists to prevent.
+
+### What this amends in D-017
+
+D-017 ruled the panel is an instrument and never a face. That was written about
+**our own rendering**, and it did not anticipate a host OS drawing a face of its
+own on the same glass. The constraint is hereby scoped to **the device's
+screen**, not to our frames within it:
+
+> No face is rendered on the backpack screen. Not ours, and not the host's.
+
+The instrument stays the instrument. The resting frame is the STATUS face from
+the Panel Spec — state word, power, dome — not a character.
+
+### Consequences, and they bind
+
+- We **cannot ship as a passive app** on the vendor image. Owning idle requires
+  either suppressing AI Expression, replacing the shell, or booting our own
+  image.
+- The resting frame becomes the most-seen surface in the project. It should be
+  designed as the thing people glance at for months, not as a fallback.
+- The LED keeps its job unchanged (D-012): it carries what is worth noticing
+  from across the room. The idle screen is still the detail view, read up close.
+
+### What is UNKNOWN, and gates the how
+
+This ADR records the **requirement**, not a proven mechanism. None of the
+following is established:
+
+- Whether AI Expression can be suppressed or replaced without forking Brookesia.
+- Whether the OS reserves screen area (`navigation_bar`, `Recents` both appear
+  in the image) that would constrain the idle frame.
+- Whether the board can hold a BLE link to R2 at all under this OS — the factory
+  image ships **no BLE stack** (`esp_wifi` yes, `nimble`/`bluedroid` absent),
+  which is the coexistence risk D-005 named as its own reversal condition.
+
+An OS integration study answers these before any implementation is specced.
+
+*Reversed by:* the study showing idle cannot be owned without forking the
+framework, at a cost the operator judges worse than living with the host's face.
