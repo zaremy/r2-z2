@@ -1,0 +1,22 @@
+# Chip identification — 2026-08-31, verification run of the committed build.
+# Same board as the touch capture. Startup transcript, no touching.
+# 0xA7 (part-number register) reads 0xB7 -> CST820 per the vendor driver:
+#   examples/arduino-v2/libraries/SensorLib/src/touch/TouchDrvCST816.h:105-109
+#   in waveshareteam/ESP32-S3-Touch-AMOLED-1.8 @ ed7c6a5 (docs/research/source-map.md:13).
+#   That clone lives under reference/, which is gitignored by design, so the
+#   citation is pinned by SHA rather than committed.
+# Note line 1: our own detector names the variant CST816 while the part
+# reports CST820. Cosmetic, but this is where you can see it.
+
+[0;32mI (506) board_variant: Detected board variant: modified CO5300 + CST816[0m
+  board  : modified CO5300 + CST816
+  probe  : 0x15 ACKed
+  touch  : 0xB7 at 0x15 (CST820)
+  panel  : 368x448
+
+  >>> TOUCH THE SCREEN. Tap the corners, then drag across.
+
+[alive 2] stage=polling  chip=0xB7 (CST820)  no touch yet
+[alive 3] stage=polling  chip=0xB7 (CST820)  no touch yet
+[alive 4] stage=polling  chip=0xB7 (CST820)  no touch yet
+[alive 5] stage=polling  chip=0xB7 (CST820)  no touch yet

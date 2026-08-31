@@ -212,6 +212,28 @@ little entity is continuously present in the household.
   delta", which would have moved nothing and read as total resistance. Full
   evidence in **D-013**.
 
+- **You cannot read this board's serial output by opening the port, and the
+  failure looks exactly like dead hardware.** Its only port is the ESP32-S3
+  native USB-Serial/JTAG. A plain `pyserial` open **resets the chip into the ROM
+  downloader** (`rst:0x15 USB_UART_CHIP_RESET, boot:0x21 DOWNLOAD`), and
+  esptool's `Hard resetting via RTS pin` is a **no-op** — there is no RTS line to
+  pull. So the app is not running while you listen, and every read returns zero
+  bytes. Compounding it, the IDF default `CONFIG_ESP_CONSOLE_UART_DEFAULT` puts
+  stdout on UART0's pins (GPIO43/44), which go nowhere on this board; USB console
+  is **necessary but not sufficient**. What works:
+  `idf.py -p <port> flash` (this really does leave the app running), then attach
+  with `idf_monitor --no-reset` from a loop that reattaches when the port
+  reappears — never a bare `pyserial` open. A cold power-cycle also boots the
+  app; only the operator can do that.
+
+  **The lesson is bigger than the board: six consecutive "no output" readings
+  were taken before anyone checked the listener could produce a positive.** Each
+  silence was reported as a fact about the firmware. The thing that broke it was
+  flashing `13_display_colorbar` — an app whose success is visible *with your
+  eyes*, independent of serial — and getting the **identical** silence from
+  known-good code. Before believing any negative from an instrument, run the
+  known-good case through it. `#103` A3 was answered within minutes of doing so.
+
 ## Wire one path end-to-end before building the layer above it
 
 **Four PRs of the LED stack merged completely inert.** The state table, the
