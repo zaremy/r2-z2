@@ -1588,3 +1588,137 @@ watching the voice stay silent until R2 answers.
 
 *Reversed by:* a decision that the voice is a companion rather than R2 himself,
 which would reopen D-019 first.
+
+---
+
+## D-021 — The idle state of the backpack screen is ours
+**2026-08-30** · *operator ruling* · **amends the scope of D-017**
+
+**Decision.** R2Z2 owns what the backpack screen shows **at rest**, not merely
+what it shows when summoned. The host OS's own resting face is replaced, not
+coexisted with.
+
+Operator ruling: *"we need to own idle."*
+
+### What forced it
+
+The board's factory firmware is **ESP-Brookesia**, and its idle state is an
+animated emoji face. OBSERVED in the factory image, which carries an
+`emoji_collection` of six expressions:
+
+```
+neutral.png · happy.png · sad.png · angry.png · surprised.png · sleepy.png
+```
+
+Brookesia calls this **AI Expression** (`brookesia_expression_emote`) —
+"expression switching and animation playback control". It is a first-class
+feature of the framework, aimed at exactly this class of device.
+
+### Why this is a character decision, not a layout one
+
+**Whatever owns idle owns the character.** The resting state is what the
+household sees by default, without asking for anything. If we ship as an app
+that must be launched, then the droid's backpack spends almost all of its life
+showing a *generic assistant's* emoji face — a second character, louder than
+ours because it is always there, and not ours.
+
+That is worse than either alternative. Two characters on one droid is a failure
+the whole character boundary exists to prevent.
+
+### What this amends in D-017
+
+D-017 ruled the panel is an instrument and never a face. That was written about
+**our own rendering**, and it did not anticipate a host OS drawing a face of its
+own on the same glass. The constraint is hereby scoped to **the device's
+screen**, not to our frames within it:
+
+> No face is rendered on the backpack screen. Not ours, and not the host's.
+
+The instrument stays the instrument. The resting frame is the STATUS face from
+the Panel Spec — state word, power, dome — not a character.
+
+### Consequences, and they bind
+
+- We **cannot ship as a passive app** on the vendor image. Owning idle requires
+  either suppressing AI Expression, replacing the shell, or booting our own
+  image.
+- The resting frame becomes the most-seen surface in the project. It should be
+  designed as the thing people glance at for months, not as a fallback.
+- The LED keeps its job unchanged (D-012): it carries what is worth noticing
+  from across the room. The idle screen is still the detail view, read up close.
+
+### What is UNKNOWN, and gates the how
+
+This ADR records the **requirement**, not a proven mechanism. None of the
+following is established:
+
+- Whether AI Expression can be suppressed or replaced without forking Brookesia.
+- Whether the OS reserves screen area (`navigation_bar`, `Recents` both appear
+  in the image) that would constrain the idle frame.
+- Whether the board can hold a BLE link to R2 at all under this OS — the factory
+  image ships **no BLE stack** (`esp_wifi` yes, `nimble`/`bluedroid` absent),
+  which is the coexistence risk D-005 named as its own reversal condition.
+
+An OS integration study answers these before any implementation is specced.
+
+### Amendment A — 2026-08-30, same day: the premise above is MISATTRIBUTED
+
+Partition forensics run hours after this ADR was filed show the emoji face does
+**not** belong to ESP-Brookesia. The board carries **two complete applications**:
+
+```
+factory  @0x110000  esp-brookesia  v1      built 2026-05-27  IDF v5.5.4
+ota_0    @0x690000  xiaozhi        v2.2.6  built 2026-05-26  IDF v5.5.4
+```
+
+String counts across the two images, `brookesia` vs `xiaozhi`:
+
+```
+emoji_collection    0 / 1      WakeNet   0 / 8      afe_   0 / 50
+MultiNet            0 / 4      Opus      0 / 46
+```
+
+The face, and the entire speech stack with it, are **xiaozhi's**. And
+`otadata` is fully erased, so the bootloader falls through to `factory`:
+**the device boots the Brookesia launcher, and xiaozhi does not run by default.**
+
+**What that does to the argument.** This ADR justified owning idle by saying a
+rival *character* owns the screen at rest. That is not what happens. At rest the
+device shows a **launcher home screen** — neutral chrome, not a competing
+character. The decision may still be right, but the reason given for it above is
+not the reason.
+
+Two claims made elsewhere on the strength of the original premise are also wrong
+and are withdrawn here:
+
+- *"Building on Brookesia gives us an on-device wake word."* It does not. The
+  speech stack is xiaozhi's, in a different application.
+- *"The OS's idle state is an animated emoji face."* It is the launcher.
+
+**Status: the ruling stands as recorded, the rationale does not.** Owning idle is
+still defensible — a launcher grid is not what a droid's back should show, and
+D-017 still wants an instrument there. But that is a weaker and different claim
+than the one filed, and it deserves the operator's re-confirmation rather than a
+quiet rewrite by the author of the mistake.
+
+### Amendment B — 2026-08-30: re-confirmed on the corrected premise
+
+The operator re-confirmed after reading Amendment A. **The decision holds.**
+
+So the record should be read as: we own idle **not** because a rival character
+was there, but because a launcher grid is the wrong resting face for a droid,
+and because D-017 already wants an instrument on that glass. The original
+justification was wrong on the facts; the ruling survives on a narrower and more
+honest one.
+
+This makes the burn-in question urgent rather than academic. Owning idle means a
+**static instrument panel lit for months** on an OLED, and nothing in this
+project has ever considered image retention. That is now the first design
+constraint on the resting frame, not an afterthought — see the gap register on
+#101 (E1).
+
+*Reversed by:* the study showing idle cannot be owned without forking the
+framework, at a cost the operator judges worse than living with the host's
+launcher — or by the operator deciding a neutral launcher at rest is acceptable,
+which the corrected premise makes a much more reasonable position than it looked
+when this was filed.
