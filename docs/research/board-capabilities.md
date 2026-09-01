@@ -370,6 +370,50 @@ derive swipes from the coordinate stream, which is measured.
 > in `CLAUDE.md`; the short version is `idf.py flash`, then attach with
 > `idf_monitor --no-reset` in a reattach loop, never a bare `pyserial` open.
 
+### Tap targets are reliable at 87 px AND 38 px — OBSERVED 2026-08-31
+
+`firmware/tap_target_check`: two LVGL buttons on one screen, one finger, one
+session, counting `LV_EVENT_PRESSED` against `LV_EVENT_CLICKED`, so a tap whose
+press did not survive to a click shows up as a press with no matching click.
+**That is the only kind of loss this can see:** a physical tap that never became
+a `PRESSED` event at all — swallowed lower down, or arriving while the LVGL task
+is blocked — is invisible to these counters and would not appear as a discrepancy.
+
+| Target | Size | Presses | Clicks |
+|---|---|---|---|
+| The panel spec's row | **328 × 87 px** (44 pt @ 322 ppi, 7.0 mm tall) | 10 | **10** |
+| Vendor button's height | 328 × 38 px (3.0 mm tall) | 9 | **9** |
+
+**Across the 19 taps observed, not one click was lost at either height.** The
+panel's 87 px row delivered a click on every one of its 10 taps. The whole
+interaction model rests on that and it had never been tested on hardware.
+
+**A hypothesis died here, and it is worth recording which — and how far the
+refutation actually reaches.** This test was built to confirm that
+`00_bsp_quickstart`'s "Refresh SD" button — which showed its press style on
+every touch but fired its handler roughly one tap in six — was too small at
+38 px tall. **Height is exonerated: 38 px lost nothing across nine taps.**
+
+But the comparison is **not** a like-for-like reproduction of that button, and
+saying "size was never the cause" would overstate it. The vendor button is
+**132 × 38**; both targets here are **328** px wide, because the helper that
+builds them fixes the width and varies only the height. So what is refuted is
+*height*; **width is untested and remains a live variable.** Anyone re-opening
+this should add a 132 × 38 target rather than assume it behaves like the wide
+one. Scroll-cancel was already ruled out in source: that example clears
+`LV_OBJ_FLAG_SCROLLABLE` on both its card and its screen.
+
+**The vendor button's 1-in-6 is UNEXPLAINED**, with width and the item below
+both still open. Leading candidate, INFERRED and
+untested: its callback runs `example_probe_sdcard()`, which mounts, writes and
+unmounts the SD card **synchronously inside the LVGL event handler**, blocking
+the LVGL task for hundreds of milliseconds — taps arriving in that window are
+never processed. Whether or not that is the cause there, it implies a rule we
+want regardless: **never do blocking I/O in an LVGL callback.** Hand it to a task
+and keep the UI live.
+
+Raw capture: `firmware/tap_target_check/results/tap-target-2026-08-31.txt`.
+
 ## 1. Silicon and memory
 
 **OBSERVED** — from `examples/esp-idf/14_lvgl_demo_v9/sdkconfig.defaults`:

@@ -246,6 +246,15 @@ little entity is continuously present in the household.
   observation; if you find yourself writing "necessary but not sufficient",
   that is usually the tell that only one of the two was tested.
 
+- **Panel brightness is a CO5300 register that SURVIVES A REFLASH, so a black
+  screen is not a dead app.** `bsp_display_start()` does not set a level and
+  `bsp_display_backlight_on()` was not enough; the panel came up black on a
+  perfectly healthy app because the *previous* app's brightness slider had been
+  left low. Call `bsp_display_brightness_set()` explicitly at startup, the way
+  `00_bsp_quickstart` does — it is the display's equivalent of *assert the
+  status on connect, never inherit it*, and the same rule as the LED colour that
+  outlives the session that set it.
+
 ## Wire one path end-to-end before building the layer above it
 
 **Four PRs of the LED stack merged completely inert.** The state table, the
