@@ -57,3 +57,9 @@ testing/
 # Fetch/training instructions: mac-prototype/voice/README.md
 mac-prototype/voice/models/*.onnx
 mac-prototype/voice/models/*.tflite
+
+# Per-arm build dirs for firmware/coex_check
+build-arm*/
+
+# Wi-Fi credentials for the A1 coexistence arms — never commit
+firmware/**/wifi_creds.h

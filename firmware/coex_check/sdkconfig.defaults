@@ -1,0 +1,30 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# NimBLE central. No BLE stack has ever run on this board -- the factory image
+# ships none (esp_wifi present, nimble/bluedroid absent), so arm 1 is itself
+# the first proof that BLE works here at all.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+
+# The documented coexistence mitigations (#103 A1): controller and host pinned
+# to one core, Wi-Fi to the other, so the two stacks are not fighting for the
+# same CPU while they time-slice one radio.
+# NOTE the exact symbol names. An earlier draft used the plausible-looking
+# CONFIG_BT_NIMBLE_PINNED_TO_CORE_CHOICE_1 / CONFIG_ESP_WIFI_TASK_CORE_ID_0.
+# Neither exists, so both were silently ignored and everything landed on core 0
+# -- both stacks on one core, the precise opposite of the mitigation. Always
+# grep the generated sdkconfig afterwards; a defaults file that asks for a
+# symbol that does not exist fails SILENTLY.
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
+CONFIG_BT_CTRL_PINNED_TO_CORE_1=y
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y

@@ -414,6 +414,75 @@ and keep the UI live.
 
 Raw capture: `firmware/tap_target_check/results/tap-target-2026-08-31.txt`.
 
+### Wi-Fi and BLE coexist under our traffic — OBSERVED 2026-08-31/09-01
+
+Issue #103 A1, and the first time BLE has ever run on this board at all — the
+factory image ships no BLE stack (`esp_wifi` present, `nimble`/`bluedroid`
+absent), so arm 1 is itself the proof that NimBLE works here.
+
+`firmware/coex_check` is a NimBLE central holding a real link to the droid,
+sending R2's own keepalive every 3 s and counting the ATT response to each one.
+Three arms, ~63 minutes each:
+
+| Arm | Wi-Fi | Keepalives sent/acked | BLE disconnects | Worst gap |
+|---|---|---|---|---|
+| 1 | off | 1280 / 1279 | **0** | 3.0 s |
+| 2 | connected, idle | 1259 / 1257 | **0** | 3.1 s |
+| 3 | connected, 2.04 Mbit/s | 1239 / 1237 | **0** | 3.1 s |
+
+**Coexistence at full load cost 0.1 s of worst-case gap.** The limit was 10 s
+(three missed keepalives), fixed in #103 before any arm ran. Once the link was
+up, not one keepalive was missed in any arm: a 3.1 s worst gap against a 3 s
+period means every single one landed. (Arms 2 and 3 each log two failed
+keepalives from *before* the first `LINK UP`, while Wi-Fi association delayed the
+BLE connect. There is no maintained link to measure at that point, so scoring
+starts at `LINK UP`.) Re-derive with `results/verdict.py`; the committed logs are distilled
+from 821,072 bytes of raw capture to the lines the verdict uses, and reproduce
+it exactly. `verdict.py` refuses to rule on inputs that cannot support a
+ruling — INVALID for a missing, duplicated, unparseable or too-short arm, for
+summaries whose timestamps do not progress, for implausible keepalive counts,
+and for an arm 3 whose load windows do not span the run. **Each of those refusals
+is tested, not assumed:** the first version of the script printed PASS for three
+copies of `/dev/null`, and four later versions each passed a different piece of
+fabricated evidence. A verdict tool that cannot fail certifies nothing.
+
+**The keepalive is a WRITE, not the read #103 specified**, and the change was
+necessary for the experiment to mean anything. A read never resets R2's
+inactivity timer — `wake` (DID `0x13`/CID `0x0D`) is what does
+(`mac-prototype/r2_probe.py:675`) — so an hour of reads lets him fall asleep and
+drop the link, which the criteria would have scored as a disconnect and a FAIL,
+reversing D-005 on nothing but his own idle behaviour. The link cannot be
+established read-only in any case: R2 demands the anti-DoS magic write first
+(`r2_probe.py:440`). `wake` is idempotent, cannot move him, and is exactly what
+the Mac daemon already sends every 3 s, so this measures our real traffic rather
+than a proxy for it.
+
+**Battery was logged to keep a false FAIL out of the result.** Our keepalive
+holds R2 awake for the whole of each arm, so a sagging pack would drop the link
+and look identical to a coexistence failure. `DID 0x13 / CID 0x03` every 60 s:
+58 samples across arm 2, raw value `442 -> 442`, min 442 max 443, **drift zero**.
+The scale is UNKNOWN — neither our Python layer nor the ESP code decodes it — but
+the guard only needs a trend, and the trend is flat.
+
+**Mitigations applied**, per Espressif's guidance: BT controller and host pinned
+to core 1 (`CONFIG_BT_NIMBLE_PINNED_TO_CORE_1`, `CONFIG_BT_CTRL_PINNED_TO_CORE_1`),
+Wi-Fi to core 0 (`CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0`), software coexistence
+enabled, Wi-Fi modem sleep off so the station cannot nap out of contention.
+
+> [!warning]
+> **Check that a Kconfig symbol exists before believing it applied.** An earlier
+> build asked for `CONFIG_BT_NIMBLE_PINNED_TO_CORE_CHOICE_1` and
+> `CONFIG_ESP_WIFI_TASK_CORE_ID_0`. Neither symbol exists, both were ignored in
+> silence, and everything landed on core 0 — both stacks on one core, the exact
+> opposite of the mitigation, in a build that reported success. A
+> `sdkconfig.defaults` line naming a symbol that does not exist fails silently;
+> always grep the GENERATED `sdkconfig` for the resulting value.
+
+**Scope.** One house, one AP, one droid, one morning, and traffic shaped for
+time-slicing (a 3 s keepalive, not a continuous stream). It does not repeal the
+field report of 20%+ loss under coexistence; it says this hardware under this
+traffic here is fine.
+
 ## 1. Silicon and memory
 
 **OBSERVED** — from `examples/esp-idf/14_lvgl_demo_v9/sdkconfig.defaults`:

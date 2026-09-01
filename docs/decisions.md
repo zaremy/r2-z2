@@ -116,6 +116,42 @@ Confirm the revision before writing firmware against the BSP, and treat a V1
 result as a live reversal trigger for D-005 rather than a detail. Evidence and
 the per-variant table: [research/embedded-path.md](research/embedded-path.md).
 
+### Amendment B — 2026-09-01: coexistence was measured, and D-005 survives it
+
+The reversal condition has two halves. Amendment A settled the BSP half. This
+settles the other: **"Wi-Fi/BLE coexistence proving unworkable under IDF" is
+NOT met.** Issue #103 A1, three one-hour arms on the real board holding a real
+link to the real droid:
+
+| Arm | Wi-Fi | Duration | BLE disconnects | Worst keepalive gap |
+|---|---|---|---|---|
+| 1 | off | 64 min | **0** | 3.0 s |
+| 2 | connected, idle | 63 min | **0** | 3.1 s |
+| 3 | connected, 2.04 Mbit/s sustained | 62 min | **0** | 3.1 s |
+
+Pass/fail was fixed in #103 *before* any arm ran: PASS requires zero disconnects
+and no gap over 10 s (three missed keepalives). Nothing came near it — the worst
+gap in any arm is 3.1 s against a 3 s keepalive period, i.e. **once the link was
+up, not one keepalive was missed**, and coexistence at full load cost 0.1 s over
+the standalone baseline. (Arms 2 and 3 each log two failed keepalives from
+before the first `LINK UP`, while Wi-Fi association delayed the BLE connect;
+there is no link to measure then, so scoring starts there.) Verdict re-derivable from the committed evidence with
+`firmware/coex_check/results/verdict.py`.
+
+Two things this does NOT establish, worth stating so the result is not stretched:
+
+- **It is one radio environment, one AP, one droid, one morning.** The field
+  report that motivated the experiment (loss rising to 20%+, streaks of 100%)
+  was presumably measured somewhere with different congestion. A clean result
+  here does not repeal that report; it says our hardware under our traffic in
+  our house is fine.
+- **Our traffic is the friendly shape for time-slicing** — a 3 s keepalive plus
+  short bursts. A future design that streams audio continuously over BLE is
+  outside what was measured and would need its own arm.
+
+**D-005 HOLDS.** Both halves of its reversal condition have now been tested on
+hardware rather than argued about, and neither is met.
+
 ---
 
 ## D-006 — Drop the BLE peripheral role; ESP32 is central-only
