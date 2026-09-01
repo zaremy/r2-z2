@@ -459,72 +459,69 @@ Two things that settle open questions:
   unproven. Recorded this way because the opposite was first assumed, then
   over-corrected into an equally unearned claim.
 
-### `00_bsp_quickstart` does NOT boot — UNRESOLVED
+### `00_bsp_quickstart` DOES boot — RESOLVED 2026-08-31
 
-Same board, same toolchain, minutes apart. It builds clean and flashes clean
-(`Hash of data verified`), then emits **zero serial bytes — not even bootloader
-output**, where `13_display_colorbar` prints its full boot log on the same port.
-
-Eliminated:
-
-| Hypothesis | Test | Result |
-|---|---|---|
-| PSRAM XIP settings hang init | rebuilt with `CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n`, `CONFIG_SPIRAM_RODATA=n` | still silent |
-| Console routed elsewhere | diffed `CONFIG_ESP_CONSOLE_*` against the working example | **identical** |
-| Chip bricked / USB recovery wedged | `esptool.py chip_id` | answers normally |
-
-**Cause UNKNOWN.** Zero bytes *including no bootloader output* points earlier
-than the app — which also argues against the partition table, since the
-bootloader must run (and print) before it can parse one.
-
-There are **sixteen** settings in `00_bsp_quickstart/sdkconfig.defaults`
-absent from the colorbar's, and only two were tested:
+**It was running the whole time.** Re-tested unmodified, same board, same
+toolchain, using the attach procedure worked out during #103 A3. It builds,
+flashes, boots, and completes its entire init:
 
 ```
-CONFIG_SPIRAM=y                      CONFIG_COMPILER_OPTIMIZATION_PERF=y
-CONFIG_SPIRAM_MODE_OCT=y             CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-CONFIG_SPIRAM_SPEED_80M=y            CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y   CONFIG_FREERTOS_HZ=1000
-CONFIG_SPIRAM_RODATA=y               CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_LV_* (fonts, perf monitor, FAST_MEM_USE_IRAM)
+I (730) bsp_quickstart: Starting Waveshare ESP32-S3-Touch-AMOLED-1.8 BSP quick start
+I (738) LVGL: Starting LVGL task
+I (746) co5300: version: 2.1.0
+I (748) co5300_spi: LCD panel create success, version: 2.1.0
+I (954) ESP32-S3-Touch-AMOLED-1.8: Touch CST816S 0x15 found
+I (955) CST816S: IC id: 183
+I (1193) bsp_quickstart: Wrote /sdcard/bsp.txt
 ```
 
-**Note especially that PSRAM itself was never ruled out.** Only the two XIP
-settings were disabled; `CONFIG_SPIRAM=y` stayed on, and the colorbar ships no
-PSRAM settings at all. And three of the others —
-`CONFIG_FREERTOS_HZ=1000`, `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y`,
-`CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y` — are **exactly the trio this file
-already records at "Config that hangs this board", OBSERVED 2026-08-24, which
-cost a manual recovery.** They are the prime suspects, not the partition table.
+**There was never a hang.** The "zero serial bytes" that this section was built
+on is what a *healthy* app looks like on this board when the listener is wrong:
+opening the port with a plain `pyserial` open resets the chip into the ROM
+downloader, and esptool's `Hard resetting via RTS pin` is a no-op because a
+native-USB board has no RTS line to pull. The app is therefore not running while
+you listen. Six consecutive readings were taken that way during #103 before a
+known-good app (`13_display_colorbar`, confirmable by eye) was flashed as a
+positive control and produced the *identical* silence. Full procedure and the
+lesson: `CLAUDE.md`, "Hardware session facts".
 
-Not chased further because the display question was already answered.
+Consequences, and they are large:
 
-**Narrowed 2026-08-30, from the factory image.** The board's own factory firmware
-is **ESP-Brookesia on LVGL 9**, and it boots and renders — verified by restoring
-it and confirming the stock UI by eye. The image carries its own component paths:
+- **The BSP works on this board, end to end.** Display (CO5300 over QSPI), touch,
+  LVGL 9 and SD in one first-party example. The planned stack of D-005 —
+  ESP-IDF v5.5.x + the Waveshare BSP + LVGL 9 — is OBSERVED running, not
+  inferred. The panel firmware path is open.
+- **`CST816S: IC id: 183`** is `0xB7` in decimal — the same byte our own
+  `touch_check` reads from register `0xA7`, i.e. **CST820**. The BSP's CST816S
+  driver binds it and works, which is why the family naming never mattered in
+  practice.
+- **The three-setting trio was never implicated.** `CONFIG_FREERTOS_HZ=1000`,
+  `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` and `CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y`
+  ship in this example and it runs fine. Whatever the 2026-08-24 hang recorded at
+  "Config that hangs this board" was, this is not evidence for it — and that
+  section should not be read as corroborated by this one.
 
-```
-./components/brookesia_app_calculator/esp_brookesia_app_calculator.cpp
-./components/brookesia_core/gui/lvgl/esp_brookesia_lv_container.cpp
-esp_brookesia::systems::phone::RecentsScreen
-```
+What the original investigation got right is worth keeping, because it is the
+part that should have been trusted: the elimination table tested *"console routed
+elsewhere"* by diffing `CONFIG_ESP_CONSOLE_*` against the working example and
+found them **identical**. That result was correct. The error was reading a
+correct elimination as "so the cause is elsewhere in the config" when the
+remaining possibility was that **neither app was observable**, and one of them
+had merely been caught at a lucky moment.
 
-`strings` counts: 74 Brookesia, 160 LVGL, 8 SquareLine.
-
-That rules out a whole class of cause. **LVGL, PSRAM and the CO5300 display
-stack all work on this hardware** — a shipped LVGL 9 application runs on it
-daily. So `00_bsp_quickstart`'s silence is a defect of *that example* (its
-partition table, its BSP version pin, or its own init order), not of the board,
-the framework, or PSRAM. The three-setting trio above remains the prime suspect
-for a hang, but the failure is now known to be example-scoped.
-
-This also settles a question this file could not answer before: **LVGL on this
-board is OBSERVED, not inferred.**
+> [!warning]
+> **The general form, because it will recur.** Every hypothesis in the original
+> table was tested against the same broken instrument, so all of them returned
+> "still silent" and each elimination looked sound. A test battery run through an
+> uncalibrated instrument produces a confident, orderly, entirely wrong table.
+> Validate the instrument against a known positive *before* the battery, not
+> after it.
 
 > [!note]
 > `firmware/sdkconfig.no-psram-xip.defaults` exists to layer over a vendor
 > example without patching the gitignored clone:
 > `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;<that file>" build`.
+> It is no longer needed for this example, which runs unmodified.
 
 ### Factory image restored
 
