@@ -7,10 +7,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 # CLEARED -- turning it off changed nothing. It is off here because it is
 # genuinely unneeded, not as a workaround.)
 
-# REQUIRED for any output to reach the host. The IDF default is
-# CONFIG_ESP_CONSOLE_UART_DEFAULT, which puts stdout on UART0's physical pins
-# (GPIO43/44). This board's only port is the ESP32-S3's native USB-Serial/JTAG,
-# so a UART0 console writes into pads nothing is attached to and the app looks
-# dead. Necessary but NOT sufficient -- see firmware/touch_check/main/main.c for
-# the attach procedure, which is the other half.
+# NOT required -- kept only to make the routing explicit. An earlier version of
+# this comment claimed it was REQUIRED for output to reach the host, because the
+# IDF default (CONFIG_ESP_CONSOLE_UART_DEFAULT) puts stdout on UART0's physical
+# pins. That was wrong: the secondary USB console carries app output anyway.
+# Measured -- this app rebuilt with the line removed still printed every printf,
+# and 00_bsp_quickstart ships the plain default and logs fine over USB. The one
+# real cause of the silence is the ATTACH procedure; see main.c.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

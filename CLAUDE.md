@@ -218,9 +218,13 @@ little entity is continuously present in the household.
   downloader** (`rst:0x15 USB_UART_CHIP_RESET, boot:0x21 DOWNLOAD`), and
   esptool's `Hard resetting via RTS pin` is a **no-op** — there is no RTS line to
   pull. So the app is not running while you listen, and every read returns zero
-  bytes. Compounding it, the IDF default `CONFIG_ESP_CONSOLE_UART_DEFAULT` puts
-  stdout on UART0's pins (GPIO43/44), which go nowhere on this board; USB console
-  is **necessary but not sufficient**. What works:
+  bytes. **That is the whole cause.** An earlier version of this bullet also
+  blamed the console routing — that `CONFIG_ESP_CONSOLE_UART_DEFAULT` puts stdout
+  on UART0's pins and so needs `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`. **That was
+  wrong and is corrected here**: the secondary USB console carries app output
+  anyway. Measured both ways — `00_bsp_quickstart` ships the IDF default and logs
+  fine over USB, and `touch_check` rebuilt with the setting removed still printed
+  every `printf`. The setting is harmless, not required. What works:
   `idf.py -p <port> flash` (this really does leave the app running), then attach
   with `idf_monitor --no-reset` from a loop that reattaches when the port
   reappears — never a bare `pyserial` open. A cold power-cycle also boots the
@@ -233,6 +237,14 @@ little entity is continuously present in the household.
   eyes*, independent of serial — and getting the **identical** silence from
   known-good code. Before believing any negative from an instrument, run the
   known-good case through it. `#103` A3 was answered within minutes of doing so.
+
+  **And the tail of that same mistake: once the real cause was found, a second
+  plausible mechanism was written up beside it as though it were also a cause.**
+  The console-routing story above was reasoned from a config diff, never
+  isolated, and shipped into this file and a firmware comment before a two-minute
+  rebuild refuted it. A cause you have actually isolated explains the whole
+  observation; if you find yourself writing "necessary but not sufficient",
+  that is usually the tell that only one of the two was tested.
 
 ## Wire one path end-to-end before building the layer above it
 
