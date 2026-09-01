@@ -1,0 +1,10 @@
+/* Copy to wifi_creds.h and fill in. That file is gitignored and must never be
+ * committed -- CLAUDE.md, Safety: "Never commit API keys or Wi-Fi credentials."
+ * Only arms 2 and 3 need it; arm 1 does not start Wi-Fi at all.
+ */
+#pragma once
+#define COEX_WIFI_SSID "your-network"
+#define COEX_WIFI_PASS "your-password"
+/* Arm 3 pulls from this URL continuously to sustain >= 1 Mbps. Anything large
+ * on the LAN works; a router status page will NOT sustain the rate. */
+#define COEX_LOAD_URL  "http://192.168.1.10/big.bin"

@@ -1,0 +1,156 @@
+# A1 coexistence — arm3-wifi-loaded — 2026-08-31/09-01, ESP32-S3 backpack + Sphero R2-D2
+# Distilled from the full capture (  278470 bytes). The raw log is
+# mostly per-packet NimBLE debug; everything the verdict derives from is kept:
+# COEX state and summary lines, load-rate windows, battery responses, and the
+# capture's own ### gap stamps. results/verdict.py re-derives the verdict from
+# THIS file and yields the same answer as from the raw log.
+
+### capture start 08:50:03 elf=coex_check.elf
+I (406) coex_check: ==== coex_check: #103 A1, arm 3 ====
+I (426) COEX: arm=arm3-wifi-loaded  gap limit 10 s  (PASS needs 0 disconnects and no gap over it)
+I (576) COEX_WIFI: Wi-Fi STA starting (ssid hidden from logs), load=ON
+I (616) coex_check: running; a summary line prints every 60 s
+I (616) coex_check: NimBLE synced; scanning for R2
+I (2376) COEX_WIFI: Wi-Fi up, ip=192.168.1.147
+I (2376) COEX_WIFI: arm 3 load starting: http://192.168.1.43:8099/load.bin
+W (3616) COEX: keepalive seq=255 FAILED status=-1  (t+3.2s)
+I (4376) R2D2: Connected to R2-D2 (handle=1)
+W (6616) COEX: keepalive seq=255 FAILED status=-1  (t+6.2s)
+I (7876) R2D2: Phase 2 done (cmd=28)
+I (7876) COEX: LINK UP   (connect #1, t+7.5s)
+I (60616) COEX: [arm3-wifi-loaded] t+60s  link=UP  sent=20 ack=17 fail=2  disconnects=0  worst gap=3.1s
+I (61026) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 13 00 01 BB 11 D8 
+I (120626) COEX: [arm3-wifi-loaded] t+120s  link=UP  sent=40 ack=37 fail=2  disconnects=0  worst gap=3.1s
+I (121026) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 28 00 01 BA FD D8 
+I (180636) COEX: [arm3-wifi-loaded] t+180s  link=UP  sent=60 ack=57 fail=2  disconnects=0  worst gap=3.1s
+I (181126) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 3D 00 01 BA E8 D8 
+I (240646) COEX: [arm3-wifi-loaded] t+240s  link=UP  sent=80 ack=77 fail=2  disconnects=0  worst gap=3.1s
+I (243016) COEX_WIFI: load 2.23 Mbit/s
+I (300656) COEX: [arm3-wifi-loaded] t+300s  link=UP  sent=100 ack=97 fail=2  disconnects=0  worst gap=3.1s
+I (301126) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 67 00 01 BA BE D8 
+I (360666) COEX: [arm3-wifi-loaded] t+360s  link=UP  sent=119 ack=117 fail=2  disconnects=0  worst gap=3.1s
+I (361126) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 7C 00 01 BA A9 D8 
+I (420666) COEX: [arm3-wifi-loaded] t+420s  link=UP  sent=139 ack=137 fail=2  disconnects=0  worst gap=3.1s
+I (421076) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 91 00 01 BA 94 D8 
+I (479886) COEX_WIFI: load 2.27 Mbit/s
+I (480666) COEX: [arm3-wifi-loaded] t+480s  link=UP  sent=159 ack=157 fail=2  disconnects=0  worst gap=3.1s
+I (481176) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 A6 00 01 BA 7F D8 
+I (540666) COEX: [arm3-wifi-loaded] t+540s  link=UP  sent=179 ack=177 fail=2  disconnects=0  worst gap=3.1s
+I (541176) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 BB 00 01 BA 6A D8 
+I (600666) COEX: [arm3-wifi-loaded] t+600s  link=UP  sent=199 ack=197 fail=2  disconnects=0  worst gap=3.1s
+I (601176) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 D0 00 01 BA 55 D8 
+I (660666) COEX: [arm3-wifi-loaded] t+660s  link=UP  sent=219 ack=217 fail=2  disconnects=0  worst gap=3.1s
+I (661176) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 E5 00 01 BA 40 D8 
+I (719016) COEX_WIFI: load 2.25 Mbit/s
+I (720666) COEX: [arm3-wifi-loaded] t+720s  link=UP  sent=239 ack=237 fail=2  disconnects=0  worst gap=3.1s
+I (721176) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 FA 00 01 BA 2B D8 
+I (780666) COEX: [arm3-wifi-loaded] t+780s  link=UP  sent=259 ack=257 fail=2  disconnects=0  worst gap=3.1s
+I (781126) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 0F 00 01 BA 16 D8 
+I (840666) COEX: [arm3-wifi-loaded] t+840s  link=UP  sent=279 ack=277 fail=2  disconnects=0  worst gap=3.1s
+I (841226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 24 00 01 BA 01 D8 
+I (900666) COEX: [arm3-wifi-loaded] t+900s  link=UP  sent=299 ack=297 fail=2  disconnects=0  worst gap=3.1s
+I (901226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 39 00 01 BA EC D8 
+I (957286) COEX_WIFI: load 2.25 Mbit/s
+I (960666) COEX: [arm3-wifi-loaded] t+960s  link=UP  sent=319 ack=317 fail=2  disconnects=0  worst gap=3.1s
+I (961226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 4E 00 01 BA D7 D8 
+I (1020666) COEX: [arm3-wifi-loaded] t+1020s  link=UP  sent=339 ack=337 fail=2  disconnects=0  worst gap=3.1s
+I (1021226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 63 00 01 BA C2 D8 
+I (1080666) COEX: [arm3-wifi-loaded] t+1080s  link=UP  sent=359 ack=357 fail=2  disconnects=0  worst gap=3.1s
+I (1081226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 78 00 01 BA AD D8 
+I (1140666) COEX: [arm3-wifi-loaded] t+1140s  link=UP  sent=379 ack=377 fail=2  disconnects=0  worst gap=3.1s
+I (1200666) COEX: [arm3-wifi-loaded] t+1200s  link=UP  sent=399 ack=397 fail=2  disconnects=0  worst gap=3.1s
+I (1201276) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 A2 00 01 BA 83 D8 
+I (1208196) COEX_WIFI: load 2.14 Mbit/s
+I (1260666) COEX: [arm3-wifi-loaded] t+1260s  link=UP  sent=419 ack=417 fail=2  disconnects=0  worst gap=3.1s
+I (1261276) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 B7 00 01 BB 6D D8 
+I (1320666) COEX: [arm3-wifi-loaded] t+1320s  link=UP  sent=439 ack=437 fail=2  disconnects=0  worst gap=3.1s
+I (1321276) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 CC 00 01 BA 59 D8 
+I (1380666) COEX: [arm3-wifi-loaded] t+1380s  link=UP  sent=459 ack=457 fail=2  disconnects=0  worst gap=3.1s
+I (1381276) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 E1 00 01 BA 44 D8 
+I (1440666) COEX: [arm3-wifi-loaded] t+1440s  link=UP  sent=479 ack=477 fail=2  disconnects=0  worst gap=3.1s
+I (1441226) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 F6 00 01 BA 2F D8 
+I (1477726) COEX_WIFI: load 1.99 Mbit/s
+I (1500666) COEX: [arm3-wifi-loaded] t+1500s  link=UP  sent=499 ack=497 fail=2  disconnects=0  worst gap=3.1s
+I (1501136) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 0B 00 01 BA 1A D8 
+I (1560666) COEX: [arm3-wifi-loaded] t+1560s  link=UP  sent=519 ack=517 fail=2  disconnects=0  worst gap=3.1s
+I (1561326) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 20 00 01 BA 05 D8 
+I (1620666) COEX: [arm3-wifi-loaded] t+1620s  link=UP  sent=539 ack=537 fail=2  disconnects=0  worst gap=3.1s
+I (1621326) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 35 00 01 BA F0 D8 
+I (1680666) COEX: [arm3-wifi-loaded] t+1680s  link=UP  sent=559 ack=557 fail=2  disconnects=0  worst gap=3.1s
+I (1681326) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 4A 00 01 BA DB D8 
+I (1740666) COEX: [arm3-wifi-loaded] t+1740s  link=UP  sent=579 ack=577 fail=2  disconnects=0  worst gap=3.1s
+I (1741326) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 5F 00 01 BA C6 D8 
+I (1795066) COEX_WIFI: load 1.69 Mbit/s
+I (1800666) COEX: [arm3-wifi-loaded] t+1800s  link=UP  sent=599 ack=597 fail=2  disconnects=0  worst gap=3.1s
+I (1801276) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 74 00 01 BA B1 D8 
+I (1860666) COEX: [arm3-wifi-loaded] t+1860s  link=UP  sent=619 ack=617 fail=2  disconnects=0  worst gap=3.1s
+I (1861186) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 89 00 01 BA 9C D8 
+I (1920666) COEX: [arm3-wifi-loaded] t+1920s  link=UP  sent=639 ack=637 fail=2  disconnects=0  worst gap=3.1s
+I (1921376) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 9E 00 01 BA 87 D8 
+I (1980666) COEX: [arm3-wifi-loaded] t+1980s  link=UP  sent=659 ack=657 fail=2  disconnects=0  worst gap=3.1s
+I (1981376) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 B3 00 01 BA 72 D8 
+I (2040666) COEX: [arm3-wifi-loaded] t+2040s  link=UP  sent=679 ack=677 fail=2  disconnects=0  worst gap=3.1s
+I (2041376) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 C8 00 01 BA 5D D8 
+I (2091016) COEX_WIFI: load 1.81 Mbit/s
+I (2100666) COEX: [arm3-wifi-loaded] t+2100s  link=UP  sent=699 ack=697 fail=2  disconnects=0  worst gap=3.1s
+I (2101376) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 DD 00 01 BA 48 D8 
+I (2160666) COEX: [arm3-wifi-loaded] t+2160s  link=UP  sent=719 ack=717 fail=2  disconnects=0  worst gap=3.1s
+I (2161326) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 F2 00 01 BA 33 D8 
+I (2220666) COEX: [arm3-wifi-loaded] t+2220s  link=UP  sent=739 ack=737 fail=2  disconnects=0  worst gap=3.1s
+I (2280666) COEX: [arm3-wifi-loaded] t+2280s  link=UP  sent=759 ack=757 fail=2  disconnects=0  worst gap=3.1s
+I (2281426) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 1C 00 01 BA 09 D8 
+I (2340666) COEX: [arm3-wifi-loaded] t+2340s  link=UP  sent=779 ack=777 fail=2  disconnects=0  worst gap=3.1s
+I (2341426) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 31 00 01 BA F4 D8 
+I (2394346) COEX_WIFI: load 1.77 Mbit/s
+I (2400666) COEX: [arm3-wifi-loaded] t+2400s  link=UP  sent=799 ack=797 fail=2  disconnects=0  worst gap=3.1s
+I (2401426) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 46 00 01 BA DF D8 
+I (2460666) COEX: [arm3-wifi-loaded] t+2460s  link=UP  sent=819 ack=817 fail=2  disconnects=0  worst gap=3.1s
+I (2461426) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 5B 00 01 BA CA D8 
+I (2520666) COEX: [arm3-wifi-loaded] t+2520s  link=UP  sent=839 ack=837 fail=2  disconnects=0  worst gap=3.1s
+I (2521486) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 70 00 01 BA B5 D8 
+I (2580666) COEX: [arm3-wifi-loaded] t+2580s  link=UP  sent=859 ack=857 fail=2  disconnects=0  worst gap=3.1s
+I (2581476) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 85 00 01 BA A0 D8 
+I (2640666) COEX: [arm3-wifi-loaded] t+2640s  link=UP  sent=879 ack=877 fail=2  disconnects=0  worst gap=3.1s
+I (2641476) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 9A 00 01 BA 8B D8 
+I (2700666) COEX: [arm3-wifi-loaded] t+2700s  link=UP  sent=899 ack=897 fail=2  disconnects=0  worst gap=3.1s
+I (2701476) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 AF 00 01 BA 76 D8 
+I (2711136) COEX_WIFI: load 1.69 Mbit/s
+I (2760666) COEX: [arm3-wifi-loaded] t+2760s  link=UP  sent=919 ack=917 fail=2  disconnects=0  worst gap=3.1s
+I (2761476) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 C4 00 01 BA 61 D8 
+I (2820666) COEX: [arm3-wifi-loaded] t+2820s  link=UP  sent=939 ack=937 fail=2  disconnects=0  worst gap=3.1s
+I (2821576) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 D9 00 01 BB 4B D8 
+I (2880666) COEX: [arm3-wifi-loaded] t+2880s  link=UP  sent=959 ack=957 fail=2  disconnects=0  worst gap=3.1s
+I (2881536) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 EE 00 01 BA 37 D8 
+I (2940666) COEX: [arm3-wifi-loaded] t+2940s  link=UP  sent=979 ack=977 fail=2  disconnects=0  worst gap=3.1s
+I (2941526) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 03 00 01 BA 22 D8 
+I (2954486) COEX_WIFI: load 2.21 Mbit/s
+I (3000666) COEX: [arm3-wifi-loaded] t+3000s  link=UP  sent=999 ack=997 fail=2  disconnects=0  worst gap=3.1s
+I (3001526) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 18 00 01 BA 0D D8 
+I (3060666) COEX: [arm3-wifi-loaded] t+3060s  link=UP  sent=1019 ack=1017 fail=2  disconnects=0  worst gap=3.1s
+I (3061526) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 2D 00 01 BA F8 D8 
+I (3120666) COEX: [arm3-wifi-loaded] t+3120s  link=UP  sent=1039 ack=1037 fail=2  disconnects=0  worst gap=3.1s
+I (3121626) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 42 00 01 BA E3 D8 
+I (3180666) COEX: [arm3-wifi-loaded] t+3180s  link=UP  sent=1059 ack=1057 fail=2  disconnects=0  worst gap=3.1s
+I (3181626) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 57 00 01 BA CE D8 
+I (3229236) COEX_WIFI: load 1.95 Mbit/s
+I (3240666) COEX: [arm3-wifi-loaded] t+3240s  link=UP  sent=1079 ack=1077 fail=2  disconnects=0  worst gap=3.1s
+I (3241586) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 6C 00 01 BA B9 D8 
+I (3300666) COEX: [arm3-wifi-loaded] t+3300s  link=UP  sent=1099 ack=1097 fail=2  disconnects=0  worst gap=3.1s
+I (3301576) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 81 00 01 BA A4 D8 
+I (3360666) COEX: [arm3-wifi-loaded] t+3360s  link=UP  sent=1119 ack=1117 fail=2  disconnects=0  worst gap=3.1s
+I (3361576) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 96 00 01 BA 8F D8 
+I (3420666) COEX: [arm3-wifi-loaded] t+3420s  link=UP  sent=1139 ack=1137 fail=2  disconnects=0  worst gap=3.1s
+I (3480666) COEX: [arm3-wifi-loaded] t+3480s  link=UP  sent=1159 ack=1157 fail=2  disconnects=0  worst gap=3.1s
+I (3481676) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 C0 00 01 BA 65 D8 
+I (3487066) COEX_WIFI: load 2.08 Mbit/s
+I (3540666) COEX: [arm3-wifi-loaded] t+3540s  link=UP  sent=1179 ack=1177 fail=2  disconnects=0  worst gap=3.1s
+I (3541676) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 D5 00 01 BA 50 D8 
+I (3600666) COEX: [arm3-wifi-loaded] t+3600s  link=UP  sent=1199 ack=1197 fail=2  disconnects=0  worst gap=3.1s
+I (3601626) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 EA 00 01 BA 3B D8 
+I (3660666) COEX: [arm3-wifi-loaded] t+3660s  link=UP  sent=1219 ack=1217 fail=2  disconnects=0  worst gap=3.1s
+I (3661626) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 FF 00 01 BA 26 D8 
+I (3720666) COEX: [arm3-wifi-loaded] t+3720s  link=UP  sent=1239 ack=1237 fail=2  disconnects=0  worst gap=3.1s
+I (3721726) R2D2: R2D2 rx (10 bytes): 8D 09 13 03 14 00 01 BA 11 D8 
+I (3735316) COEX_WIFI: load 2.16 Mbit/s
+### monitor exited 09:53:03 (data_seen=True) -- reattaching
+### capture end 09:53:03

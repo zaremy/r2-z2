@@ -1,0 +1,77 @@
+# A1 coexistence — arm1-ble-only — 2026-08-31/09-01, ESP32-S3 backpack + Sphero R2-D2
+# Distilled from the full capture (  265089 bytes). The raw log is
+# mostly per-packet NimBLE debug; everything the verdict derives from is kept:
+# COEX state and summary lines, load-rate windows, battery responses, and the
+# capture's own ### gap stamps. results/verdict.py re-derives the verdict from
+# THIS file and yields the same answer as from the raw log.
+
+### capture start 23:54:03 elf=coex_check.elf
+I (399) coex_check: running; a summary line prints every 60 s
+I (399) coex_check: NimBLE synced; scanning for R2
+I (989) R2D2: Connected to R2-D2 (handle=1)
+I (2889) R2D2: Phase 2 done (cmd=28)
+I (2889) COEX: LINK UP   (connect #1, t+2.6s)
+I (60399) COEX: [arm1-ble-only] t+60s  link=UP  sent=20 ack=19 fail=0  disconnects=0  worst gap=3.0s
+I (120399) COEX: [arm1-ble-only] t+120s  link=UP  sent=40 ack=39 fail=0  disconnects=0  worst gap=3.0s
+I (180399) COEX: [arm1-ble-only] t+180s  link=UP  sent=60 ack=59 fail=0  disconnects=0  worst gap=3.0s
+I (240399) COEX: [arm1-ble-only] t+240s  link=UP  sent=80 ack=79 fail=0  disconnects=0  worst gap=3.0s
+I (300399) COEX: [arm1-ble-only] t+300s  link=UP  sent=100 ack=99 fail=0  disconnects=0  worst gap=3.0s
+I (360399) COEX: [arm1-ble-only] t+360s  link=UP  sent=120 ack=119 fail=0  disconnects=0  worst gap=3.0s
+I (420399) COEX: [arm1-ble-only] t+420s  link=UP  sent=140 ack=139 fail=0  disconnects=0  worst gap=3.0s
+I (480399) COEX: [arm1-ble-only] t+480s  link=UP  sent=160 ack=159 fail=0  disconnects=0  worst gap=3.0s
+I (540399) COEX: [arm1-ble-only] t+540s  link=UP  sent=180 ack=179 fail=0  disconnects=0  worst gap=3.0s
+I (600399) COEX: [arm1-ble-only] t+600s  link=UP  sent=200 ack=199 fail=0  disconnects=0  worst gap=3.0s
+I (660399) COEX: [arm1-ble-only] t+660s  link=UP  sent=220 ack=219 fail=0  disconnects=0  worst gap=3.0s
+I (720399) COEX: [arm1-ble-only] t+720s  link=UP  sent=240 ack=239 fail=0  disconnects=0  worst gap=3.0s
+I (780399) COEX: [arm1-ble-only] t+780s  link=UP  sent=260 ack=259 fail=0  disconnects=0  worst gap=3.0s
+I (840399) COEX: [arm1-ble-only] t+840s  link=UP  sent=280 ack=279 fail=0  disconnects=0  worst gap=3.0s
+I (900399) COEX: [arm1-ble-only] t+900s  link=UP  sent=300 ack=299 fail=0  disconnects=0  worst gap=3.0s
+I (960399) COEX: [arm1-ble-only] t+960s  link=UP  sent=320 ack=319 fail=0  disconnects=0  worst gap=3.0s
+I (1020399) COEX: [arm1-ble-only] t+1020s  link=UP  sent=340 ack=339 fail=0  disconnects=0  worst gap=3.0s
+I (1080399) COEX: [arm1-ble-only] t+1080s  link=UP  sent=360 ack=359 fail=0  disconnects=0  worst gap=3.0s
+I (1140399) COEX: [arm1-ble-only] t+1140s  link=UP  sent=380 ack=379 fail=0  disconnects=0  worst gap=3.0s
+I (1200399) COEX: [arm1-ble-only] t+1200s  link=UP  sent=400 ack=399 fail=0  disconnects=0  worst gap=3.0s
+I (1260399) COEX: [arm1-ble-only] t+1260s  link=UP  sent=420 ack=419 fail=0  disconnects=0  worst gap=3.0s
+I (1320399) COEX: [arm1-ble-only] t+1320s  link=UP  sent=440 ack=439 fail=0  disconnects=0  worst gap=3.0s
+I (1380399) COEX: [arm1-ble-only] t+1380s  link=UP  sent=460 ack=459 fail=0  disconnects=0  worst gap=3.0s
+I (1440399) COEX: [arm1-ble-only] t+1440s  link=UP  sent=480 ack=479 fail=0  disconnects=0  worst gap=3.0s
+I (1500399) COEX: [arm1-ble-only] t+1500s  link=UP  sent=500 ack=499 fail=0  disconnects=0  worst gap=3.0s
+I (1560399) COEX: [arm1-ble-only] t+1560s  link=UP  sent=520 ack=519 fail=0  disconnects=0  worst gap=3.0s
+I (1620399) COEX: [arm1-ble-only] t+1620s  link=UP  sent=540 ack=539 fail=0  disconnects=0  worst gap=3.0s
+I (1680399) COEX: [arm1-ble-only] t+1680s  link=UP  sent=560 ack=559 fail=0  disconnects=0  worst gap=3.0s
+I (1740399) COEX: [arm1-ble-only] t+1740s  link=UP  sent=580 ack=579 fail=0  disconnects=0  worst gap=3.0s
+I (1800399) COEX: [arm1-ble-only] t+1800s  link=UP  sent=600 ack=599 fail=0  disconnects=0  worst gap=3.0s
+I (1860399) COEX: [arm1-ble-only] t+1860s  link=UP  sent=620 ack=619 fail=0  disconnects=0  worst gap=3.0s
+I (1920399) COEX: [arm1-ble-only] t+1920s  link=UP  sent=640 ack=639 fail=0  disconnects=0  worst gap=3.0s
+I (1980399) COEX: [arm1-ble-only] t+1980s  link=UP  sent=660 ack=659 fail=0  disconnects=0  worst gap=3.0s
+I (2040399) COEX: [arm1-ble-only] t+2040s  link=UP  sent=680 ack=679 fail=0  disconnects=0  worst gap=3.0s
+I (2100399) COEX: [arm1-ble-only] t+2100s  link=UP  sent=700 ack=699 fail=0  disconnects=0  worst gap=3.0s
+I (2160399) COEX: [arm1-ble-only] t+2160s  link=UP  sent=720 ack=719 fail=0  disconnects=0  worst gap=3.0s
+I (2220399) COEX: [arm1-ble-only] t+2220s  link=UP  sent=740 ack=739 fail=0  disconnects=0  worst gap=3.0s
+I (2280399) COEX: [arm1-ble-only] t+2280s  link=UP  sent=760 ack=759 fail=0  disconnects=0  worst gap=3.0s
+I (2340399) COEX: [arm1-ble-only] t+2340s  link=UP  sent=780 ack=779 fail=0  disconnects=0  worst gap=3.0s
+I (2400399) COEX: [arm1-ble-only] t+2400s  link=UP  sent=800 ack=799 fail=0  disconnects=0  worst gap=3.0s
+I (2460399) COEX: [arm1-ble-only] t+2460s  link=UP  sent=820 ack=819 fail=0  disconnects=0  worst gap=3.0s
+I (2520399) COEX: [arm1-ble-only] t+2520s  link=UP  sent=840 ack=839 fail=0  disconnects=0  worst gap=3.0s
+I (2580399) COEX: [arm1-ble-only] t+2580s  link=UP  sent=860 ack=859 fail=0  disconnects=0  worst gap=3.0s
+I (2640399) COEX: [arm1-ble-only] t+2640s  link=UP  sent=880 ack=879 fail=0  disconnects=0  worst gap=3.0s
+I (2700399) COEX: [arm1-ble-only] t+2700s  link=UP  sent=900 ack=899 fail=0  disconnects=0  worst gap=3.0s
+I (2760399) COEX: [arm1-ble-only] t+2760s  link=UP  sent=920 ack=919 fail=0  disconnects=0  worst gap=3.0s
+I (2820399) COEX: [arm1-ble-only] t+2820s  link=UP  sent=940 ack=939 fail=0  disconnects=0  worst gap=3.0s
+I (2880399) COEX: [arm1-ble-only] t+2880s  link=UP  sent=960 ack=959 fail=0  disconnects=0  worst gap=3.0s
+I (2940399) COEX: [arm1-ble-only] t+2940s  link=UP  sent=980 ack=979 fail=0  disconnects=0  worst gap=3.0s
+I (3000399) COEX: [arm1-ble-only] t+3000s  link=UP  sent=1000 ack=999 fail=0  disconnects=0  worst gap=3.0s
+I (3060399) COEX: [arm1-ble-only] t+3060s  link=UP  sent=1020 ack=1019 fail=0  disconnects=0  worst gap=3.0s
+I (3120399) COEX: [arm1-ble-only] t+3120s  link=UP  sent=1040 ack=1039 fail=0  disconnects=0  worst gap=3.0s
+I (3180399) COEX: [arm1-ble-only] t+3180s  link=UP  sent=1060 ack=1059 fail=0  disconnects=0  worst gap=3.0s
+I (3240399) COEX: [arm1-ble-only] t+3240s  link=UP  sent=1080 ack=1079 fail=0  disconnects=0  worst gap=3.0s
+I (3300399) COEX: [arm1-ble-only] t+3300s  link=UP  sent=1100 ack=1099 fail=0  disconnects=0  worst gap=3.0s
+I (3360399) COEX: [arm1-ble-only] t+3360s  link=UP  sent=1120 ack=1119 fail=0  disconnects=0  worst gap=3.0s
+I (3420399) COEX: [arm1-ble-only] t+3420s  link=UP  sent=1140 ack=1139 fail=0  disconnects=0  worst gap=3.0s
+I (3480399) COEX: [arm1-ble-only] t+3480s  link=UP  sent=1160 ack=1159 fail=0  disconnects=0  worst gap=3.0s
+I (3540399) COEX: [arm1-ble-only] t+3540s  link=UP  sent=1180 ack=1179 fail=0  disconnects=0  worst gap=3.0s
+I (3600399) COEX: [arm1-ble-only] t+3600s  link=UP  sent=1200 ack=1199 fail=0  disconnects=0  worst gap=3.0s
+I (3660399) COEX: [arm1-ble-only] t+3660s  link=UP  sent=1220 ack=1219 fail=0  disconnects=0  worst gap=3.0s
+I (3720399) COEX: [arm1-ble-only] t+3720s  link=UP  sent=1240 ack=1239 fail=0  disconnects=0  worst gap=3.0s
+I (3780399) COEX: [arm1-ble-only] t+3780s  link=UP  sent=1260 ack=1259 fail=0  disconnects=0  worst gap=3.0s
+I (3840399) COEX: [arm1-ble-only] t+3840s  link=UP  sent=1280 ack=1279 fail=0  disconnects=0  worst gap=3.0s
