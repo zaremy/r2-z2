@@ -1,0 +1,13 @@
+# Layered over a vendor example's sdkconfig.defaults to override settings
+# without patching the gitignored reference clone:
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;<this file>" build
+#
+# These two were DISABLED AS A TEST and the test came back NEGATIVE:
+# 00_bsp_quickstart was still silent with both off. They are NOT the known
+# hang. The settings actually recorded as hanging this board are
+# CONFIG_FREERTOS_HZ=1000, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y and
+# CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y -- see "Config that hangs this board"
+# in docs/research/board-capabilities.md (OBSERVED 2026-08-24) and
+# firmware/README.md. Kept only as a reusable override example.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n

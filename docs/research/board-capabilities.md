@@ -502,6 +502,131 @@ confirmation of the whole capability surface — run it first.
 first-party code, before we write a line of our own driver. The brief's
 instinct to reuse rather than rewrite is well supported by the evidence.
 
+## 3b. S4 display bring-up — OBSERVED 2026-08-29
+
+**The panel renders. First pixels in this project.**
+
+`reference/.../examples/esp-idf/13_display_colorbar`, unmodified, built against
+ESP-IDF **v5.5.5** and flashed to the board. Serial reported the full path and
+the **operator confirmed colour bars on the glass by eye** — the claim is
+OBSERVED on real hardware, not inferred from a returning draw call.
+
+```
+display_colorbar: Detected V2 board revision
+display_colorbar: Initialize CO5300 over QSPI
+co5300_spi: LCD panel create success, version: 2.1.0
+display_colorbar: Drawing RGB565 color bars
+```
+
+Two things that settle open questions:
+
+- **V2 agreed again — by a second independent IMPLEMENTATION, not a third
+  instrument.** The example printed "Detected V2 board revision" from its own
+  `detect_v2_board()`. That is the *same* `0x15` heuristic `board_variant.c`
+  and the bus map already use, re-implemented, which is what
+  `board-revision.md:70` already calls it. Agreement between three readings of
+  one heuristic is not three instruments, and calling it that would inflate
+  the evidence.
+- **The panel lit without THIS app touching the expander or PMU — and that is
+  NOT the same as "no setup is needed". INFERRED, with a known confound.**
+  What is OBSERVED: `13_display_colorbar` never writes `0x20` or `0x34`, passes
+  `reset_gpio_num = GPIO_NUM_NC`, and the bars appeared. The Waveshare BSP file
+  likewise only creates the TCA9554 handle and never calls
+  `esp_io_expander_set_level`.
+
+  **The confound:** `board_variant.c:56-63` — run by `board_check` in an
+  earlier session — *does* drive the expander, writing `IO_EXPANDER_OUTPUT_MASK`
+  and so asserting `LCD_RST` and `DSI_PWR_EN`. Every reset since has been a
+  *chip* reset (`rst:0x15 USB_UART_CHIP_RESET`), never a PMU or board power
+  cycle, which is the same caveat this file already records for the AXP2101
+  rails above. The expander's output latches plausibly survived, so the
+  colorbar may have inherited an already-enabled panel rather than proving it
+  needs nothing.
+
+  **The test nobody has run: power the board down fully, then flash and boot
+  ONLY the colorbar.** Until then, "the minimal path lights a cold board" is
+  unproven. Recorded this way because the opposite was first assumed, then
+  over-corrected into an equally unearned claim.
+
+### `00_bsp_quickstart` DOES boot — RESOLVED 2026-08-31
+
+**It was running the whole time.** Re-tested unmodified, same board, same
+toolchain, using the attach procedure worked out during #103 A3. It builds,
+flashes, boots, and completes its entire init:
+
+```
+I (730) bsp_quickstart: Starting Waveshare ESP32-S3-Touch-AMOLED-1.8 BSP quick start
+I (738) LVGL: Starting LVGL task
+I (746) co5300: version: 2.1.0
+I (748) co5300_spi: LCD panel create success, version: 2.1.0
+I (954) ESP32-S3-Touch-AMOLED-1.8: Touch CST816S 0x15 found
+I (955) CST816S: IC id: 183
+I (1193) bsp_quickstart: Wrote /sdcard/bsp.txt
+```
+
+**There was never a hang.** The "zero serial bytes" that this section was built
+on is what a *healthy* app looks like on this board when the listener is wrong:
+opening the port with a plain `pyserial` open resets the chip into the ROM
+downloader, and esptool's `Hard resetting via RTS pin` is a no-op because a
+native-USB board has no RTS line to pull. The app is therefore not running while
+you listen. Six consecutive readings were taken that way during #103 before a
+known-good app (`13_display_colorbar`, confirmable by eye) was flashed as a
+positive control and produced the *identical* silence. Full procedure and the
+lesson: `CLAUDE.md`, "Hardware session facts".
+
+Consequences, and they are large:
+
+- **The BSP works on this board, end to end.** Display (CO5300 over QSPI), touch,
+  LVGL 9 and SD in one first-party example. The planned stack of D-005 —
+  ESP-IDF v5.5.x + the Waveshare BSP + LVGL 9 — is OBSERVED running, not
+  inferred. The panel firmware path is open.
+- **`CST816S: IC id: 183`** is `0xB7` in decimal — the same byte our own
+  `touch_check` reads from register `0xA7`, i.e. **CST820**. The BSP's CST816S
+  driver binds it and works, which is why the family naming never mattered in
+  practice.
+- **The three-setting trio was never implicated.** `CONFIG_FREERTOS_HZ=1000`,
+  `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` and `CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y`
+  ship in this example and it runs fine. Whatever the 2026-08-24 hang recorded at
+  "Config that hangs this board" was, this is not evidence for it — and that
+  section should not be read as corroborated by this one.
+
+What the original investigation got right is worth keeping, because it is the
+part that should have been trusted: the elimination table tested *"console routed
+elsewhere"* by diffing `CONFIG_ESP_CONSOLE_*` against the working example and
+found them **identical**. That result was correct. The error was reading a
+correct elimination as "so the cause is elsewhere in the config" when the
+remaining possibility was that **neither app was observable**, and one of them
+had merely been caught at a lucky moment.
+
+> [!warning]
+> **The general form, because it will recur.** Every hypothesis in the original
+> table was tested against the same broken instrument, so all of them returned
+> "still silent" and each elimination looked sound. A test battery run through an
+> uncalibrated instrument produces a confident, orderly, entirely wrong table.
+> Validate the instrument against a known positive *before* the battery, not
+> after it.
+
+> [!note]
+> `firmware/sdkconfig.no-psram-xip.defaults` exists to layer over a vendor
+> example without patching the gitignored clone:
+> `idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;<that file>" build`.
+> It is no longer needed for this example, which runs unmodified.
+
+### Factory image restored
+
+`~/esp/r2z2-board-backups/factory-backup.bin`, 16,777,216 bytes.
+
+Precisely what was checked, because "verified" without a named surface is worth
+nothing: the file's sha256 was computed **before** writing and matched its
+`.sha256` sidecar; `esptool` then reported `Hash of data verified`, which is its
+own check of the data it transferred. **The flash was never read back and
+re-hashed afterwards.** An earlier draft of this section claimed the sha was
+"verified before *and* after writing". It was not.
+
+What IS proven, and by the strongest available instrument: the operator
+confirmed the stock Xiaozhi UI came back on screen. The backup restores to a
+working system.
+
 ## 4. Gaps and cautions
 
 - **No schematic in the repo.** Vendor README says so, and adds that CI
