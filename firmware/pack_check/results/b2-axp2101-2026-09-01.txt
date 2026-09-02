@@ -1,0 +1,85 @@
+# B2 / #93 — is there a cell on the backpack board? — 2026-09-01
+#
+# firmware/pack_check reading the AXP2101 at 0x34. This is the AUTHORITATIVE
+# run: an earlier one did not enable battery DETECTION (BAT_DET_CTRL 0x68
+# bit 0) before trusting STATUS1 bit 3, and could therefore have read a
+# present cell as absent. It also left every register read unchecked, so a
+# failed read would have printed a confident 'no battery'. Both are fixed
+# here, and the log now carries the proof rather than the assertion:
+#   BAT_DET=0x01            detection verified enabled, read back
+#   (was 0x01 at boot)      and it was ALREADY on by default, which is why
+#                           the earlier run reached the same answer
+#   aborted cycles: 0       no read failed; every verdict rests on real data
+#
+# Board USB-powered from the Mac, NOT mounted on R2.
+
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x01AB
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 427 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x3FF5
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 8181 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x0012
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 18 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x01AB
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 427 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x3FF7
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 8183 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x0042
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 66 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x078E
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 1934 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x0000
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 0 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x00AB
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 171 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered
+  STATUS1=0x20 STATUS2=0x15 BAT_DET=0x01 (was 0x01 at boot)  raw ADC=0x3FF5
+    battery present (S1.3) : no
+    VBUS good       (S1.5) : yes
+    BATFET          (S1.4) : off
+    charge status   (S2.7:5): 0
+    battery voltage        : 8181 mV   <- meaningless with no cell present
+  VERDICT: NO cell attached -- the board is externally powered

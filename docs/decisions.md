@@ -690,8 +690,10 @@ question.
   is exactly 16,777,216 bytes. `vthinkxie`'s 8 MB is REFUTED for this unit.
 - **Persistence media** — NVS / LittleFS / microSD split.
 - **Keepalive period** — 3 s is inherited, not measured.
-- **Backpack power and mounting.** Entirely unaddressed and not a software
-  problem.
+- **Backpack mounting.** Dimensions and weight are unaddressed and not a
+  software problem. **Power is answered** (2026-09-01): there is no cell on the
+  board — AXP2101 `STATUS1` battery-present bit clear across ten samples, see
+  D-017 Amendment A and `research/board-capabilities.md`.
 
 ---
 
@@ -1174,6 +1176,8 @@ screen, not a summary, not a composed message — the same row, enlarged. The fu
 arrive on the second beat, once the operator has clearly decided to look.
 
 Rows: **LINK · R2 · PACK · BRAIN**. Storage moves to the menu.
+*(Superseded by Amendment A: there is no second battery, so the rows are
+**LINK · R2 · STORAGE · BRAIN** and `PACK` is removed.)*
 
 ### Why the wake frame is an enlargement and not a face
 
@@ -1252,6 +1256,45 @@ anyone can read off the list.
   a glance should not be able to arm an actuator.
 - **Settings on the panel.** Three or four touch targets fit. Spending them on
   configuration rather than on the fault in front of you is the wrong trade — D-016.
+
+
+### Amendment A — 2026-09-01: there is no second battery, so the PACK row goes
+
+The condition this ADR was left hanging on is resolved. **There is no cell on
+the backpack board.** #93 / gap B2, measured rather than inspected: the AXP2101
+was asked directly, and its battery-present bit (`STATUS1` bit 3) is clear on
+all ten samples while VBUS reads good, with battery detection verified enabled
+(`BAT_DET_CTRL` read back `0x01`, and already on at boot). The voltage ADC
+ranged **0 mV to 8183 mV** across those reads — a floating pin, not a cell. Evidence and the instrument
+guard: `research/board-capabilities.md`, raw capture in
+`firmware/pack_check/results/`.
+
+**This ADR prescribed its own consequence, so it is applied rather than
+re-argued:** *"if it turns out there is one battery, the row is dropped and
+storage returns to it."*
+
+**The rows are now LINK · R2 · STORAGE · BRAIN.** `PACK` is removed. It was
+never a measured row — it was drawn in three published design artifacts on the
+strength of an assumption, which is exactly what #93 was filed to stop.
+
+**And the second leg of the argument above falls with it.** The "two batteries
+fail in opposite directions, so the real question is comparative" reasoning
+required a cell in the backpack. There is none on the board, so that argument
+contributes nothing and should not be cited again. **D-017 stands on reason 1
+alone** — settings leaving the panel removes the only structural objection to
+fixed rows.
+
+Scoped honestly: what was measured is that **no cell is attached to this board**,
+USB-powered and not mounted. It does not prove the finished assembly can never
+carry one, because the mount is not designed yet. If a mounting is later chosen
+that adds a cell, the comparative argument and the `PACK` row both come back —
+and that is a cheap thing to notice, because the row's absence will be
+conspicuous the moment a second battery exists.
+
+Worth keeping for the pattern: the corrected draft above was right to be
+conditional, and right about which way to hedge. The failure it caught was an
+UNKNOWN graduating to a premise; the fix was not to guess better but to file
+#93 so the condition had somewhere to be resolved. It took one register read.
 
 ---
 
