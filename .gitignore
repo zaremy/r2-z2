@@ -64,6 +64,9 @@ build-arm*/
 # Wi-Fi credentials for the A1 coexistence arms — never commit
 firmware/**/wifi_creds.h
 
-# ...but a firmware experiment's lock IS its evidence: it is what pins the
-# exact component versions a finding is published against.
-!firmware/**/dependencies.lock
+# ...but a firmware experiment's lock can BE its evidence: it pins the exact
+# component versions a published finding rests on. Name those files one by one.
+# A `firmware/**/dependencies.lock` wildcard was tried first and was too broad --
+# it un-ignored every app's lock, so ordinary build artifacts (sd_check's, for
+# one) turned up as untracked noise in every session's `git status`.
+!firmware/brookesia_check/dependencies.lock
