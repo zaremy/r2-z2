@@ -483,6 +483,61 @@ time-slicing (a 3 s keepalive, not a continuous stream). It does not repeal the
 field report of 20%+ loss under coexistence; it says this hardware under this
 traffic here is fine.
 
+### ESP-Brookesia 0.5.0 builds and runs on this board — OBSERVED 2026-09-01
+
+Issue #103 A2. `firmware/brookesia_check` brings up the BSP display and touch,
+constructs a Brookesia phone on it, and calls `begin()`.
+
+| A2 criterion | Result |
+|---|---|
+| Builds on ESP-IDF v5.5.x without patching the BSP | **Yes**, with one pin in *our* manifest (below) |
+| Boots and renders, confirmed by eye | **Shell chrome renders** — status bar, page indicator, nav grabber; swipe-up produces the recents affordance. No app content: none was installed |
+| Brookesia and LVGL versions recorded | esp-brookesia **0.5.0**, LVGL **9.2.2**, BSP **2.0.3**, esp_lvgl_port **2.6.0** — pinned by the committed `firmware/brookesia_check/dependencies.lock`, since the manifest itself floats `^0.5.0`/`^2.0.3` |
+
+**The version triangle, which is the real finding.** Brookesia 0.5.0 pins
+`lvgl 9.2.*`; the BSP permits `lvgl >=8,<10` and on its own resolves **9.5.0**.
+The solver reconciles that by downgrading LVGL to 9.2.2 — and the build then
+**fails to compile**, because `esp_lvgl_port` 2.9.0 and 2.8.0 reference
+`LV_COLOR_FORMAT_RGB565_SWAPPED`, which is absent from LVGL 9.2.2 (searched its
+`src/` tree: zero occurrences). Both of those are observations of registry
+components fetched on 2026-09-01, **not** of anything in this repo — the
+components live under `managed_components/`, which is gitignored. The committed
+`dependencies.lock` carries the component hashes; re-check against those rather
+than trusting this paragraph.
+
+> [!warning]
+> **Every `esp_lvgl_port` version the registry listed on 2026-09-01 (2.4.4
+> through 2.9.0) declares the same `lvgl >=8,<10`.** Only 2.6.0, 2.8.0 and 2.9.0
+> were actually compiled here; the rest is a reading of registry metadata. The
+> manifest constraint is true of all of them and false of the code in the newer
+> ones, so the dependency solver happily produces a combination the compiler
+> rejects. A resolved lockfile is not evidence that the set compiles. Pinning
+> `espressif/esp_lvgl_port: "==2.6.0"` in our own manifest fixes it — that is a
+> constraint we add, not a patch to the BSP.
+
+**No stylesheet exists for this panel.** Brookesia ships 320x240, 320x480,
+480x480, 800x480, 1024x600, 720x1280 and 1280x800. Ours is **368x448**. It does
+not refuse — it logs *"No phone stylesheet is added, adding default dark
+stylesheet"* and runs — but a panel-shaped stylesheet is unpriced work for #101
+if our UI is to be a Brookesia app rather than merely to coexist with one.
+
+**Content area empty is this test, not a defect.** No apps were installed; the
+vendor example installs three. The shell chrome is what A2 needed to see.
+
+> [!note]
+> **One unresolved observation, recorded rather than explained.** The first
+> build put `begin()` about 1.1 s after boot and the operator reported a blank
+> panel. The second, identical except for a 12 s LVGL positive-control frame
+> drawn *before* the phone is constructed, renders the shell. Whether that is a
+> startup race or simply when the panel was looked at is **UNKNOWN**. If a
+> Brookesia UI ever comes up blank on this board, start here.
+>
+> **Scope the A2 pass accordingly.** What is proven is that Brookesia's shell
+> renders on this board *after* a 12 s LVGL frame precedes it. Booting straight
+> into Brookesia as the panel's own UI — which is what #101 would do — is **not
+> yet demonstrated**, and this stays an open risk on that epic rather than a
+> solved problem.
+
 ## 1. Silicon and memory
 
 **OBSERVED** — from `examples/esp-idf/14_lvgl_demo_v9/sdkconfig.defaults`:

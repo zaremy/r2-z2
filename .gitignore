@@ -63,3 +63,7 @@ build-arm*/
 
 # Wi-Fi credentials for the A1 coexistence arms — never commit
 firmware/**/wifi_creds.h
+
+# ...but a firmware experiment's lock IS its evidence: it is what pins the
+# exact component versions a finding is published against.
+!firmware/**/dependencies.lock
