@@ -1758,3 +1758,128 @@ framework, at a cost the operator judges worse than living with the host's
 launcher — or by the operator deciding a neutral launcher at rest is acceptable,
 which the corrected premise makes a much more reasonable position than it looked
 when this was filed.
+
+---
+
+## D-022 — We ship our own partition table; the dual-image option is dead on arithmetic
+**2026-09-01**
+
+Closes gap **B4** of #101, which had been deferred repeatedly as a taste call.
+It is not one. The numbers decide it.
+
+**Decision: replace the stock partition layout with our own table.** Do not ship
+our panel as a second OTA image living beside the stock launcher.
+
+### The stock layout, measured from the verified backup
+
+Read out of `~/esp/r2z2-board-backups/factory-backup.bin`, whose sha256 was
+re-checked against its sidecar on 2026-09-01 and matches. **That file is not in
+this repo** — it is a 16 MB local artifact — so every figure in this table is
+reproducible only on a machine holding it. What the repo itself supports is that
+the backup exists and restored to a working system
+(`research/board-capabilities.md`), and that section is explicit that the
+restore was hash-checked *before* writing and never read back and re-hashed
+afterwards. Treat the table as measured-locally, not as committed evidence:
+
+| Partition | Size | Used | What it holds |
+|---|---|---|---|
+| `nvsfactory` | 0.20 MB | **0.00 MB** | empty |
+| `nvs` | 0.82 MB | **0.00 MB** | empty |
+| `otadata` | 0.01 MB | erased | so the bootloader falls through to `factory` |
+| `factory` | 5.50 MB | 4.46 MB | esp-brookesia v1 — the launcher that boots |
+| `ota_0` | 3.00 MB | 2.80 MB | xiaozhi v2.2.6 — **never boots** |
+| `assets` | 3.00 MB | 2.72 MB | stock app assets |
+| `storage` | 3.44 MB | 3.43 MB | stock app data |
+
+### Why dual-image is dead
+
+`ota_0` is **3.00 MB and already 93.5% full**. Our panel app has to carry
+ESP-Brookesia *plus* NimBLE *plus* Wi-Fi. Two measurements bound that:
+
+- Espressif's own shipping Brookesia build, with no BLE stack at all, is
+  **4.46 MB** — it is the `factory` image above.
+- `firmware/coex_check` — NimBLE central, Wi-Fi STA and an HTTP client, with
+  **no display stack whatsoever** — was **1.04 MB** (#103 A1).
+
+Those two are **not additive** — the `factory` image carries vendor apps we
+would not ship, and `coex_check` duplicates IDF runtime that a combined build
+shares once. So this is a strong bound, not a proof: a Brookesia panel carrying
+both radios is very unlikely to fit in 3.00 MB, and **no combined build exists
+that shows otherwise.** Calling it arithmetically impossible would overstate it.
+What can be said flatly is that the option was never weighed against a measured
+size in the year it sat open, and the two bounds available make it the losing
+side of the trade rather than a close call.
+
+### The framing was also wrong, which is why it kept sliding
+
+"Replace `factory` **or** dual-image into `ota_0`" assumes we keep the stock
+partition table. **We never have.** Every experiment in #103 flashed its own
+table — `touch_check` and `board_check` on the IDF default, `coex_check` on a
+3 MB custom table, `brookesia_check` and `tap_target_check` on the vendor
+example's 8 MB + 4 MB layout. The stock table has been overwritten many times
+over; it survives only in the backup. So the real question was never which stock
+slot to occupy, but what our own table should look like.
+
+### What this gains and costs
+
+**Gains 9.44 MB** currently committed to things we do not use: `ota_0` (3.00,
+an image that never boots), `assets` (3.00) and `storage` (3.44), both holding
+stock-app data. Sizing is then ours to choose rather than inherited.
+
+**Costs the stock launcher on-device.** After the next flash the Brookesia
+launcher and its apps exist only in the backup. The operator assessed those apps
+and judged only MusicPlayer interesting, for a visualisation resembling our own
+`thinking` state. **D-021** already commits us to owning idle, so a bootable
+stock launcher was of limited value even before the size argument.
+
+Both NVS partitions read **0.00 MB used**, so no provisioning or calibration
+data is lost with them.
+
+**Rollback is the full 16 MB image**, restored successfully on 2026-08-29 with
+the stock UI confirmed by eye, and re-verified by hash today.
+
+### The replacement table
+
+Deciding to own the layout is not a decision until the layout exists. The
+contract it must satisfy, and an initial table meeting it:
+
+| Partition | Type | Size | Why |
+|---|---|---|---|
+| `nvs` | data/nvs | 64 KB | settings and Wi-Fi credentials. The stock `nvs` was 0.82 MB and **empty**, so nothing is inherited and the size is ours to pick |
+| `otadata` | data/ota | 8 KB | selects the active slot |
+| `phy_init` | data/phy | 4 KB | RF calibration |
+| `ota_0` | app | 6 MB | the panel app. Stock Brookesia alone is 4.46 MB and ours adds two radios |
+| `ota_1` | app | 6 MB | **reserved**, so a bad update can roll back |
+| `storage` | data/spiffs | ~3.4 MB | our own assets, sized from what we ship rather than inherited |
+
+Two constraints worth stating as constraints, not sizes:
+
+- **The app slot is at least 6 MB.** 4.46 MB is what a Brookesia build with *no*
+  BLE already costs. Sizing to today's binary would guarantee a repartition.
+- **The second app slot is reserved even though OTA is not implemented.**
+  Reserving costs nothing now; adding it later means repartitioning, which means
+  a full erase and reflash of a device that by then lives in a household rather
+  than on the desk. Implementing OTA is explicitly **not** in scope here — only
+  leaving room for it is.
+
+It fits, with room: **15.47 MB of the 15.97 MB** available after the bootloader
+and table (partitions start at `0x9000`), leaving 0.49 MB spare. Checked rather
+than assumed — a published layout that overflows would be a poor way to close a
+decision that turned on arithmetic.
+
+This table is a starting point, not a further decision: it can move freely until
+the first non-experimental flash, and nothing above depends on the exact sizes.
+
+### Stated uncertainty
+
+**Our final app size has not been measured.** No build combining Brookesia, BLE
+and Wi-Fi exists yet; the 3 MB verdict rests on the two bounds above rather than
+on our own binary. If a future panel drops Brookesia for a lean LVGL app, the
+size argument weakens — but so does dual-image's only attraction, since what it
+preserves is the Brookesia launcher.
+
+*Reversed by:* a release build of the panel, with every shipping feature
+compiled in, measuring **≤ 2.70 MB** (3.00 MB less the ~10% headroom the stock
+images leave) **and** a named requirement that needs the stock launcher
+bootable. Both are checkable: the first is `ls -l build/*.bin`, the second has
+to be written down as a requirement rather than felt. Absent both, this stands.
