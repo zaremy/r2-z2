@@ -809,6 +809,53 @@ working system.
 - **UNKNOWN — power budget.** No measurement of what the AMOLED + Wi-Fi + BLE
   scanning draw together, and the backpack rides on R2. Screen-off/dim
   behaviour is a first-class requirement, not a nicety.
-- **UNKNOWN — physical mounting.** Backpack dimensions, weight, and how power
-  is supplied (own battery via AXP2101, or tapped from R2) are entirely
-  unaddressed. This is a real open problem, not a software one.
+- **PARTLY ANSWERED — physical mounting.** Backpack dimensions and weight are
+  still unaddressed and remain a real open problem, not a software one. **The
+  power half is settled to this extent: there is no cell on this board** (see
+  below). What supplies it once mounted is a separate question this measurement
+  does not answer.
+
+### No battery on the backpack board — OBSERVED 2026-09-01
+
+Gap **B2** / issue #93. The AXP2101 can be asked, which turns this from a
+multimeter job into a register read. `firmware/pack_check` reads the PMU at
+`0x34`; register meanings come from the vendor's own bundled XPowersLib
+(`XPowersAXP2101.tpp:252-285`, `AXP2101Constants.h:7,8,46-48`) in
+waveshareteam/ESP32-S3-Touch-AMOLED-1.8 @ `ed7c6a5`.
+
+**Battery detection was verified enabled before any status bit was believed** —
+`BAT_DET_CTRL` (`0x68`) bit 0, read back as `0x01`, and the log records it was
+**already `0x01` at boot**, i.e. on by default. That matters: `STATUS1` bit 3 is
+meaningless with the detector off, so a probe that skips this can read a present
+cell as absent. Every register read is checked too; the run recorded **zero**
+failed cycles, and a failed read prints *"PROVES NOTHING"* instead of a verdict.
+
+**`STATUS1 = 0x20` on all ten samples**, stable:
+
+| Bit | Meaning | Value |
+|---|---|---|
+| S1.5 | VBUS good | **yes** — powered over USB |
+| S1.4 | BATFET | off |
+| S1.3 | **battery present** | **no** |
+| S2.7:5 | charge status | 0 (not charging) |
+
+The voltage ADC corroborates it. Across the same ten reads it returned
+`0, 18, 66, 171, 427, 427, 1934, 8181, 8181, 8183` mV — a **0 to 8183 mV**
+spread, which is a floating BAT pin. A single cell would sit stable between
+3000 and 4200 mV.
+
+**The instrument was guarded first.** "No battery" is the quiet answer, and a
+wrong address, an unopened bus or a mute PMU all produce it. `pack_check`
+therefore verifies the AXP2101 chip ID before believing any status bit and
+aborts with *"PROVES NOTHING"* rather than reporting an absent battery. That
+guard exists because this project has already spent a session on a null result
+that came from a broken instrument.
+
+**Scope, stated narrowly on purpose.** The board was USB-powered from the Mac,
+**not mounted on R2**. What this establishes is that **no cell is attached to
+this board** — not what supplies it when mounted, and not that the finished
+backpack assembly will never carry one, since the mount is not designed. The
+presence of the AXP2101 never evidenced a battery either way; #93 said so up
+front and was right.
+
+Raw capture: `firmware/pack_check/results/b2-axp2101-2026-09-01.txt`.
