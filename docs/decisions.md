@@ -1926,3 +1926,164 @@ compiled in, measuring **≤ 2.70 MB** (3.00 MB less the ~10% headroom the stock
 images leave) **and** a named requirement that needs the stock launcher
 bootable. Both are checkable: the first is `ls -l build/*.bin`, the second has
 to be written down as a requirement rather than felt. Absent both, this stands.
+
+---
+
+## D-023 — Powering him down is us stopping, so the panel offers RELEASE, not OFF
+**2026-09-01**
+
+Closes the hard half of gap **C1** in #101: what *"power everything except the
+backpack down"* actually means. It had stayed open because it looked like a
+missing feature. It is not — it is a **missing subtraction**.
+
+### The constraint, restated until it stops being awkward
+
+R2 has no off switch, and **he has his own idle sleep** — OBSERVED 2026-08-18,
+the first time the keepalive was ever stopped and he was watched. He reverted to
+his own resting alternation and faded out, on the charger at full battery.
+
+Our keepalive **is** the wake command (`DID 0x13 / CID 0x0D`, every ~3 s), so
+any `sleep` we send is undone within three seconds (#38). The reason he never
+sleeps during a session is not firmware. **It is us, every three seconds.**
+
+So the action is not a command. **To power him down we stop.** The
+implementation of the panel's most physical-feeling control is an absence.
+
+### Three consequences, and the third is the interesting one
+
+**1. It is a release, not an off.** No switch exists and we cannot promise an
+instant. The panel must not say `OFF`, because that names a state we do not
+control and cannot deliver on demand.
+
+**2. It is not instantaneous, and by an unmeasured amount.** After we stop, he
+holds whatever we last set, reverts to his own idiom, and fades out after an
+interval **nobody has measured** — the only bound is a useless 22.1 h because
+nobody was watching in between. So at the moment of release the panel cannot
+honestly say he is asleep.
+
+**3. Confirming he slept wakes him — but weaker evidence is free.** To *confirm*
+his state we must reconnect, and connecting sends `wake`, so the confirmation
+destroys the thing confirmed. A first draft of this ADR stopped there and
+declared the state unobservable. That is too absolute: **a passive BLE scan
+takes no connection** (`r2_probe.py:10`), and a droid that has gone under should
+stop advertising. So absence-of-advertisement is real, non-destructive evidence.
+
+What it cannot do is *discriminate*. Not advertising is equally consistent with
+asleep, out of range, or failed — and telling those apart is exactly what needs
+a connection. So the honest position is narrower than "unobservable" and still
+rules out the display we wanted to avoid:
+
+**The panel shows `released`, a claim about what WE did, not about what he is.**
+It is knowable, it stays true regardless of where he is in his own timeout, and
+it never has to be retracted. A passive scan may *corroborate* it — "released,
+not advertising" is a stronger line than "released" — but the panel must never
+promote that to `asleep`, because the same observation is what a failure looks
+like. Same rule the LED language already runs on: state what you can vouch for.
+
+### This unblocks the `sleep` row without adding a command
+
+`behaviour-states.md` carries **sleep** as *"specified and blocked"* — blocked
+because a sleep command is undone by the next keepalive. **The reasoning that
+blocked it is retired here** — though the code prohibition stays until there is
+a release path to assert it from (see below). And it is retired without finding
+a command:
+
+**Assert `sleep` (blue steady @ 0.2) as the last write, then stop the
+keepalive.** He holds that dim blue while he is awake-and-released, and
+his own idiom returns once he goes under. A colour we set survives a link drop;
+it did **not** survive the one sleep cycle anybody watched — though `CLAUDE.md`
+is careful that **sleep is the likely destroyer, not the proven one**, since
+that 22.1 h window also contains duration. This ADR inherits that caveat rather
+than rounding it up: the goodnight is *expected* to lapse when he sleeps, and
+nothing here breaks if it lapses for a different reason.
+
+The blocked row unblocks by **removing** a command, not adding one. That is the
+same shape as the decision above, and it is why this gap resisted being specced
+as a feature.
+
+**This is a semantic change to `sleep`, and it should be named rather than
+smuggled.** D-012 has status colours as claims about the system that can be
+verified. Asserted at release, `sleep` is shown while he is still *awake* — so
+it stops being "he is asleep" and becomes **"we have let go"**, a goodnight
+marker. That is deliberate and it is the body's honest counterpart to the
+panel's `released`: both state what we did, neither claims what he is. It does
+mean `sleep` is the one status row whose name no longer describes its
+condition, and renaming it to `released` on the body is a reasonable follow-up
+this ADR does not take.
+
+**What this does NOT do is unblock the code.** `sleep` remains refused by
+`r2_lights.BLOCKED` (`r2_lights.py:466`) and by `StatusLayer.set()`
+(`r2_status.py:207-210`), with two tests pinning it. That is correct for now:
+the release path does not exist, and a state you can enter but never leave is
+worse than one you cannot enter. This ADR decides *what release means*; the
+prohibition comes out in the same change that builds it. Saying "unblocked"
+while the code still blocks it would be exactly the doc-versus-repo drift this
+project keeps catching.
+
+### The panel needs three states it does not have
+
+| State | What it means | Why it cannot be folded into an existing one |
+|---|---|---|
+| `released` | we have stopped holding him awake | distinct from `offline`: nothing failed, and it is not `sleep`, which is a claim about him |
+| `waking` | reconnect in progress, **~12 s on the Mac daemon path** | measured there (scan + connect + `wake()`, the 11.95 s blind window). Without it the panel is indistinguishable from broken for twelve seconds |
+| `unprovisioned` | first run: no network, no droid paired | `offline` says a known link died; this says there was never a link to lose |
+
+`waking` should show **progress**, not a spinner — twelve seconds is long enough
+that an unbounded animation reads as a hang. But note the figure is **borrowed**:
+11.95 s was measured on the Mac daemon's scan-connect-wake path, and the panel's
+own reconnect has never been timed. Use it to justify *having* a progress state,
+not to calibrate the bar; re-measure on the panel before any duration is drawn
+to scale.
+
+**None of the three enters D-017's severity ordering**, and that ordering stays
+the closed nine-state constant it was declared to be. The wake frame exists to
+surface *severity* on a running system; `released` is deliberate rather than
+wrong, `waking` is a transition that resolves itself in seconds, and
+`unprovisioned` is a mode the panel is persistently in rather than an event to
+be woken by. Adding any of them to the rank would mean the panel could wake the
+household to announce that it is doing what it was told.
+
+### The two-axis model this exposes
+
+C1 asked about *"everything except the backpack"*, which reads as one control.
+It is a point in a two-axis space, and naming the axes is most of the work:
+
+| | backpack display | R2 |
+|---|---|---|
+| axis | `resting` · `UI asleep` · `off` | `held` · `released` · `waking` |
+
+*"Power everything except the backpack down"* is **R2 `released` × backpack
+`resting` or `UI asleep`**. The reason it felt like one switch is that only one
+of the two axes had ever been named.
+
+### Decision
+
+**The panel offers a `RELEASE` action whose implementation is stopping the
+keepalive**, preceded by asserting `sleep` on the body as the goodnight. It
+reports `released`, never `asleep`. It gains `released`, `waking` and
+`unprovisioned` as first-class states, and `waking` shows bounded progress. The
+duration it is drawn against must be **measured on the panel's own reconnect**;
+the ~12 s from the Mac daemon path justifies having the state, not the length of
+its bar.
+
+### What is deliberately not decided here
+
+- **The word on the panel.** `RELEASE` is this ADR's placeholder and a
+  structural claim, not a CX one. `REST`, `STAND DOWN` and `GOODNIGHT` all fit
+  the same mechanism, and the choice is the operator's.
+- **Whether release needs a confirm.** It is not dangerous — the worst case is
+  that he sleeps and takes a reconnect to come back, on the order of the Mac
+  path's ~12 s though unmeasured from the panel — but it does end a session.
+
+### The measurement this now depends on
+
+**His idle timeout is unmeasured, and how honest `released` feels depends on
+it.** If it is five minutes, `released` converges on asleep quickly and the
+distinction is academic. If it is hours, `released` is a long limbo and the
+panel is carrying a genuinely uncertain state for most of a day. `CLAUDE.md`
+already records this as cheap and unmeasured: stop the keepalive, then look at
+5, 15, 30 and 60 minutes. It needs no code.
+
+*Reversed by:* a firmware-level off being found that does not depend on our
+silence — which would make this a command after all — or the idle timeout
+measuring long enough that `released` is useless to show.

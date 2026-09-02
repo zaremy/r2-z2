@@ -65,9 +65,34 @@ the brightest thing on the droid (Amendment A §6). Yellow separates attention
 (2.4 s) from misheard (1.2 s); red separates a physical fault (0.25 s) from a
 lost link (1.0 s). Only one of those means go and pick him up.
 
-> [!warning] **sleep** is specified and **blocked.** The keepalive *is* the wake
-> command (`DID 0x13 / CID 0x0D`, every 3 s), so any sleep is undone within
-> three seconds. Session-lifecycle change before it is a lighting one — #38.
+> [!note] **sleep** is **conceptually unblocked by D-023 and still blocked in
+> code.** Both halves are true and the distinction matters.
+> The keepalive *is* the wake command (`DID 0x13 / CID 0x0D`, every 3 s), so any
+> sleep we *send* is undone within three seconds — that part of #38 stands. What
+> changed is the realisation that we do not need to send one: R2 has his own
+> idle sleep and our keepalive is what suppresses it.
+>
+> **Assert `sleep` as the last write, then stop the keepalive.** He holds this
+> dim blue while he is awake-and-released, and his own idiom returns once he
+> goes under. A colour we set survives a link drop; it did **not** survive the
+> one sleep cycle anybody watched — but `CLAUDE.md` is careful that **sleep is
+> the likely destroyer, not the proven one**, since that 22.1 h window also
+> contains duration. The goodnight is *expected* to lapse when he sleeps, and
+> nothing depends on it lapsing for that particular reason.
+>
+> It is still a session-lifecycle change before it is a lighting one, and that
+> change **does not exist yet**. The code still refuses this state on purpose:
+> `r2_lights.BLOCKED = ("sleep",)` (`r2_lights.py:466`), `StatusLayer.set()`
+> raises on it (`r2_status.py:207-210`), and two tests pin both facts
+> (`test_r2_lights.py:192`, `test_r2_status.py:145`). **Nothing here unblocks
+> them**, and it should not until there is a release path to assert it from —
+> a state you can enter but never leave is worse than one you cannot enter.
+>
+> To actually unblock: build the release action (stop the keepalive), then in
+> one change drop `sleep` from `BLOCKED`, assert it as the final write on that
+> path, and update those two tests to pin the new behaviour rather than the old
+> prohibition. The lifecycle change is a **subtraction**: stop sending, do not
+> send more.
 
 > [!info] **wake has no dome move.** Operator ruling, 2026-08-17.
 > The sweep finishes in 1.35 s; every dome move takes ~2.0-2.2 s regardless of
@@ -144,7 +169,7 @@ The test is whether the claim is about the **system** or about an
 | wake | no | an instant, not a state |
 | danger | no | a live physical condition we cannot vouch for a day later |
 | offline | no | demonstrably false — we are talking to him |
-| sleep | no | blocked anyway (#38) |
+| **sleep** | **no** | it was the last thing we asserted before letting go, and by the time anything reconnects the claim is either stale or self-refuting — connecting *wakes him*, so a restored `sleep` would be false at the instant it was written (D-023) |
 
 A dropped claim is **returned to the caller**, never swallowed. Silently
 asserting a stale danger and silently clearing one are both wrong; reporting
