@@ -1,0 +1,85 @@
+/* The permission ceiling — #114 slice 2.
+ *
+ * WHY THIS EXISTS, AND WHY IT COMES BEFORE ANY OP THAT CAN MOVE HIM.
+ *
+ * The Mac daemon has a ceiling: `r2_probe.py --allow <tier>` fixes what a
+ * session may emit, and CLAUDE.md sets the bring-up order — read-only, LEDs,
+ * audio, small dome, stance, locomotion — with each actuator individually
+ * opt-in and never bundled. The firmware has had no equivalent.
+ *
+ * An ESP32 that can send arbitrary Sphero packets, bolted to the droid, is
+ * strictly worse than the Mac path: it is always on, it is unattended, and
+ * nobody has to type a flag. So the gate lands BEFORE the first op that can
+ * move him exists, rather than after.
+ *
+ * THREE PROPERTIES THAT MATTER MORE THAN THE TABLE:
+ *
+ * 1. It is an ALLOWLIST. An op that is not listed is refused. A denylist would
+ *    permit every command nobody thought about, which for a device with legs is
+ *    the wrong default.
+ * 2. FORBIDDEN ops are named explicitly and checked FIRST, so they stay refused
+ *    even if someone later adds them to the allowlist by mistake. A positive
+ *    assertion about a known list beats the absence of a match.
+ * 3. The check is on the SEND PATH, not at construction. A guard where the
+ *    packet is built is a guard on the path people happen to use; a guard where
+ *    the bytes leave is a guard on the path that has the effect.
+ */
+#ifndef R2_GATE_H
+#define R2_GATE_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Low to high. Mirrors r2_behavior.TIERS ("read","leds","audio","dome","stance").
+ * Locomotion is deliberately NOT a rung here: it is out of scope for #114 and
+ * has no allowlist entry, so it is refused as unlisted. */
+typedef enum {
+    R2_TIER_READ = 0,
+    R2_TIER_LEDS,
+    R2_TIER_AUDIO,
+    R2_TIER_DOME,
+    R2_TIER_STANCE,
+    R2_TIER__COUNT
+} r2_tier_t;
+
+typedef enum {
+    R2_GATE_ALLOW           =  0,
+    R2_GATE_ABOVE_CEILING   = -1,  /* known op, ceiling too low */
+    R2_GATE_NOT_ALLOWLISTED = -2,  /* unknown op: refused by default */
+    R2_GATE_FORBIDDEN       = -3,  /* never permitted at any ceiling */
+    R2_GATE_NO_TX           = -4,  /* no transmit function supplied */
+    R2_GATE_ENCODE_FAILED   = -5,
+} r2_gate_verdict_t;
+
+/* Transmit hook. Returns >=0 on success. Kept as a callback so the gate has no
+ * BLE dependency and is testable on the host. */
+typedef int (*r2_tx_fn)(const uint8_t *frame, size_t len, void *ctx);
+
+/* Defaults to R2_TIER_READ — the lowest rung — so a firmware that forgets to
+ * set a ceiling can still only read. */
+void      r2_gate_set_ceiling(r2_tier_t ceiling);
+r2_tier_t r2_gate_get_ceiling(void);
+
+/* Verdict for one op, without sending. Exposed for diagnostics and tests. */
+r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid);
+
+/* THE ONLY SANCTIONED WAY OUT. Checks, encodes, transmits. Returns the encoded
+ * length on success, or a negative r2_gate_verdict_t. */
+int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
+                 const uint8_t *data, size_t data_len,
+                 r2_tx_fn tx, void *ctx);
+
+/* Human-readable, for logs and refusal messages. */
+const char *r2_gate_tier_name(r2_tier_t t);
+const char *r2_gate_verdict_name(r2_gate_verdict_t v);
+/* NULL when the op is not allowlisted. */
+const char *r2_gate_op_name(uint8_t did, uint8_t cid);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* R2_GATE_H */
