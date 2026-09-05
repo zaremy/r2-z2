@@ -61,6 +61,16 @@ static const op_t FORBIDDEN[] = {
 
 static r2_tier_t s_ceiling = R2_TIER_READ;   /* lowest rung by default */
 
+static uint32_t s_admitted = 0, s_refused = 0;
+
+void r2_gate_stats(uint32_t *admitted, uint32_t *refused)
+{
+    if (admitted) *admitted = s_admitted;
+    if (refused)  *refused  = s_refused;
+}
+
+void r2_gate_stats_reset(void) { s_admitted = s_refused = 0; }
+
 void r2_gate_set_ceiling(r2_tier_t c)
 {
     /* An out-of-range ceiling clamps DOWN, never up: a bad value must not be a
@@ -95,13 +105,19 @@ int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
      * a half-built forbidden command is a thing waiting to be transmitted by
      * the next person who adds a shortcut. */
     const r2_gate_verdict_t v = r2_gate_check(did, cid);
-    if (v != R2_GATE_ALLOW) return (int)v;
-    if (tx == NULL) return R2_GATE_NO_TX;
+    if (v != R2_GATE_ALLOW) { s_refused++; return (int)v; }
+    if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
 
     uint8_t frame[R2_ENCODED_MAX(64)];
     const int n = r2_packet_encode(did, cid, seq, data, data_len,
                                    frame, sizeof frame);
-    if (n <= 0) return R2_GATE_ENCODE_FAILED;
+    if (n <= 0) { s_refused++; return R2_GATE_ENCODE_FAILED; }
+    /* Counted BEFORE the transport, deliberately. A tx that returns an error
+     * may still have put the bytes on the air, and this project's rule is to
+     * assume an unconfirmed command took effect. Counting after would let a
+     * failed-but-delivered send go unrecorded, which is the wrong direction to
+     * be wrong in for the one counter that says what we sent him. */
+    s_admitted++;
     if (tx(frame, (size_t)n, ctx) < 0) return R2_GATE_ENCODE_FAILED;
     return n;
 }

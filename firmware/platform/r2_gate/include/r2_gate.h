@@ -76,6 +76,20 @@ int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
 /* Human-readable, for logs and refusal messages. */
 const char *r2_gate_tier_name(r2_tier_t t);
 const char *r2_gate_verdict_name(r2_gate_verdict_t v);
+/* How many sends the gate has admitted and refused since boot.
+ *
+ * Two jobs, and the second is why it is here now rather than in the telemetry
+ * slice. It is the only observable a caller CANNOT forge: a module that
+ * reimplements the gate's verdicts and encodes a frame itself can return the
+ * right numbers, but it cannot move this counter. A test that asserts
+ * "admitted advanced by exactly N, and exactly N frames went out" is therefore
+ * a real proof of routing, where comparing return codes is not.
+ *
+ * Added after a mutation that faked r2_gate_send's own no-tx verdict survived
+ * the slice 3 battery -- found by review, not by the tests. */
+void r2_gate_stats(uint32_t *admitted, uint32_t *refused);
+void r2_gate_stats_reset(void);
+
 /* NULL when the op is not allowlisted. */
 const char *r2_gate_op_name(uint8_t did, uint8_t cid);
 
