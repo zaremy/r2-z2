@@ -66,6 +66,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import r2_probe as P
 import r2_behavior as B
+import r2_mood
 import r2_lights as LG
 from r2_behavior import FileBridge, Step
 from r2_status import StatusLayer, StatusStore
@@ -254,6 +255,28 @@ def _accepts(fn, name: str) -> bool:
         p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+# THE behaviour a touch produces. One name, in one place, and the class
+# default below is this same object -- because the bug this replaces was
+# exactly a disagreement between the class default and what the session meant
+# to run. #86 shipped `express_delight` and a 225-line mood scalar with NO
+# caller: `Reactive` defaulted to `express_curious`, `run_session` passed
+# nothing, and petting the real droid produced "what was that?" forever. A
+# review named it before #86 merged and it merged anyway (#97).
+#
+# Naming it once is the fix. Passing it explicitly from `run_session` would
+# work today and would let the two drift apart again the moment somebody adds
+# a second construction site -- and it drifted silently last time precisely
+# because both behaviours happen to need the same `dome` tier, so the
+# permission preflight could not tell them apart either.
+SESSION_BEAT = B.express_delight
+
+# Where the mood scalar persists. A module constant, like LOG_DIR and
+# STATUS_STORE above it, so tests can redirect it: the suite has already once
+# written into the LIVE status store and told the next real session what R2
+# was doing.
+MOOD_STORE = r2_mood.DEFAULT_PATH
+
+
 class Reactive:
     """The closed loop. `now`/`sleep` are injected so the whole state machine
     runs in a unit test at no wall-clock cost -- which is the only reason the
@@ -261,13 +284,17 @@ class Reactive:
     on a robot that is behaving."""
 
     def __init__(self, bridge, feed, thresholds, window_n, *,
-                 ceiling: str = "dome", beat_factory=B.express_curious,
+                 ceiling: str = "dome", beat_factory=None,
                  status: StatusLayer | None = None,
                  mood=None,
                  now=time.monotonic, sleep=time.sleep):
         self.bridge, self.feed = bridge, feed
         self.thresholds, self.window_n = thresholds, window_n
-        self.ceiling, self.beat_factory = ceiling, beat_factory
+        self.ceiling = ceiling
+        # None means SESSION_BEAT, not "some safe fallback". A default that
+        # silently differs from what the session runs is the defect this
+        # module shipped with.
+        self.beat_factory = beat_factory if beat_factory is not None else SESSION_BEAT
         # OPTIONAL, unlike `status`. A mood is genuinely absent for the
         # survey harnesses -- they measure the detector, and a run that
         # quietly raised happiness would make the instrument change the thing
@@ -711,7 +738,11 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
     # full hands-off stretch before telling them. Worse, at `read` the LED
     # writes are refused too, so D-014's arming cue silently does not happen:
     # the exact failure D-014 exists to eliminate.
-    need = B.express_curious().required_tier()
+    # The tier of the behaviour the session WILL RUN, from the same name it
+    # is constructed from. Computing it for a different behaviour was harmless
+    # only by luck -- curious and delight are both `dome` -- and would have
+    # started refusing or wrongly permitting the moment either moved tier.
+    need = SESSION_BEAT().required_tier()
     if B.tier_rank(need) > B.tier_rank(ceiling):
         print(f"daemon ceiling is {ceiling!r} but the behaviour needs "
               f"{need!r}. Relaunch:\n"
@@ -793,8 +824,13 @@ def run_session(args, *, now=time.monotonic, sleep=time.sleep) -> int:
                   "met and nothing would ever fire.")
             return 4
 
+        # The mood scalar, wired. Without it `express_delight` never receives
+        # an intensity and the happiness it earns is never banked, so D-018 --
+        # he always reacts, and the response varies with his state -- had zero
+        # working implementations despite both halves being built and tested.
         loop = Reactive(bridge, feed, thresholds, window_n,
-                        ceiling=ceiling, status=status, now=now, sleep=sleep)
+                        ceiling=ceiling, status=status, now=now, sleep=sleep,
+                        mood=r2_mood.Mood(MOOD_STORE))
 
         print(f"STILL HANDS OFF. Negative control for {args.control:.0f}s — "
               f"proving it can stay quiet...")

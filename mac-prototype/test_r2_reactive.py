@@ -27,6 +27,7 @@ class FakeStatusBridge(B.Bridge):
 
     def running(self):
         return True
+import r2_mood
 import r2_reactive as R
 from sensor_probe import GROUPS, EXT_GROUPS, masks, channels, empirical_thresholds
 
@@ -277,14 +278,33 @@ class TestReaction(unittest.TestCase):
         self.assertLessEqual(rec["settle_s"], R.SETTLE_MAX_S + R.POLL_S)
         self.assertTrue(rec["beat_ok"])
 
-    def test_the_beat_is_express_curious(self):
+    def test_the_default_beat_is_the_session_beat(self):
+        """This test used to assert `express_curious` and that is what PINNED
+        the bug: #86 shipped `express_delight` with no caller, and a green
+        suite asserting the old default made the deadness look intentional.
+
+        The class default is now SESSION_BEAT itself, so there is no second
+        opinion about what a touch produces."""
         c = Clock()
         b = ScriptedBridge(noisy=False)
         loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
                           now=c.now, sleep=c.sleep)
         rec = loop.react()
-        self.assertEqual(rec["beat"], "express_curious")
+        self.assertEqual(rec["beat"], "express_delight")
+        self.assertIs(loop.beat_factory, R.SESSION_BEAT)
         self.assertIn("dome", [s.op for s in b.sent])
+
+    def test_the_preflight_checks_the_tier_of_the_beat_that_will_run(self):
+        """AC3. Pointing the preflight at a different behaviour was harmless
+        only by luck -- curious and delight are both `dome`, so nothing could
+        detect the mismatch. Assert the RELATIONSHIP rather than the value, so
+        the day either behaviour changes tier the check follows it."""
+        import inspect
+        src = inspect.getsource(R.run_session)
+        self.assertIn("SESSION_BEAT().required_tier()", src,
+                      "the preflight must derive its tier from SESSION_BEAT, "
+                      "not from a separately named behaviour")
+        self.assertNotIn("B.express_curious().required_tier()", src)
 
     def test_the_beats_own_noise_is_flushed_before_recovery(self):
         """Hazard #1 in the module docstring: the beat turns the dome, the
@@ -589,19 +609,25 @@ class TestSessionWiring(unittest.TestCase):
         # them by name. Tests must not litter the runtime directory they are
         # testing.
         real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
+        real_mood = R.MOOD_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(d)
             # And the status store, for the same reason and a worse
             # consequence: the suite wrote {"state": "idle"} into the LIVE
             # store, so a test run could tell the next real session what R2 is.
             R.STATUS_STORE = Path(d) / "status.json"
+            # And the mood store, for the third time and the same reason:
+            # wiring the mood in (#97) made run_session PERSIST happiness,
+            # so without this the suite banks affection into the live file
+            # and tells the next real session R2 has just been petted.
+            R.MOOD_STORE = Path(d) / "mood.json"
             if seed_status:
                 R.StatusStore(R.STATUS_STORE).write(seed_status)
             try:
                 return R.run_session(args, now=c.now, sleep=c.sleep)
             finally:
                 R.FileBridge, R.LOG_DIR = real, real_dir
-                R.STATUS_STORE = real_store
+                R.STATUS_STORE, R.MOOD_STORE = real_store, real_mood
 
     def test_a_failing_connect_still_tidies_up(self):
         """connect() writes LEDs and sends a chirp, and send_batch raises on
@@ -805,6 +831,112 @@ class TestSessionWiring(unittest.TestCase):
                               for s in b.sent if s.op == "sensors"])
 
 
+class TestTheWiringIsActuallyReached(unittest.TestCase):
+    """#97. #86 shipped `express_delight` and a 225-line mood scalar with NO
+    CALLER, and every test stayed green -- because they all drove `Reactive`
+    directly with hand-passed kwargs, which is precisely the path a real
+    session does not take. Petting the real droid produced "what was that?"
+    forever.
+
+    So these tests assert reachability FROM WHERE THE PROGRAM STARTS, not that
+    the pieces exist. Deleting the wiring must fail here."""
+
+    def _capture_session(self, bridge):
+        """Run a real session, recording how `Reactive` was constructed."""
+        import argparse
+        import tempfile
+        seen = {}
+        real_cls = R.Reactive
+
+        def spy(*a, **kw):
+            seen.update(kw)
+            return real_cls(*a, **kw)
+
+        args = argparse.Namespace(baseline=30.0, control=20.0, max_s=5.0,
+                                  max_reactions=1, ceiling="dome", window=1.5)
+        c = Clock()
+        real_bridge, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
+        real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
+        real_mood = R.MOOD_STORE
+        R.Reactive = spy
+        with tempfile.TemporaryDirectory() as d:
+            R.LOG_DIR = Path(d)
+            R.STATUS_STORE = Path(d) / "status.json"
+            R.MOOD_STORE = Path(d) / "mood.json"
+            try:
+                R.run_session(args, now=c.now, sleep=c.sleep)
+            finally:
+                R.Reactive = real_cls
+                R.FileBridge, R.LOG_DIR = real_bridge, real_dir
+                R.STATUS_STORE, R.MOOD_STORE = real_store, real_mood
+        return seen
+
+    def test_the_session_gives_the_loop_a_mood(self):
+        """AC1/AC4. `Reactive` defaults `mood=None`, so a session that passes
+        nothing gets no intensity and banks no happiness -- silently, and with
+        every unit test still green. This is the assertion that was missing."""
+        seen = self._capture_session(SessionBridge(noisy=False))
+        self.assertIn("mood", seen,
+                      "run_session constructed Reactive without a mood — "
+                      "express_delight gets no intensity and happiness is "
+                      "never banked (#97)")
+        self.assertIsNotNone(seen["mood"])
+        self.assertIsInstance(seen["mood"], r2_mood.Mood)
+
+    def test_the_beat_the_session_runs_is_the_delight_beat(self):
+        """AC1. Not "the beat exists" -- the beat REACHED from the real
+        constructor. The session relies on the class default, which is
+        SESSION_BEAT itself, so there is exactly one name to change."""
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        self.assertIs(loop.beat_factory, R.SESSION_BEAT)
+        self.assertEqual(R.SESSION_BEAT().name, "express_delight")
+        self.assertEqual(loop.react()["beat"], "express_delight")
+
+    def test_happiness_moves_and_persists_through_the_real_path(self):
+        """AC2. The rise is applied by `react()` and must survive to disk:
+        a mood that resets every session is not a mood, it is a counter."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "mood.json"
+            t = [1000.0]
+            mood = r2_mood.Mood(path, clock=lambda: t[0])
+            before = mood.level()
+
+            c = Clock()
+            b = ScriptedBridge(noisy=False)
+            loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                              now=c.now, sleep=c.sleep, mood=mood)
+            rec = loop.react()
+
+            self.assertTrue(rec["beat_ok"], "precondition: the beat must run")
+            self.assertGreater(mood.level(), before,
+                               "a successful beat did not raise happiness")
+            self.assertTrue(path.exists(), "happiness was not persisted")
+            # And it is READ BACK, not merely written -- a reload is the only
+            # thing that proves the next session inherits it.
+            self.assertGreater(r2_mood.load(path, now=t[0]).level(t[0]), before)
+
+    def test_the_beat_receives_the_intensity_the_touch_found_him_in(self):
+        """The deficit is read BEFORE the rise is applied, so a starved R2
+        answers as starved. Reversed, he would be topped up first and always
+        reply as though he had been fine."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            t = [1000.0]
+            mood = r2_mood.Mood(Path(d) / "mood.json", clock=lambda: t[0])
+            starved = mood.intensity()
+            c = Clock()
+            b = ScriptedBridge(noisy=False)
+            loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                              now=c.now, sleep=c.sleep, mood=mood)
+            rec = loop.react()
+            self.assertEqual(rec["intensity"], starved,
+                             "the beat was given the intensity AFTER the rise")
+
+
 class TestTeardownAlwaysRuns(unittest.TestCase):
     """Every exit path must put R2 back. The setup used to sit OUTSIDE the
     try, so the one path that returned early skipped the teardown entirely."""
@@ -817,13 +949,15 @@ class TestTeardownAlwaysRuns(unittest.TestCase):
         c = Clock()
         real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
         real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
+        real_mood = R.MOOD_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(log_dir) if log_dir else Path(d)
             R.STATUS_STORE = Path(d) / "status.json"
+            R.MOOD_STORE = Path(d) / "mood.json"
             try:
                 return R.run_session(args, now=c.now, sleep=c.sleep)
             finally:
-                R.STATUS_STORE = real_store
+                R.STATUS_STORE, R.MOOD_STORE = real_store, real_mood
                 R.FileBridge, R.LOG_DIR = real, real_dir
 
     def test_a_failed_stream_enable_still_tidies_up(self):
@@ -895,13 +1029,15 @@ class TestRemainingGuards(unittest.TestCase):
         c = Clock()
         real, R.FileBridge = R.FileBridge, lambda *a, **k: bridge
         real_dir, real_store = R.LOG_DIR, R.STATUS_STORE
+        real_mood = R.MOOD_STORE
         with tempfile.TemporaryDirectory() as d:
             R.LOG_DIR = Path(d)
             R.STATUS_STORE = Path(d) / "status.json"
+            R.MOOD_STORE = Path(d) / "mood.json"
             try:
                 return (fn or R.run_session)(args, now=c.now, sleep=c.sleep)
             finally:
-                R.STATUS_STORE = real_store
+                R.STATUS_STORE, R.MOOD_STORE = real_store, real_mood
                 R.FileBridge, R.LOG_DIR = real, real_dir
 
     def test_too_few_channels_refuses_to_arm(self):
