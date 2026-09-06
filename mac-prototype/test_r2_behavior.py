@@ -890,6 +890,94 @@ class TestAC5NothingAboveDomeReachesTheSendPath(unittest.TestCase):
                                                 B.MIN_DOME_TRAVEL_DEG)
 
 
+class TestTheChirpCanBePinnedForAnExperiment(unittest.TestCase):
+    """The pool is a deterministic LRU, so consecutive beats are GUARANTEED to
+    sound different. Right for a droid, fatal for a trial that asks an operator
+    which of two beats was bigger -- they would hear a difference every time,
+    whatever the beat did. These bind the pinning hook that makes the trial
+    scorable at all."""
+
+    def _sound_of(self, beat):
+        ids = [st.params["id"] for ph in beat.phrases for st in ph.steps
+               if st.op == "sound"]
+        self.assertEqual(len(ids), 1, "a delight beat sends exactly one sound")
+        return ids[0]
+
+    def test_the_unpinned_pool_still_rotates(self):
+        # The property the pinning must not break. If this ever fails, the
+        # droid has started repeating himself.
+        picks = [self._sound_of(B.express_delight()) for _ in range(4)]
+        self.assertEqual(len(set(picks)), len(picks))
+
+    def test_a_pinned_beat_sends_exactly_the_pinned_id(self):
+        for wanted in sorted(B.DELIGHT_SOUNDS.ids)[:3]:
+            with self.subTest(sound=wanted):
+                self.assertEqual(
+                    self._sound_of(B.express_delight(sound=wanted)), wanted)
+
+    def test_pinning_holds_across_BOTH_lengths(self):
+        # The trial compares a full beat against a brief one. If pinning only
+        # worked on one branch the comparison would still be confounded.
+        for intensity in (1.0, 0.0):
+            with self.subTest(intensity=intensity):
+                self.assertEqual(
+                    self._sound_of(B.express_delight(intensity=intensity,
+                                                     sound=2919)), 2919)
+
+    def test_a_pinned_beat_does_NOT_consume_a_pick(self):
+        # THE guard. An implementation that picks and then discards the pick
+        # passes every test above while silently advancing the pool -- which
+        # shifts the sequence a later unpinned run is compared against.
+        #
+        # Snapshot the pool's recency state directly. An earlier version of
+        # this test computed the expected next id by CALLING pick(), which
+        # consumed the very pick it was predicting and failed against correct
+        # code. Observing a stateful thing by advancing it is not observation.
+        B.express_delight()                      # arbitrary starting state
+        snapshot = list(B.DELIGHT_SOUNDS._recent)
+        for _ in range(3):
+            B.express_delight(sound=1)
+        self.assertEqual(list(B.DELIGHT_SOUNDS._recent), snapshot,
+                         "a pinned beat moved the sound pool's recency state")
+
+    def test_the_guard_above_can_actually_fail(self):
+        # The positive control for the guard: an UNpinned beat must move the
+        # state the test above asserts is still. Without this, a snapshot that
+        # never changes for any reason would make the guard vacuous.
+        B.express_delight()
+        snapshot = list(B.DELIGHT_SOUNDS._recent)
+        B.express_delight()                      # unpinned -- must move it
+        self.assertNotEqual(list(B.DELIGHT_SOUNDS._recent), snapshot)
+
+
+class TestExpressionIsMonotonicInMagnitude(unittest.TestCase):
+    """#85 shipped `holo(160 if full else 200)`: the beat meaning "this
+    mattered LESS" opened BRIGHTER than the one meaning "this mattered". No
+    test pinned it, no ADR ruled on it, and #86 merged inert, so nobody ever
+    saw it render. The S7 trial asks an operator to judge which beat was
+    bigger, and this is one of the channels they judge it on."""
+
+    HOLO_BIT = 7
+
+    def _opening_holo(self, beat):
+        first = beat.phrases[0].steps[0]
+        self.assertEqual(first.op, "leds")
+        ch = first.params["channels"]
+        key = next(k for k in ch if str(self.HOLO_BIT) in str(k)) \
+            if not any(k == self.HOLO_BIT for k in ch) else self.HOLO_BIT
+        return ch[key]
+
+    def test_the_full_beat_does_not_open_dimmer_than_the_brief_one(self):
+        # Asserts the RELATIONSHIP, not the literal values, so a future retune
+        # of the brightness curve stays legal and an inversion does not.
+        full = self._opening_holo(B.express_delight(intensity=1.0))
+        brief = self._opening_holo(B.express_delight(intensity=0.0))
+        self.assertGreaterEqual(
+            full, brief,
+            f"full opens at {full}, brief at {brief} -- the channel carrying "
+            f"magnitude is backwards on magnitude")
+
+
 class TestAC7SoundVarietyHolds(unittest.TestCase):
 
     def test_four_consecutive_fires_use_four_different_ids(self):

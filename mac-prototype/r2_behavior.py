@@ -894,7 +894,7 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
 
 
 def express_delight(*, rest=BASE_NEUTRAL, intensity: float = 1.0,
-                    travel: float = 14.0) -> Beat:
+                    travel: float = 14.0, sound: int | None = None) -> Beat:
     """He was touched, and it landed. Composed from primitives (#85).
 
     `intensity` is 0..1 and comes from `r2_mood`: it is the DEFICIT, how much
@@ -931,13 +931,37 @@ def express_delight(*, rest=BASE_NEUTRAL, intensity: float = 1.0,
     # ONE pick per beat, whatever the length. Two picks in the full beat would
     # halve the pool's effective period and make AC7's "four fires, four ids"
     # depend on which pick you counted.
-    laugh = DELIGHT_SOUNDS.pick(avoid_last=3)
+    #
+    # `sound` PINS the id, and exists for one reason: the pool is a
+    # deterministic LRU, so consecutive beats are GUARANTEED to sound
+    # different. That is right for a droid and fatal for an experiment. The
+    # trial that asks "did the second pet render smaller?" cannot use a
+    # changing chirp as its evidence, and an operator told to watch for a
+    # difference will hear one every time whether or not the beat changed.
+    # Pin it, and whatever difference remains is the beat.
+    #
+    # A pinned beat must NOT consume a pick: perturbing the pool would shift
+    # the very sequence a later unpinned run is being compared against.
+    laugh = sound if sound is not None else DELIGHT_SOUNDS.pick(avoid_last=3)
 
     # Phrase 1 — the holo comes up and the logic panel lights. Brightness
     # only: both are on/off-ish channels whose curve is too steep for
     # anything subtle (D-012 Amendment A section 3).
+    # Full opens brighter than brief. It shipped the other way round in #85
+    # -- holo(160 if full else 200) -- which put the channel carrying
+    # magnitude BACKWARDS on magnitude: the beat meaning "this mattered less"
+    # opened brighter than the one meaning "this mattered". Nothing pinned
+    # those values, no ADR ruled on them, and #86 merged inert, so no one had
+    # ever seen either render. Corrected here because the trial in the S7 plan
+    # asks an operator to judge which of two beats was bigger, and this is one
+    # of the channels they would judge it on.
+    #
+    # Judgment call, and hardware may refute it: the alternative reading is
+    # that the brief beat has less runway to reach holo(255) and so should
+    # start closer to it. If the corrected version reads worse in the room,
+    # that is the finding -- record it rather than quietly reverting.
     opening = Phrase((
-        Step("leds", {"channels": {**holo(160 if full else 200),
+        Step("leds", {"channels": {**holo(200 if full else 160),
                                    **logic(255)}}),
     ), gap_s=0.15)
 
