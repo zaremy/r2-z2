@@ -1,0 +1,7 @@
+# Arms 2 and 3 link BLE + Wi-Fi + HTTP and overflow the default 1 MB app
+# partition (1.09 MB). All three arms use THIS table so the arms differ only in
+# the code under test, and so reflashing between them never swaps the layout.
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x6000
+phy_init,   data, phy,     0xf000,   0x1000
+factory,    app,  factory, 0x10000,  3M
