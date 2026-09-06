@@ -1,0 +1,29 @@
+I (408) r2_link: state -> scanning
+I (818) r2_link: found D2-6F6B
+I (818) r2_link: state -> connecting
+I (1238) r2_link: state -> handshaking
+I (3138) r2_link: state -> up
+I (3138) link_check: LINK UP -- R2 is listening
+I (3638) link_check: battery   4.42 V   (seq=0x01)
+I (6408) link_check: probing main app version (never sent before) ...
+I (6638) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (12638) link_check: dome      0.15 deg  (seq=0x06)
+I (18638) link_check: battery   4.42 V   (seq=0x09)
+W (27418) link_check: ESCAPE GAUNTLET: battery reads at the 6 sequence numbers the old unescaped encoder always lost
+I (27638) link_check: battery   4.42 V   (seq=0x8D)
+I (27938) link_check: battery   4.42 V   (seq=0xAB)
+I (28338) link_check: battery   4.42 V   (seq=0xD8)
+I (28738) link_check: battery   4.42 V   (seq=0x07)
+I (29138) link_check: battery   4.42 V   (seq=0x34)
+I (29538) link_check: battery   4.42 V   (seq=0x52)
+W (31328) link_check: ESCAPE GAUNTLET: 6/6 answered
+I (34328) link_check: -- battery 8/8  dome 1/1  version 1/1  wake-acks 9  unmatched 0  | gate admitted=20 refused=0  link sent=20 dropped=0
+I (34328) link_check:    main app version = 7.0.101  (LIBRARY CLAIM CONFIRMED ON HARDWARE -- first time this project has ever sent it)
+I (37588) link_check: battery   4.42 V   (seq=0x0F)
+I (46588) link_check: dome      0.15 deg  (seq=0x13)
+I (52588) link_check: battery   4.42 V   (seq=0x16)
+I (64348) link_check: -- battery 10/10  dome 2/2  version 1/1  wake-acks 19  unmatched 0  | gate admitted=33 refused=0  link sent=33 dropped=0
+I (64348) link_check:    main app version = 7.0.101  (LIBRARY CLAIM CONFIRMED ON HARDWARE -- first time this project has ever sent it)
+I (67588) link_check: battery   4.42 V   (seq=0x1C)
+I (76588) link_check: dome      0.15 deg  (seq=0x20)
+I (82588) link_check: battery   4.42 V   (seq=0x23)

@@ -2087,3 +2087,89 @@ already records this as cheap and unmeasured: stop the keepalive, then look at
 *Reversed by:* a firmware-level off being found that does not depend on our
 silence — which would make this a command after all — or the idle timeout
 measuring long enough that `released` is useless to show.
+
+## D-024 — Every frame is built by `r2_packet`, because the hand-built ones were silently wrong
+
+**Status:** accepted, 2026-09-05
+**Supersedes nothing. Closes the loop opened by #114 slice 1.**
+
+### The decision
+
+No code outside `firmware/platform/r2_packet/` may construct a Sphero frame.
+Sends go through `r2_gate_send()`, which encodes via `r2_packet_encode()`. This
+is a structural rule, not a style preference, and the reason is that the
+alternative was tried and failed measurably for weeks without anyone noticing.
+
+### What was wrong
+
+`coex_check/main/r2_central.c` built its packets by hand in three places and
+escaped none of them. The Sphero V2 framing reserves `0x8D` (SOP), `0xD8` (EOP)
+and `0xAB` (ESC); any of those appearing in a frame body must be escaped. The
+sequence byte is a counter that walks through all three, and the checksum
+computed over it can land on them too — so **six of every 256 packets were
+malformed**, not three. (The checksum route is the half that is easy to miss,
+and it doubles the rate.)
+
+### Why nobody saw it
+
+`coex_stats` recorded the ATT write status, and **the ATT write succeeds**. R2
+accepts the bytes at the link layer and discards the packet at the Sphero layer.
+A keepalive that silently fails to wake him is indistinguishable, to that
+instrument, from one that worked. The A1 arms reported `fail=0`, `fail=2`,
+`fail=2` and `disconnects=0` across 3,778 keepalives, and every one of those
+numbers was true.
+
+This is the same shape as the entries already in `CLAUDE.md` about validating an
+instrument: the measurement was real, it just measured a different layer than
+the one that was broken.
+
+### The evidence, which was in the repo the whole time
+
+`firmware/coex_check/results/escaping_forensics.py` re-derives this from the
+committed A1 logs. Consecutive battery replies sit exactly 21 sequence numbers
+apart, so a gap of 42 is one lost reply and the missing sequence number is
+arithmetic:
+
+| arm | replies | lost | lost to a mangled sequence number |
+|---|---|---|---|
+| `arm2-wifi-idle` | 58 | 4 | **4 / 4** |
+| `arm3-wifi-loaded` | 58 | 4 | **4 / 4** |
+
+**Eight for eight, across two independent arms, with no false positives.** The
+four sequence numbers are the same four in both arms because the counter is
+deterministic. Nothing else in either log needs explaining.
+
+### The fix, measured rather than argued
+
+`firmware/link_check` sends a battery read at each of the six mangled sequence
+numbers deliberately, instead of waiting for the counter to reach one by chance:
+
+```
+ESCAPE GAUNTLET: battery reads at the 6 sequence numbers the old
+                 unescaped encoder always lost
+battery 4.42 V (seq=0x8D)   battery 4.42 V (seq=0xAB)   battery 4.42 V (seq=0xD8)
+battery 4.42 V (seq=0x07)   battery 4.42 V (seq=0x34)   battery 4.42 V (seq=0x52)
+ESCAPE GAUNTLET: 6/6 answered
+```
+
+Full log: `firmware/link_check/results/first-contact-2026-09-05.txt`.
+
+### Consequences
+
+- `r2_uuids.h` in `platform/r2_link/` carries BLE identity only. The packet
+  constants were deleted from it; two copies of a protocol constant is how they
+  drift apart.
+- `coex_check` keeps its own copy and its bug. It is a finished experiment whose
+  results are already recorded and whose logs are the evidence above — editing it
+  now would invalidate the artefact without improving anything.
+- The rule has teeth because of the gate's send counter: a caller that builds
+  its own frame cannot move `r2_gate_stats()`, and `link_check` asserts that the
+  gate admitted exactly as many sends as the link transmitted.
+
+### What this does not claim
+
+That escaping was the only thing wrong. It explains 8 of 8 *lost battery
+replies*; it says nothing about the keepalives, whose failures are unobservable
+by construction — a mangled wake is silently dropped and the next one is three
+seconds behind. The keepalive loss rate for A1 is **unmeasurable after the
+fact** and is best estimated as the same 6-in-256, roughly 89 of 3,778.
