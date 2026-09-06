@@ -909,6 +909,17 @@ class TestTheChirpCanBePinnedForAnExperiment(unittest.TestCase):
         picks = [self._sound_of(B.express_delight()) for _ in range(4)]
         self.assertEqual(len(set(picks)), len(picks))
 
+    def test_an_id_outside_the_pool_is_REFUSED(self):
+        # The illegal case, written first. Without it `sound` is a hole
+        # through the curated-pool rule and the beat happily ships an id
+        # belonging to a different droid.
+        for bad in (1, -5, 0, 99999):
+            with self.subTest(sound=bad):
+                with self.assertRaises(ValueError) as cm:
+                    B.express_delight(sound=bad)
+                self.assertIn("pool", str(cm.exception),
+                              "the error must say WHY, not just raise")
+
     def test_a_pinned_beat_sends_exactly_the_pinned_id(self):
         for wanted in sorted(B.DELIGHT_SOUNDS.ids)[:3]:
             with self.subTest(sound=wanted):
@@ -935,8 +946,9 @@ class TestTheChirpCanBePinnedForAnExperiment(unittest.TestCase):
         # code. Observing a stateful thing by advancing it is not observation.
         B.express_delight()                      # arbitrary starting state
         snapshot = list(B.DELIGHT_SOUNDS._recent)
-        for _ in range(3):
-            B.express_delight(sound=1)
+        pinned = B.DELIGHT_SOUNDS.ids[0]         # a REAL id -- see the test
+        for _ in range(3):                       # above; sound=1 is refused
+            B.express_delight(sound=pinned)
         self.assertEqual(list(B.DELIGHT_SOUNDS._recent), snapshot,
                          "a pinned beat moved the sound pool's recency state")
 
