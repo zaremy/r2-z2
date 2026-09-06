@@ -338,6 +338,150 @@ static void test_battery_range(void)
     }
 }
 
+/* ---- LEDs (#114 slice 5) ------------------------------------------------ */
+
+/* THE test this project has been unable to write until now.
+ *
+ * Slice 2 shipped a permission ceiling and slices 3-4 gave it nothing to
+ * refuse: every op was READ tier, so the ceiling was exercised only against
+ * hypothetical did/cid pairs in the gate's own tests. An LED write is the
+ * first REAL op that sits above the default, and this is the first time the
+ * ladder has been asked to stop something a caller genuinely wanted to do.
+ *
+ * It runs before any test raises the ceiling, on purpose. */
+static void test_leds_are_refused_at_the_default_ceiling(void)
+{
+    CHECK(r2_gate_get_ceiling() == R2_TIER_READ,
+          "this test is void unless the ceiling is still at its default");
+
+    const uint8_t values[6] = { 255, 0, 0, 255, 0, 0 };
+    tx_calls = 0;
+    uint32_t admitted_before, refused_before, admitted_after, refused_after;
+    r2_gate_stats(&admitted_before, &refused_before);
+
+    CHECK(r2_ops_set_rgb(255, 0, 0, 0x40, fake_tx, NULL) == R2_GATE_ABOVE_CEILING,
+          "set_rgb was not refused at the READ ceiling");
+    CHECK(r2_ops_leds_off(0x41, fake_tx, NULL) == R2_GATE_ABOVE_CEILING,
+          "leds_off was not refused at the READ ceiling");
+    CHECK(r2_ops_set_leds(R2_LED_MASK_FRONT, values, 3, 0x42, fake_tx, NULL)
+              == R2_GATE_ABOVE_CEILING,
+          "set_leds was not refused at the READ ceiling");
+
+    /* Refusal means NOTHING WENT OUT. A verdict returned while the frame still
+     * reached the radio would be a log line, not a gate. */
+    CHECK(tx_calls == 0, "%d frames reached the wire from a refused LED write",
+          tx_calls);
+    r2_gate_stats(&admitted_after, &refused_after);
+    CHECK(admitted_after == admitted_before, "a refused LED write counted as admitted");
+    CHECK(refused_after - refused_before == 3, "3 refusals expected, gate counted %u",
+          refused_after - refused_before);
+}
+
+/* A value count that disagrees with the mask is the one way to build a packet
+ * that is well-formed and means something else: nothing in the payload states
+ * how many values follow, so R2 reads whatever is there. Refused before the
+ * gate, because it is malformed rather than forbidden. */
+static void test_leds_refuse_a_mask_and_value_mismatch(void)
+{
+    const uint8_t v[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    tx_calls = 0;
+
+    CHECK(r2_ops_set_leds(R2_LED_MASK_FRONT, v, 2, 0x50, fake_tx, NULL)
+              == R2_OPS_BAD_LED_REQUEST, "3-bit mask accepted 2 values");
+    CHECK(r2_ops_set_leds(R2_LED_MASK_FRONT, v, 4, 0x51, fake_tx, NULL)
+              == R2_OPS_BAD_LED_REQUEST, "3-bit mask accepted 4 values");
+    CHECK(r2_ops_set_leds(R2_LED_MASK_ALL, v, 7, 0x52, fake_tx, NULL)
+              == R2_OPS_BAD_LED_REQUEST, "8-bit mask accepted 7 values");
+    CHECK(r2_ops_set_leds(1u << R2_LED_LOGIC, v, 0, 0x53, fake_tx, NULL)
+              == R2_OPS_BAD_LED_REQUEST, "1-bit mask accepted 0 values");
+
+    CHECK(r2_ops_set_leds(0, v, 0, 0x54, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "an empty mask was accepted");
+    CHECK(r2_ops_set_leds(R2_LED_MASK_FRONT, NULL, 3, 0x55, fake_tx, NULL)
+              == R2_OPS_BAD_LED_REQUEST, "a null value array was accepted");
+
+    /* Bits above 7 are not channels on this droid. An unmapped bit is a guess
+     * about hardware, sent as a command. */
+    CHECK(r2_ops_set_leds(0x0100u, v, 1, 0x56, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "bit 8 was accepted as a channel");
+    CHECK(r2_ops_set_leds(0x8000u, v, 1, 0x57, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "bit 15 was accepted as a channel");
+    CHECK(r2_ops_set_leds(0x01FFu, v, 8, 0x58, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "a mask straddling bit 8 was accepted");
+
+    CHECK(tx_calls == 0, "a malformed LED write reached the wire");
+
+    /* And a malformed request must be rejected BEFORE the gate, so it cannot
+     * even be counted as something we tried to send. */
+    uint32_t a, r;
+    r2_gate_stats(&a, &r);
+    CHECK(r2_ops_set_leds(0, v, 0, 0x59, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "empty mask");
+    uint32_t a2, r2_;
+    r2_gate_stats(&a2, &r2_);
+    CHECK(a2 == a && r2_ == r, "a malformed request reached the gate's counters");
+}
+
+/* Raising the ceiling is the operator's decision. Once raised, the exact bytes
+ * matter: values are ordered by ASCENDING BIT, and getting that wrong swaps
+ * red for blue with no error anywhere. */
+static void test_leds_once_the_operator_raises_the_ceiling(void)
+{
+    r2_gate_set_ceiling(R2_TIER_LEDS);
+
+    tx_calls = 0;
+    CHECK(r2_ops_set_rgb(0x11, 0x22, 0x33, 0x60, fake_tx, NULL) > 0,
+          "set_rgb refused at the LEDS ceiling");
+    CHECK(tx_calls == 1, "set_rgb sent %d frames", tx_calls);
+
+    /* 8D 0A 1A 0E 60 00 77 11 22 33 11 22 33 <chk> D8
+     * mask 0x0077 is front RGB (0,1,2) + back RGB (4,5,6); six values follow in
+     * ascending bit order, so front then back. */
+    const uint8_t want_body[] = { 0x0A, 0x1A, 0x0E, 0x60,
+                                  0x00, 0x77, 0x11, 0x22, 0x33, 0x11, 0x22, 0x33 };
+    CHECK(tx_len == sizeof want_body + 3, "frame is %zu bytes, want %zu",
+          tx_len, sizeof want_body + 3);
+    CHECK(tx_buf[0] == 0x8D, "no SOP");
+    CHECK(memcmp(tx_buf + 1, want_body, sizeof want_body) == 0,
+          "LED frame body differs from the hand-computed bytes");
+    /* checksum = 0xFF - (sum of body & 0xFF) */
+    unsigned sum = 0;
+    for (size_t i = 0; i < sizeof want_body; i++) sum += want_body[i];
+    CHECK(tx_buf[1 + sizeof want_body] == (uint8_t)(0xFF - (sum & 0xFFu)),
+          "checksum wrong");
+    CHECK(tx_buf[tx_len - 1] == 0xD8, "no EOP");
+
+    /* leds_off must touch every channel, including logic and holo -- a
+     * teardown that leaves two fixtures lit is not a teardown. */
+    tx_calls = 0;
+    CHECK(r2_ops_leds_off(0x61, fake_tx, NULL) > 0, "leds_off refused");
+    CHECK(tx_buf[5] == 0x00 && tx_buf[6] == 0xFF, "leds_off mask is not 0x00FF");
+    for (int i = 0; i < 8; i++)
+        CHECK(tx_buf[7 + i] == 0x00, "leds_off value %d is not zero", i);
+
+    /* A single-channel write: logic on. One bit, one value. */
+    const uint8_t on[1] = { 255 };
+    tx_calls = 0;
+    CHECK(r2_ops_set_leds(1u << R2_LED_LOGIC, on, 1, 0x62, fake_tx, NULL) > 0,
+          "single-channel write refused");
+    CHECK(tx_buf[5] == 0x00 && tx_buf[6] == 0x08, "logic mask is not 0x0008");
+    CHECK(tx_buf[7] == 255, "logic value not carried");
+
+    /* Escaping still applies: 0xAB as a colour value must be escaped, and a
+     * hand-built encoder would have shipped it raw. D-024 exists because that
+     * went unnoticed for a whole endurance run. */
+    const uint8_t esc[3] = { 0x8D, 0xAB, 0xD8 };
+    tx_calls = 0;
+    CHECK(r2_ops_set_leds(R2_LED_MASK_FRONT, esc, 3, 0x63, fake_tx, NULL) > 0,
+          "a colour containing framing bytes was refused");
+    for (size_t i = 1; i + 1 < tx_len; i++)
+        CHECK(!(tx_buf[i] == 0x8D || tx_buf[i] == 0xD8),
+              "raw framing byte at offset %zu -- not escaped", i);
+
+    /* Put it back, so no later test inherits a raised ceiling. */
+    r2_gate_set_ceiling(R2_TIER_READ);
+}
+
 int main(void)
 {
     printf("r2_ops host tests\n");
@@ -351,6 +495,10 @@ int main(void)
     test_every_frame_was_admitted_by_the_gate();
     test_requests_are_permitted_at_the_default_ceiling();
     test_request_bytes();
+    printf("  leds\n");
+    test_leds_are_refused_at_the_default_ceiling();
+    test_leds_refuse_a_mask_and_value_mismatch();
+    test_leds_once_the_operator_raises_the_ceiling();
     printf("  decoding\n");
     test_captured_battery_frame();
     test_head_float_and_endianness();

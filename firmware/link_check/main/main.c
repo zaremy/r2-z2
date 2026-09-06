@@ -11,8 +11,12 @@
  * printed, and hex is why a 6.5% response loss sat in the logs for weeks
  * without anyone noticing it was there.
  *
- * SAFETY. Every op here is READ tier and the gate's ceiling is never raised,
- * so nothing in this app can move him. That is not a promise in a comment, it
+ * SAFETY. Every op here is READ or LEDS tier. The LED phase is opt-in at build
+ * time (-DLINK_CHECK_LEDS) and raises the ceiling exactly one rung, to 'leds',
+ * for the duration of one scripted sequence -- then puts it back. Nothing in
+ * this app can move him at any point: dome, stance, leg and drive commands sit
+ * above 'leds' AND are in the gate's FORBIDDEN table, which is checked first
+ * and applies at every ceiling. That is not a promise in a comment, it
  * is the default ceiling plus a FORBIDDEN table that rejects drive, leg and
  * animation commands at every tier. The one write is the wake keepalive, which
  * is idempotent and is what stops him sleeping mid-run.
@@ -169,12 +173,100 @@ static void report(void)
         ESP_LOGW(TAG, "   version probe: no answer and no refusal (silence)");
 }
 
+#ifdef LINK_CHECK_LEDS
+/* ONE LED STEP PER FLASH, and the state HOLDS until the next flash.
+ *
+ * The first attempt ran all six steps back to back on five-second timers. That
+ * is the "fixed lead-in" failure the survey skill warns about, wearing a
+ * different hat: the observer gets one five-second window per step and no way
+ * to ask for a second look. It produced zero observations.
+ *
+ * So: -DLINK_CHECK_LED_STEP=N fires exactly step N, once, and then does
+ * nothing. The colour stays on him for as long as it takes to look, walk
+ * closer, and say what it is. The ceiling is raised for the one write and put
+ * back immediately -- a rung that stays open because it is convenient is a rung
+ * that has stopped meaning anything.
+ */
+#ifndef LINK_CHECK_LED_STEP
+#define LINK_CHECK_LED_STEP 1
+#endif
+
+static void led_step(void)
+{
+    const uint8_t logic_on[1]  = { 255 };
+    const uint8_t holo_half[1] = { 128 };
+    const uint8_t off8[8]      = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    const int n = LINK_CHECK_LED_STEP;
+    int rc = 0;
+
+    ESP_LOGW(TAG, "=== LED STEP %d ===", n);
+    r2_gate_set_ceiling(R2_TIER_LEDS);
+
+    switch (n) {
+    case 1:
+        ESP_LOGW(TAG, "expect: front AND back lenses RED, and they STAY red");
+        rc = r2_ops_set_rgb(255, 0, 0, next_seq(), r2_link_send, NULL);
+        break;
+    case 2:
+        ESP_LOGW(TAG, "expect: front AND back lenses GREEN");
+        rc = r2_ops_set_rgb(0, 255, 0, next_seq(), r2_link_send, NULL);
+        break;
+    case 3:
+        ESP_LOGW(TAG, "expect: front AND back lenses BLUE");
+        rc = r2_ops_set_rgb(0, 0, 255, next_seq(), r2_link_send, NULL);
+        break;
+    case 4:
+        ESP_LOGW(TAG, "expect: RGB lenses dark, LOGIC PANELS lit (square grids)");
+        r2_ops_set_leds(R2_LED_MASK_ALL, off8, 8, next_seq(), r2_link_send, NULL);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        rc = r2_ops_set_leds(1u << R2_LED_LOGIC, logic_on, 1, next_seq(),
+                             r2_link_send, NULL);
+        break;
+    case 5:
+        ESP_LOGW(TAG, "expect: everything dark except the HOLO lens at HALF (128/255)");
+        r2_ops_set_leds(R2_LED_MASK_ALL, off8, 8, next_seq(), r2_link_send, NULL);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        rc = r2_ops_set_leds(1u << R2_LED_HOLO, holo_half, 1, next_seq(),
+                             r2_link_send, NULL);
+        break;
+    case 6:
+        ESP_LOGW(TAG, "expect: ALL EIGHT channels dark. He does NOT return to his");
+        ESP_LOGW(TAG, "        own red/blue idiom -- a colour we set is state and");
+        ESP_LOGW(TAG, "        it holds (r2-capabilities.md:852). Dark is where he");
+        ESP_LOGW(TAG, "        stays until something sets him otherwise.");
+        rc = r2_ops_leds_off(next_seq(), r2_link_send, NULL);
+        break;
+    case 7:
+        ESP_LOGW(TAG, "expect: HOLO at FULL (255) -- the comparison step 5 needs,");
+        ESP_LOGW(TAG, "        because 'half' is not a judgement anyone can make");
+        ESP_LOGW(TAG, "        without seeing full.");
+        r2_ops_set_leds(R2_LED_MASK_ALL, off8, 8, next_seq(), r2_link_send, NULL);
+        vTaskDelay(pdMS_TO_TICKS(400));
+        { const uint8_t full[1] = { 255 };
+          rc = r2_ops_set_leds(1u << R2_LED_HOLO, full, 1, next_seq(),
+                               r2_link_send, NULL); }
+        break;
+    default:
+        ESP_LOGE(TAG, "no such step");
+        break;
+    }
+
+    r2_gate_set_ceiling(R2_TIER_READ);
+    ESP_LOGW(TAG, "step %d sent (rc=%d), ceiling back to '%s'. Holding.",
+             n, rc, r2_gate_tier_name(r2_gate_get_ceiling()));
+    ESP_LOGW(TAG, "NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any");
+    ESP_LOGW(TAG, "      fixture lit -- only the operator can say that.");
+}
+#endif
+
 static void ops_task(void *arg)
 {
     (void)arg;
     int tick = 0;
     bool probed_version = false;
     bool ran_gauntlet   = false;
+    bool ran_leds       = false;
+    (void)ran_leds;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(3000));
@@ -226,6 +318,10 @@ static void ops_task(void *arg)
             ESP_LOGW(TAG, "ESCAPE GAUNTLET: %"PRIu32"/%"PRIu32" answered",
                      s_gauntlet_ok, s_gauntlet_sent);
         }
+
+#ifdef LINK_CHECK_LEDS
+        if (!ran_leds) { ran_leds = true; led_step(); }
+#endif
 
         if (++tick % 10 == 0) report();
     }

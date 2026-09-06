@@ -10,6 +10,9 @@
 #define CID_GET_HEAD    0x14
 #define CID_APP_VERSION 0x00
 
+#define DID_IO          0x1A
+#define CID_LEDS_16BIT  0x0E
+
 int r2_ops_request_battery(uint8_t seq, r2_tx_fn tx, void *ctx)
 { return r2_gate_send(DID_POWER, CID_BATTERY, seq, NULL, 0, tx, ctx); }
 
@@ -18,6 +21,62 @@ int r2_ops_request_head(uint8_t seq, r2_tx_fn tx, void *ctx)
 
 int r2_ops_probe_version(uint8_t seq, r2_tx_fn tx, void *ctx)
 { return r2_gate_send(DID_SYSTEM_INFO, CID_APP_VERSION, seq, NULL, 0, tx, ctx); }
+
+/* ---- LEDs --------------------------------------------------------------- */
+
+static int popcount16(uint16_t v)
+{
+    int n = 0;
+    while (v) { n += (v & 1u); v >>= 1; }
+    return n;
+}
+
+int r2_ops_set_leds(uint16_t mask, const uint8_t *values, size_t n_values,
+                    uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    /* Refuse before the gate, because these are malformed rather than
+     * forbidden, and the two deserve different words. */
+    if (values == NULL) return R2_OPS_BAD_LED_REQUEST;
+    /* An empty mask would send a two-byte payload that sets nothing. R2 has
+     * never been asked that and the answer is not worth discovering by
+     * accident. */
+    if (mask == 0) return R2_OPS_BAD_LED_REQUEST;
+    /* Bits above 7 are not channels on this droid. The Mac layer refuses them
+     * (r2_probe.py:1300) and so does this one -- an unmapped bit is a guess
+     * about hardware, sent as a command. */
+    if (mask > R2_LED_MASK_ALL) return R2_OPS_BAD_LED_REQUEST;
+    /* THE guard. The payload carries one value per set bit and nothing states
+     * the count, so a mismatch does not error -- R2 reads the wrong bytes as
+     * values, or runs off the end of the payload. It is the one way to build a
+     * packet that is well-formed and means something else. */
+    if (n_values != (size_t)popcount16(mask)) return R2_OPS_BAD_LED_REQUEST;
+
+    uint8_t payload[2 + 16];
+    payload[0] = (uint8_t)(mask >> 8);
+    payload[1] = (uint8_t)(mask & 0xFFu);
+    memcpy(payload + 2, values, n_values);
+
+    return r2_gate_send(DID_IO, CID_LEDS_16BIT, seq,
+                        payload, 2u + n_values, tx, ctx);
+}
+
+int r2_ops_set_rgb(uint8_t r, uint8_t g, uint8_t b,
+                   uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    /* Ascending bit order: front R,G,B (0,1,2) then back R,G,B (4,5,6).
+     * Bits 3 and 7 are left alone -- logic and holo are brightness-only
+     * channels and folding them into a colour call would be a lie about what
+     * they can do. */
+    const uint8_t values[6] = { r, g, b, r, g, b };
+    return r2_ops_set_leds(R2_LED_MASK_FRONT | R2_LED_MASK_BACK,
+                           values, sizeof values, seq, tx, ctx);
+}
+
+int r2_ops_leds_off(uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    const uint8_t values[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    return r2_ops_set_leds(R2_LED_MASK_ALL, values, sizeof values, seq, tx, ctx);
+}
 
 /* Shared preamble: the response must BE this op, and must not carry an error.
  * Checking did/cid is not pedantry -- responses arrive asynchronously on one

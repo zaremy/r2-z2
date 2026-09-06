@@ -1,0 +1,5 @@
+I (1973938) link_check: battery   4.42 V   (seq=0x56)
+I (1985718) link_check: -- battery 138/138  dome 66/66  version 1/1  wake-acks 659  unmatched 0  | gate admitted=865 refused=0  link sent=865 dropped=0
+I (1985728) link_check:    main app version = 7.0.101  (LIBRARY CLAIM CONFIRMED ON HARDWARE -- first time this project has ever sent it)
+I (1988938) link_check: battery   4.42 V   (seq=0x5C)
+I (1997938) link_check: dome      0.15 deg  (seq=0x60)
