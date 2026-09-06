@@ -74,11 +74,22 @@ from capture import FORMAT, AudioFormat, FormatError
 # Recorded as a starting point rather than a tuned value; see #42 AC3.
 DEFAULT_SENSITIVITY = 0.5
 
-# The operator's phrase. Points at a trained model rather than a stock name,
-# because no free engine ships "z2" -- see the docstring above. Anchored to
-# this package rather than the cwd so `python3 -m voice` works from anywhere.
+# The wake model we actually ship. Anchored to this package rather than the
+# cwd so `python3 -m voice` works from anywhere.
+#
+# THE OPERATOR'S PHRASE IS "z2" AND THIS IS NOT IT.
+#   "z2" was chosen (#42) and no free engine ships it, so it needs training --
+#   README "Training your own" is the recipe. That training never happened, so
+#   `models/z2.onnx` has never existed on disk. Pointing the default at it made
+#   the default unusable: every caller that did not pass `keywords=` hit the
+#   does-not-exist guard below. `converse.py` happened to pass its own path, so
+#   the whole voice loop ran while this constant was dead -- the same shape as
+#   the CLI that re-declared NOISE_MARGIN_DB and made the class constant inert.
+#   Until z2 is trained, the shipped default is the community r2d2 model and the
+#   spoken phrase is "R2-D2". Swap this line when z2.onnx lands; do not swap it
+#   back to a filename that is not in `models/`.
 MODELS_DIR = Path(__file__).resolve().parent / "models"
-DEFAULT_KEYWORD = str(MODELS_DIR / "z2.onnx")
+DEFAULT_KEYWORD = str(MODELS_DIR / "r2d2.onnx")
 
 
 @dataclass(frozen=True)

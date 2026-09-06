@@ -354,10 +354,37 @@ class TestWakeEngineSeam(unittest.TestCase):
         self.assertIn("does not exist yet", msg)
         self.assertIn("README", msg)
 
-    def test_the_default_keyword_is_the_operators_phrase(self):
-        self.assertTrue(W.DEFAULT_KEYWORD.endswith("z2.onnx"))
-        # Anchored to the package, not the cwd, so `-m voice` works anywhere.
-        self.assertTrue(Path(W.DEFAULT_KEYWORD).is_absolute())
+    def test_the_default_keyword_lives_in_the_models_dir(self):
+        """Always checkable: the default must point INTO `voice/models/`.
+
+        Anchored to the package, not the cwd, so `-m voice` works anywhere.
+        """
+        p = Path(W.DEFAULT_KEYWORD)
+        self.assertTrue(p.is_absolute())
+        self.assertEqual(p.parent, W.MODELS_DIR)
+
+    def test_the_default_keyword_names_a_model_that_is_actually_there(self):
+        """The property that matters, and the one the old test missed.
+
+        The old assertion was `endswith("z2.onnx")`. It stayed green for weeks
+        while no z2.onnx had ever been trained, because it pinned the STRING
+        and not the FILE. A default naming a missing model is not a default:
+        `OpenWakeWordEngine(keywords=None)` raises on it, so every caller that
+        did not pass its own path was broken.
+
+        `voice/models/*.onnx` is gitignored (.gitignore:58) -- the models are
+        downloaded per machine, never committed. So this SKIPS on a bare clone
+        rather than failing, and does the real check on any machine that has
+        run the README's setup. That is the machine the bug bites on.
+        """
+        if not any(W.MODELS_DIR.glob("*.onnx")):
+            self.skipTest("no models downloaded here; see voice/README.md")
+        self.assertTrue(
+            Path(W.DEFAULT_KEYWORD).exists(),
+            f"DEFAULT_KEYWORD names {Path(W.DEFAULT_KEYWORD).name!r}, which is "
+            f"not in voice/models/ (found: "
+            f"{sorted(p.name for p in W.MODELS_DIR.glob('*.onnx'))}). "
+            f"Point it at a model the README actually installs.")
 
     def test_unknown_engine_names_are_refused(self):
         with self.assertRaises(ValueError):
