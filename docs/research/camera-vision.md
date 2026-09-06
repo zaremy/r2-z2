@@ -4,7 +4,8 @@ Started from one question — *"how do we add a camera, can we just plug one int
 USB-C?"* — and the answer moved three times: to **no**, then to a placement
 ruling, then to a constraint nobody had costed.
 
-**Nothing here is decided except placement.** When this hardens it needs an ADR
+**Two things are decided — placement (§2) and the privacy line (§7) — and
+neither has an ADR yet.** When this hardens it needs an ADR
 in `decisions.md` covering placement, the event-driven duty cycle and the tier
 split. This file is the evidence; the ruling is not written yet.
 
@@ -24,6 +25,9 @@ vendor docs this file rests on.
 4. **The dome build is two pieces on an FPC ribbon** — sensor head at the
    aperture, board and cell wherever they fit. That leaves exactly one viable
    option.
+5. **Images do not leave the house** — operator ruling, 2026-09-06. Storage and
+   inference are onboard microSD or a local server. This removes the cloud tier
+   §5 originally proposed and promotes the on-module NPU.
 
 ---
 
@@ -94,9 +98,11 @@ reason. The realistic shape is **capture JPEG → vision model → text back**,
 which is the cloud path D-015 already committed to and the deferred home server
 already anticipates.
 
-That is good news for scoping. A camera adds **no new architectural axis** — one
-more sensor feeding the same provider-agnostic cloud client, under the same rule
-that losing the cloud must degrade R2 to blind-and-mute, not dead.
+That is good news for scoping — with one correction the 2026-09-06 ruling forces.
+A camera still adds **no new architectural axis**: one more sensor feeding the
+same provider-agnostic reasoning client. But per §7 that client's vision path
+resolves to something **local** — the module's own NPU, the Mac, or a home
+server — never a third-party API.
 
 ---
 
@@ -223,10 +229,15 @@ own LCD and rotary encoder.
 
 ---
 
-## 5. Two tiers, and only one needs the cloud
+## 5. Two tiers, and neither of them is the cloud
 
-Option D is not competing with A — it is a different layer, and the pair answers
-the privacy question in §7 rather than deferring it.
+**Operator ruling, 2026-09-06: images do not leave the house.** Frames are stored
+on the onboard microSD card or on a local server, and inference happens on one of
+those. This is a *narrower* ruling than D-015 took for audio, deliberately — see
+§7.
+
+That kills the cloud tier this section originally proposed, and it changes what
+option D is for. The layering survives; only its second half moves inside.
 
 The **Grove Vision AI V2** runs a Himax WiseEye2 (Cortex-M55 + Ethos-U55 NPU) and
 infers *on the module*: person detection at **48–76 ms (13–21 fps)**, image
@@ -234,28 +245,44 @@ classification at 15 ms, 17-joint pose at ~8 fps, 80 mA peak, models deployable
 without writing inference code. It emits **a fact** — someone is present, someone
 is facing you, someone walked past — not a frame.
 
-That maps onto the split `intent.md` already mandates and D-015 already used for
-voice:
+- **Tier 1 — on the module: presence and attention.** Is a person here? Facing
+  me? Did something move? The reflex layer. Survives a dead internet by
+  construction, and at tens of milliseconds it is fast enough to drive a head
+  turn that reads as a reaction rather than a delay. No frame is produced at all,
+  so nothing has to be protected.
+- **Tier 2 — on a local machine: "what is that?"** One JPEG, on purpose, to the
+  Mac today or a home server later. Seconds of latency are fine because the
+  character is *deliberating*. The frame may be written to the onboard microSD
+  and collected, or pushed to the local machine directly.
 
-- **Tier 1 — local, always available: presence and attention.** Is a person here?
-  Facing me? Did something move? This is the reflex layer, it must survive a dead
-  internet, and at tens of milliseconds it is fast enough to drive a head turn
-  that reads as a reaction rather than a delay. No image leaves the house.
-- **Tier 2 — cloud, rare: "what is that?"** One JPEG, on purpose, when the
-  behaviour engine has a question Tier 1 cannot answer. Seconds of latency are
-  fine because the character is *deliberating*, and the volume is low enough that
-  cost never becomes a design input.
+`intent.md` says the cloud is for the unusual; the ruling says vision has no
+cloud at all. Tier 1 is the routine and Tier 2 is the unusual, and both are
+local.
 
-`intent.md` says the cloud is for the unusual. Tier 1 is the routine and it is
-local; Tier 2 is the unusual and it is not. Worth recording: this is the **second
-sensor to land in the same shape**. That is a pattern in the architecture, not a
-coincidence, and it argues for writing the shape down once rather than
-re-deriving it per sensor.
+### What the ruling costs, stated plainly
 
-**The honest caveat:** two boards is more than one. Tier 1 only earns its board
-once a behaviour *consumes* "a person is present" and does something visibly
-different with it. Until then **A alone, event-driven, answers every question on
-the table.** D is the upgrade path, not the starting kit.
+**It promotes option D from optional to likely load-bearing.** The original §5
+could afford to defer the Grove module because a cloud VLM covered anything the
+local layer could not answer. With no cloud, the only two places inference can
+happen are the module and a local machine — and a local machine is not always
+awake, not always reachable from a droid on a rug, and, for anything
+always-on, is the **home server D-015 deferred**. `CLAUDE.md`'s no-Pi rule binds
+here too. So the choice is now: on-module NPU, or accept that vision only works
+when a local machine is up.
+
+**It makes the microSD path load-bearing, and that path is still unmeasured.**
+[board-capabilities.md](board-capabilities.md) records the microSD as untested on
+this unit. Storing frames on it is a new requirement, not an existing capability.
+
+**It opens a question the ruling does not answer: retention.** "Stored on the SD
+card" says where, not for how long, nor what happens to the card. That is a
+smaller decision than the one just made, but it is not zero, and it should be
+taken rather than defaulted.
+
+**The honest caveat, unchanged in shape:** two boards is more than one. Tier 1
+only earns its board once a behaviour *consumes* "a person is present" and does
+something visibly different with it. Until then a XIAO alone, event-driven,
+answers every question on the table.
 
 ---
 
@@ -266,8 +293,8 @@ job is purely mechanical when it comes:
 
 1. **Mac webcam, now, zero hardware.** The Mac is already the development host
    and holds the BLE link. Proves the only novel part — capture → vision model →
-   a behaviour R2 performs — against the same provider-agnostic client D-015
-   committed to. Needs no robot.
+   a behaviour R2 performs — with the model running **locally on the Mac**, per
+   the §7 ruling. Needs no robot, and no network.
 2. **Bench the ribbon before anything is opened.** How long can the FPC run
    before frames corrupt? Its answer is the mounting envelope every later
    decision is drawn inside. Needs no robot and no disassembly.
@@ -293,12 +320,26 @@ rather than OV2640, which changes which spare lens modules mate with it.
 
 ---
 
-## 7. Open — operator's call
+## 7. Ruled — images do not leave the house
 
-**May household images leave the house?** D-015 scoped the cloud exposure for
-**audio**. A camera in a home is a different privacy object, and the ruling should
-be taken deliberately rather than inherited from the voice decision. The two-tier
-design in §5 exists partly to make "no" a cheap answer rather than a sacrifice.
+**Operator ruling, 2026-09-06.** Frames are stored on the onboard microSD card or
+on a local server. Nothing goes to a third-party API.
+
+This is deliberately **narrower than D-015**, which accepted cloud exposure for
+the voice path. The two are not inconsistent: a camera in a home is a different
+privacy object from a microphone, and the ruling was taken on its own terms
+rather than inherited. D-015's reasoning — that the exposure is acceptable
+*because it is confined* — is what makes a tighter line here coherent rather than
+contradictory.
+
+Consequences are worked through in §5. The short version: no cloud tier, option D
+promoted, the microSD path becomes load-bearing while still unmeasured, and
+retention is now the open sub-question.
+
+**Still owed: the ADR.** Placement (§2) and this ruling are both operator
+decisions recorded here as evidence. Neither is written into `decisions.md` yet,
+and both should be — as an extension of D-015 rather than an exception to it, per
+`CLAUDE.md`'s rule that a rule quietly broken once stops being believed.
 
 ---
 
