@@ -1,0 +1,31 @@
+I (1074) panel: STATUS frame drawn; ceiling is 'read'
+I (1133) r2_link: state -> scanning
+I (1136) panel: link -> scanning
+I (1461) r2_link: found D2-6F6B
+I (1462) r2_link: state -> connecting
+I (1462) panel: link -> connecting
+I (1875) r2_link: state -> handshaking
+I (1875) panel: link -> handshaking
+I (3775) r2_link: state -> up
+I (3775) panel: link -> up
+I (4144) panel: t+3s  answered 0/1  | gate adm=2 ref=0  link sent=2 drop=0
+I (17435) shot: SHOT #1 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (17436) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (64170) panel: t+63s  answered 4/5  | gate adm=26 ref=0  link sent=26 drop=0
+I (78735) shot: SHOT #2 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (78735) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (124197) panel: t+123s  answered 8/9  | gate adm=50 ref=0  link sent=50 drop=0
+I (140041) shot: SHOT #3 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (140042) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (184224) panel: t+183s  answered 12/13  | gate adm=74 ref=0  link sent=74 drop=0
+I (201345) shot: SHOT #4 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (201345) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (244252) panel: t+243s  answered 16/17  | gate adm=98 ref=0  link sent=98 drop=0
+I (262647) shot: SHOT #5 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (262647) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (304280) panel: t+303s  answered 20/21  | gate adm=122 ref=0  link sent=122 drop=0
+I (323950) shot: SHOT #6 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (323950) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin
+I (364308) panel: t+363s  answered 24/25  | gate adm=146 ref=0  link sent=146 drop=0
+I (385249) shot: SHOT #7 ready: 368x448, 329744 B at partition 'storage' offset 0
+I (385249) shot:   read it: idf.py partition-table  /  esptool read_flash 0xC20000 0x50810 shot.bin

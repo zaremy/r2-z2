@@ -1,0 +1,57 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+# CONFIG_LV_USE_PERF_MONITOR is not set   # an FPS overlay is not part of the design
+# NOT enabled, unlike tap_target_check. Putting LVGL's hot paths in IRAM is
+# free for a display-only app and is not free here: this is the first app that
+# runs LVGL and the BLE controller at once, and NimBLE wants IRAM too. Together
+# they overflow it, and the failure does not say so -- the linker reports
+# "dangerous relocation: j: cannot encode: xt_debugexception", which is the
+# exception vector table having been pushed out of range and reads like a
+# toolchain fault rather than a budget one.
+# CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM is not set
+
+# --- BLE central, so the panel holds its own link to R2 (D-006) -------------
+# Not a Wi-Fi bridge from the Mac. #107 demonstrated NimBLE central on this
+# board; #114 built the stack on top of it. This is the first app that needs
+# both the glass and the radio at once.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+
+# No ESP-Brookesia. #101 child 1, decided: plain LVGL 9.
+# Brookesia's value was "our app beside the vendor's", and D-022 removed the
+# vendor's -- we ship our own partition table. D-021 removed its launcher's
+# purpose too, since we own idle and there is no home to return to. What was
+# left was a 4.46 MB shell that pins lvgl 9.2.* (forcing esp_lvgl_port back to
+# 2.6.0), ships no 368x448 stylesheet, and whose straight-to-boot path is
+# undemonstrated -- which is precisely the path we need.
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_34=y
+CONFIG_LV_USE_SNAPSHOT=y
+
+# LVGL allocates from the ESP heap, not its own 64 KB pool.
+#
+# lv_snapshot_take() needs 368*448*2 = 322 KB for one RGB565 frame. With
+# LVGL's builtin allocator that request fails while heap_caps reports 7.2 MB
+# free in PSRAM -- two heaps, and the error message names the one that is fine.
+# CLIB malloc routes LVGL through the ESP allocator, which reaches PSRAM.
+CONFIG_LV_USE_CLIB_MALLOC=y
