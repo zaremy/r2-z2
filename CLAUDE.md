@@ -70,6 +70,18 @@ little entity is continuously present in the household.
   file and `open -a Terminal` it — launchd spawns it and Terminal is
   responsible. Always `ps aux | grep r2_probe` first; a stale daemon holds the
   link and the new one fails with a misleading "R2-D2 not found".
+- **`.bridge/daemon.lock` existing is not a live link — the `connected` flag
+  is.** The lock is written when the daemon *starts*, and `mark_daemon_connected`
+  adds `"connected": true`, `connected_at` and the droid id (`D2-XXXX`) only
+  after CoreBluetooth actually attaches. That gap is ~12-13 s of scanning,
+  measured across three bring-ups on 2026-09-06. Polling for the file alone
+  reports a live droid during the scan window and, worse, reports one after a
+  daemon that never found him. Same family as the queue dirs surviving the
+  daemon that made them: **existence is not liveness — poll for the flag.**
+
+  ```bash
+  grep -q '"connected": true' .bridge/daemon.lock   # this is the check
+  ```
 - **The dome has no resting position.** Observed at 103°, 3.3° and −0.06° in
   three sessions. `set_head_position` is absolute, so bound moves by *travel*
   from a freshly read position — never by destination, never from a remembered
