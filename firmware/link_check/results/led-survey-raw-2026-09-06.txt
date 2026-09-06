@@ -1,0 +1,150 @@
+I (339) link_check: link_check -- ceiling is 'read', nothing here can move him
+I (409) r2_link: state -> scanning
+I (849) r2_link: found D2-6F6B
+I (849) r2_link: state -> connecting
+I (1289) r2_link: state -> handshaking
+I (3189) r2_link: state -> up
+I (3189) link_check: LINK UP -- R2 is listening
+W (3409) link_check: === LED STEP 1 ===
+W (3409) link_check: expect: front AND back lenses RED, and they STAY red
+W (3429) link_check: step 1 sent (rc=15), ceiling back to 'read'. Holding.
+W (3429) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (3439) link_check:       fixture lit -- only the operator can say that.
+I (3639) link_check: battery   4.42 V   (seq=0x01)
+I (3699) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (6449) link_check: probing main app version (never sent before) ...
+I (6689) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (12689) link_check: dome      -0.27 deg  (seq=0x07)
+I (18689) link_check: battery   4.42 V   (seq=0x0A)
+W (27459) link_check: ESCAPE GAUNTLET: battery reads at the 6 sequence numbers the old unescaped encoder always lost
+I (27689) link_check: battery   4.42 V   (seq=0x8D)
+I (27989) link_check: battery   4.42 V   (seq=0xAB)
+I (28389) link_check: battery   4.42 V   (seq=0xD8)
+I (28789) link_check: battery   4.42 V   (seq=0x07)
+I (29189) link_check: battery   4.42 V   (seq=0x34)
+I (29589) link_check: battery   4.42 V   (seq=0x52)
+I (409) r2_link: state -> scanning
+I (859) r2_link: found D2-6F6B
+I (859) r2_link: state -> connecting
+I (1539) r2_link: state -> handshaking
+I (3439) r2_link: state -> up
+I (3439) link_check: LINK UP -- R2 is listening
+W (6409) link_check: === LED STEP 2 ===
+W (6409) link_check: expect: front AND back lenses GREEN
+W (6429) link_check: step 2 sent (rc=15), ceiling back to 'read'. Holding.
+W (6429) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (6439) link_check:       fixture lit -- only the operator can say that.
+I (6639) link_check: battery   4.42 V   (seq=0x01)
+I (6699) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (9449) link_check: probing main app version (never sent before) ...
+I (9689) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (15739) link_check: dome      -0.27 deg  (seq=0x07)
+I (21689) link_check: battery   4.42 V   (seq=0x0A)
+I (409) r2_link: state -> scanning
+I (589) r2_link: found D2-6F6B
+I (589) r2_link: state -> connecting
+I (1039) r2_link: state -> handshaking
+I (2939) r2_link: state -> up
+I (2939) link_check: LINK UP -- R2 is listening
+W (3419) link_check: === LED STEP 3 ===
+W (3419) link_check: expect: front AND back lenses BLUE
+W (3439) link_check: step 3 sent (rc=15), ceiling back to 'read'. Holding.
+W (3439) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (3449) link_check:       fixture lit -- only the operator can say that.
+I (3639) link_check: battery   4.42 V   (seq=0x01)
+I (3699) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (6459) link_check: probing main app version (never sent before) ...
+I (6689) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (12689) link_check: dome      -0.27 deg  (seq=0x07)
+I (329) link_check: link_check -- ceiling is 'read', nothing here can move him
+I (399) r2_link: state -> scanning
+I (849) r2_link: found D2-6F6B
+I (849) r2_link: state -> connecting
+I (1779) r2_link: state -> handshaking
+I (3679) r2_link: state -> up
+I (3679) link_check: LINK UP -- R2 is listening
+W (6399) link_check: === LED STEP 4 ===
+W (6399) link_check: expect: RGB lenses dark, LOGIC PANELS lit (square grids)
+I (6629) link_check: battery   4.42 V   (seq=0x01)
+I (6689) link_check: unmatched response did=0x1A cid=0x0E len=0
+W (6819) link_check: step 4 sent (rc=10), ceiling back to 'read'. Holding.
+W (6819) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (6829) link_check:       fixture lit -- only the operator can say that.
+I (6889) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (9829) link_check: probing main app version (never sent before) ...
+I (10029) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (409) r2_link: state -> scanning
+I (1089) r2_link: found D2-6F6B
+I (1089) r2_link: state -> connecting
+I (1539) r2_link: state -> handshaking
+I (3489) r2_link: state -> up
+I (3489) link_check: LINK UP -- R2 is listening
+W (6409) link_check: === LED STEP 5 ===
+W (6409) link_check: expect: everything dark except the HOLO lens at HALF (128/255)
+I (6639) link_check: battery   4.42 V   (seq=0x01)
+I (6699) link_check: unmatched response did=0x1A cid=0x0E len=0
+W (6829) link_check: step 5 sent (rc=10), ceiling back to 'read'. Holding.
+W (6829) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (6839) link_check:       fixture lit -- only the operator can say that.
+I (6899) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (9839) link_check: probing main app version (never sent before) ...
+I (10039) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (16089) link_check: dome      -0.27 deg  (seq=0x08)
+I (22089) link_check: battery   4.42 V   (seq=0x0B)
+I (329) link_check: link_check -- ceiling is 'read', nothing here can move him
+I (399) r2_link: state -> scanning
+I (719) r2_link: found D2-6F6B
+I (719) r2_link: state -> connecting
+I (1129) r2_link: state -> handshaking
+I (3029) r2_link: state -> up
+I (3029) link_check: LINK UP -- R2 is listening
+W (3399) link_check: === LED STEP 6 ===
+W (3399) link_check: expect: ALL EIGHT channels dark. He does NOT return to his
+W (3409) link_check:         own red/blue idiom -- a colour we set is state and
+W (3419) link_check:         it holds (r2-capabilities.md:852). Dark is where he
+W (3419) link_check:         stays until something sets him otherwise.
+W (3439) link_check: step 6 sent (rc=17), ceiling back to 'read'. Holding.
+W (3449) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (3449) link_check:       fixture lit -- only the operator can say that.
+I (3629) link_check: battery   4.42 V   (seq=0x01)
+I (3689) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (6459) link_check: probing main app version (never sent before) ...
+I (6689) link_check: *** VERSION ANSWERE
+I (409) r2_link: state -> scanning
+I (809) r2_link: found D2-6F6B
+I (809) r2_link: state -> connecting
+I (1739) r2_link: state -> handshaking
+I (3639) r2_link: state -> up
+I (3639) link_check: LINK UP -- R2 is listening
+W (6409) link_check: === LED STEP 7 ===
+W (6409) link_check: expect: HOLO at FULL (255) -- the comparison step 5 needs,
+W (6419) link_check:         because 'half' is not a judgement anyone can make
+W (6429) link_check:         without seeing full.
+I (6639) link_check: battery   4.42 V   (seq=0x01)
+I (6699) link_check: unmatched response did=0x1A cid=0x0E len=0
+W (6839) link_check: step 7 sent (rc=10), ceiling back to 'read'. Holding.
+W (6839) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (6849) link_check:       fixture lit -- only the operator can say that.
+I (6899) link_check: unmatched response did=0x1A cid=0x0E len=0
+I (9849) link_check: probing main app version (never sent before) ...
+I (10089) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (16089) link_check: dome      -0.27 deg  (seq=0x08)
+I (22089) link_check: battery   4.42 V   (seq=0x0B)
+I (409) r2_link: state -> scanning
+I (729) r2_link: found D2-6F6B
+I (739) r2_link: state -> connecting
+I (1189) r2_link: state -> handshaking
+I (3089) r2_link: state -> up
+I (3089) link_check: LINK UP -- R2 is listening
+W (3409) link_check: === LED STEP 8 ===
+W (3409) link_check: NULL CONTROL: ceiling deliberately LEFT at 'read'
+W (3419) link_check: expect: NOTHING. He must stay dark. If he goes red, the
+W (3429) link_check:         ceiling is decorative and slice 2 is a fiction.
+W (3429) link_check:   set_rgb(255,0,0) at ceiling 'read' -> refused: above the ceiling
+W (3439) link_check:   frames that reached the radio: 0  (MUST be 0)
+W (3449) link_check: step 8 sent (rc=-1), ceiling back to 'read'. Holding.
+W (3449) link_check: NOTE: rc>0 means R2 ACCEPTED the write. It does NOT mean any
+W (3459) link_check:       fixture lit -- only the operator can say that.
+I (3639) link_check: battery   4.42 V   (seq=0x01)
+I (6469) link_check: probing main app version (never sent before) ...
+I (6689) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds

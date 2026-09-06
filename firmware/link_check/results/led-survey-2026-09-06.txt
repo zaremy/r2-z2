@@ -1,0 +1,67 @@
+LED survey — #114 slice 5
+=========================
+2026-09-06. Operator at the droid; agent driving. R2 = D2-6F6B, on charger.
+One step per flash; each state HELD until the next flash, so every reading was
+taken with the state still on him and no timing to catch.
+
+METHOD NOTE, because the first attempt failed and the failure is instructive.
+Run 1 fired all six steps back to back on five-second timers. It produced ZERO
+observations: the operator was not at the droid, and by the time anyone looked
+he had been sitting on step 6 (all off) for 25 minutes and read as POWERED OFF.
+A five-second window per step is the "fixed lead-in" failure in a different
+hat. One step per flash, held indefinitely, produced 8/8 readings.
+
+rc>0 means R2 ACCEPTED the write. It is NOT evidence a fixture lit. Only the
+operator column is that.
+
+
+| step | commanded | predicted | OPERATOR SAW | verdict |
+|---|---|---|---|---|
+| 1 | front+back RGB = (255,0,0) | front AND back red | "front back red" | **CONFIRMED** |
+| 2 | front+back RGB = (0,255,0) | front AND back green | "green green" | **CONFIRMED** |
+| 3 | front+back RGB = (0,0,255) | front AND back blue | "blue blue" | **CONFIRMED** |
+| 4 | mask 0x0008, logic = 255 | RGB dark, logic panels lit | "logic panel confirmed" | **CONFIRMED** |
+| 5 | mask 0x0080, holo = 128 | holo lens lit at half | "holo confirmed" (lit; brightness not yet judged) | LIT — dimming unresolved |
+| 7 | mask 0x0080, holo = 255 | brighter than 128 | "brighter" | **CONFIRMED — holo is a real dimmer** |
+| 6 | mask 0x00FF, all = 0 | all eight dark, and he STAYS dark | "dark" | **CONFIRMED** |
+| 8 | set_rgb(255,0,0) with ceiling LEFT at read | NOTHING — refused, 0 frames sent | "still dark" | **CONFIRMED — the ceiling stops a real actuator** |
+
+FINDINGS
+--------
+1. All eight channels render, driven by the C platform stack (r2_ops -> r2_gate
+   -> r2_packet -> r2_link -> NimBLE). First LED render this project has ever
+   verified through firmware rather than the Mac prototype.
+
+2. HOLO DIMMING REPRODUCES THROUGH THE FIRMWARE PATH. 128 vs 255 is visibly
+   different ("brighter").
+
+   This is NOT a new hardware fact and was written up as one in a first draft
+   of this file. r2-capabilities.md already records a 255 -> 64 -> 16 sweep
+   showing bit 7 dims cleanly, measured months ago via the Mac prototype. What
+   is new here is only that the same behaviour reproduces when the bytes are
+   built by r2_packet and sent by r2_link instead of by Python -- a
+   port-validation result, which is worth having and is a smaller claim.
+
+   The comparison step was still worth adding mid-survey: "half" is not a
+   judgement anyone can make without seeing full, so asking about 128 alone
+   would have collected an opinion rather than a measurement.
+
+3. ALL-OFF HOLDS. He does not return to his own red/blue alternation. This
+   extends r2-capabilities.md:852 ("a colour we set HOLDS") to the zero case,
+   and it has a CX consequence the doc did not: a droid left all-dark reads as
+   BROKEN OR UNPLUGGED. The operator's words on walking up to him were "r2 is
+   off". He was not off -- the link was up and he was answering battery and
+   dome reads throughout.
+
+4. THE PERMISSION CEILING PHYSICALLY PREVENTS AN ACTUATOR. Step 8 is the null
+   control and the only step that tests the safety property rather than the
+   hardware: the same set_rgb(255,0,0) that lit him red in step 1, issued with
+   the ceiling left at its default 'read'. Firmware reported "refused: above
+   the ceiling" and "frames that reached the radio: 0"; the operator reported
+   "still dark".
+
+   Every other step raised the ceiling first, so all of them prove only that an
+   ALLOWED write renders. None of them shows that a REFUSED write does not --
+   and a gate that returns the right verdict while the frame still reaches the
+   radio is a log line, not a gate. Slice 2 shipped in July with no way to
+   demonstrate this; this is the demonstration.
