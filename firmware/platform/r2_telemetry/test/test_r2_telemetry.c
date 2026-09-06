@@ -1,0 +1,289 @@
+/* Host tests for the telemetry surface (#114 AC6).
+ *
+ * The property under test is not "the struct holds numbers". It is that a
+ * value CANNOT OUTLIVE THE LINK THAT CARRIED IT -- so nearly every test here
+ * is about a reading going away, or refusing to be shown, rather than about
+ * one arriving.
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "r2_telemetry.h"
+
+static int failures = 0, checks = 0;
+
+#define CHECK(cond, ...) do {                                \
+    checks++;                                                \
+    if (!(cond)) { failures++;                               \
+        printf("  FAIL: "); printf(__VA_ARGS__);             \
+        printf("\n        at %s:%d\n", __FILE__, __LINE__); }\
+} while (0)
+
+static r2_telemetry_t up_with_readings(uint32_t t0)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    r2_telemetry_link(&t, R2_TM_UP, t0);
+    r2_telemetry_battery(&t, 442, t0);
+    r2_telemetry_dome(&t, 0.15f, t0);
+    r2_telemetry_version(&t, 7, 0, 101, t0);
+    return t;
+}
+
+/* ---- the rule ----------------------------------------------------------- */
+
+static void test_readings_do_not_survive_the_link(void)
+{
+    /* Every non-UP state, because handling only DOWN is the obvious bug: a
+     * reconnect goes UP -> SCANNING -> CONNECTING -> HANDSHAKING -> UP and
+     * never visits DOWN at all. */
+    const r2_tm_link_t fell_to[] = {
+        R2_TM_DOWN, R2_TM_SCANNING, R2_TM_CONNECTING, R2_TM_HANDSHAKING
+    };
+    for (size_t i = 0; i < sizeof fell_to / sizeof fell_to[0]; i++) {
+        r2_telemetry_t t = up_with_readings(1000);
+        CHECK(t.battery.valid, "precondition: battery should be valid while up");
+
+        r2_telemetry_link(&t, fell_to[i], 2000);
+        CHECK(!t.battery.valid, "battery survived link -> %s",
+              r2_telemetry_link_name(fell_to[i]));
+        CHECK(!t.dome.valid, "dome survived link -> %s",
+              r2_telemetry_link_name(fell_to[i]));
+        CHECK(!t.version.valid, "version survived link -> %s",
+              r2_telemetry_link_name(fell_to[i]));
+
+        uint32_t age;
+        CHECK(!r2_telemetry_age_ms(&t.battery, 2000, &age),
+              "an invalidated reading still reported an age");
+    }
+}
+
+/* A reconnect must not republish the previous session's numbers. This is
+ * "assert the status on connect, never inherit it" applied to data. */
+static void test_a_new_link_does_not_inherit_the_old_ones_readings(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_link(&t, R2_TM_DOWN, 2000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 2100);
+    r2_telemetry_link(&t, R2_TM_UP, 3000);
+
+    CHECK(!t.battery.valid, "a reconnect inherited the previous session's battery");
+    CHECK(!t.dome.valid,    "a reconnect inherited the previous session's dome");
+    CHECK(!t.version.valid, "a reconnect inherited the previous session's version");
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, 3000, 60000),
+          "a freshly reconnected link offered a reading it has not taken yet");
+}
+
+/* Frames are in flight across a disconnect, so this is reachable, not
+ * theoretical -- and storing one resurrects exactly what the transition just
+ * forgot. */
+static void test_a_reading_arriving_while_down_is_discarded(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+
+    r2_telemetry_battery(&t, 442, 500);
+    CHECK(!t.battery.valid, "a battery reading was stored while the link was down");
+
+    r2_telemetry_link(&t, R2_TM_HANDSHAKING, 600);
+    r2_telemetry_battery(&t, 442, 700);
+    CHECK(!t.battery.valid, "a reading was stored during handshaking");
+
+    r2_telemetry_dome(&t, 12.0f, 700);
+    CHECK(!t.dome.valid, "a dome reading was stored during handshaking");
+    r2_telemetry_version(&t, 7, 0, 101, 700);
+    CHECK(!t.version.valid, "a version was stored during handshaking");
+
+    CHECK(t.responses == 0, "discarded readings were counted as responses");
+}
+
+static void test_nothing_is_displayable_when_the_link_is_not_up(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    CHECK(r2_telemetry_displayable(&t, &t.battery, 1000, 60000),
+          "precondition: a fresh reading on a live link should display");
+
+    r2_telemetry_link(&t, R2_TM_DOWN, 1001);
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, 1001, 60000),
+          "a reading was displayable with the link down -- this is the whole bug");
+    CHECK(!r2_telemetry_displayable(&t, &t.dome, 1001, 60000), "dome displayable when down");
+    CHECK(!r2_telemetry_displayable(&t, &t.version, 1001, 60000), "version displayable when down");
+}
+
+/* The link check inside displayable() is REDUNDANT with the invalidation that
+ * happens on a link transition -- and a mutation deleting it survived the
+ * first battery precisely because of that overlap: the reading was already
+ * invalid, so the test passed through the other guard.
+ *
+ * It is kept rather than deleted because the two guards sit in different
+ * places for different reasons. Invalidation is bookkeeping at the moment the
+ * link changes; this is the check AT THE POINT OF USE, and this repo's rule is
+ * that the guard belongs where the effect happens. r2_telemetry_t is a public
+ * struct: a caller can hold one this module never transitioned, and a future
+ * refactor could stop invalidating without anyone noticing this line was the
+ * only thing left.
+ *
+ * So it gets a test that can only pass through IT -- a reading marked valid
+ * beside a link that is not up, which the normal paths cannot produce. */
+static void test_displayable_refuses_a_dead_link_even_if_the_reading_looks_valid(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+
+    /* Hand-forced: valid reading, link not up. Unreachable through the API,
+     * which is the point -- this isolates the second guard from the first. */
+    t.link = R2_TM_DOWN;
+    CHECK(t.battery.valid, "precondition: the reading is still marked valid");
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, 1000, 60000),
+          "displayable() showed a valid reading beside a DOWN link");
+
+    t.link = R2_TM_SCANNING;
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, 1000, 60000),
+          "displayable() showed a valid reading while scanning");
+    t.link = R2_TM_HANDSHAKING;
+    CHECK(!r2_telemetry_displayable(&t, &t.dome, 1000, 60000),
+          "displayable() showed a valid reading while handshaking");
+
+    t.link = R2_TM_UP;
+    CHECK(r2_telemetry_displayable(&t, &t.battery, 1000, 60000),
+          "displayable() refused a valid reading on a live link");
+}
+
+/* ---- staleness ---------------------------------------------------------- */
+
+static void test_age_and_the_staleness_cutoff(void)
+{
+    r2_telemetry_t t = up_with_readings(10000);
+    uint32_t age;
+
+    CHECK(r2_telemetry_age_ms(&t.battery, 10000, &age) && age == 0, "age at t=0");
+    CHECK(r2_telemetry_age_ms(&t.battery, 15000, &age) && age == 5000, "age after 5 s");
+
+    CHECK(r2_telemetry_displayable(&t, &t.battery, 15000, 5000),
+          "exactly at the cutoff must display (<=, not <)");
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, 15001, 5000),
+          "one ms past the cutoff must not display");
+    CHECK(r2_telemetry_displayable(&t, &t.battery, 14999, 5000), "just inside the cutoff");
+}
+
+/* 2^32 ms is ~49.7 days. A droid that lives in a household reaches it, and the
+ * naive guard reports a wrapped reading as BRAND NEW -- the panel at its most
+ * confident exactly when its clock rolled over. */
+static void test_the_clock_wrap_at_49_days(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    const uint32_t before_wrap = 0xFFFFF000u;
+    r2_telemetry_link(&t, R2_TM_UP, before_wrap);
+    r2_telemetry_battery(&t, 442, before_wrap);
+
+    const uint32_t after_wrap = 0x00001000u;    /* 0x2000 ms later, wrapped */
+    uint32_t age;
+    CHECK(r2_telemetry_age_ms(&t.battery, after_wrap, &age),
+          "no age reported across the wrap");
+    CHECK(age == 0x2000u, "age across the wrap is %u ms, want %u", age, 0x2000u);
+    CHECK(!r2_telemetry_displayable(&t, &t.battery, after_wrap, 1000),
+          "a reading 8.2 s old across the wrap was shown as fresh");
+}
+
+static void test_age_refuses_when_there_is_nothing_to_age(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    uint32_t age = 0xDEADBEEF;
+    CHECK(!r2_telemetry_age_ms(&t.battery, 5000, &age),
+          "reported an age for a reading that never happened");
+    CHECK(age == 0xDEADBEEF, "clobbered the caller's variable on refusal");
+    CHECK(!r2_telemetry_age_ms(NULL, 5000, &age), "null stamp accepted");
+    r2_telemetry_t t2 = up_with_readings(1000);
+    CHECK(!r2_telemetry_age_ms(&t2.battery, 1000, NULL), "null out accepted");
+}
+
+static void test_nulls(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_reset(NULL);
+    r2_telemetry_link(NULL, R2_TM_UP, 0);
+    r2_telemetry_battery(NULL, 1, 0);
+    r2_telemetry_dome(NULL, 1.0f, 0);
+    r2_telemetry_version(NULL, 1, 1, 1, 0);
+    r2_telemetry_note_request(NULL);
+    CHECK(!r2_telemetry_displayable(NULL, &t.battery, 1000, 1000), "null telemetry");
+    CHECK(!r2_telemetry_displayable(&t, NULL, 1000, 1000), "null stamp");
+    checks++;  /* survived every null without crashing */
+}
+
+/* ---- values and accounting ---------------------------------------------- */
+
+static void test_values_are_carried(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    CHECK(t.battery_centivolts == 442, "battery %u", t.battery_centivolts);
+    CHECK(t.dome_degrees > 0.14f && t.dome_degrees < 0.16f, "dome %f", (double)t.dome_degrees);
+    CHECK(t.version_major == 7 && t.version_minor == 0 && t.version_revision == 101,
+          "version %u.%u.%u", t.version_major, t.version_minor, t.version_revision);
+    CHECK(t.link_since_ms == 1000, "link_since %u", t.link_since_ms);
+
+    /* A repeated identical value must still refresh the age -- otherwise a
+     * battery that reads 4.42 V for an hour (which is what a charging droid
+     * does) would age out and be hidden while it is being answered perfectly. */
+    r2_telemetry_battery(&t, 442, 50000);
+    uint32_t age;
+    CHECK(r2_telemetry_age_ms(&t.battery, 50000, &age) && age == 0,
+          "an unchanged value did not refresh its timestamp");
+}
+
+/* The ratio nobody was displaying is what hid the escaping bug for a whole
+ * endurance run. */
+static void test_request_response_accounting(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    r2_telemetry_link(&t, R2_TM_UP, 0);
+    for (int i = 0; i < 10; i++) r2_telemetry_note_request(&t);
+    for (int i = 0; i < 8; i++)  r2_telemetry_battery(&t, 442, 100);
+    r2_telemetry_note_refused(&t);
+    r2_telemetry_note_dropped(&t);
+    r2_telemetry_note_dropped(&t);
+
+    CHECK(t.requests == 10, "requests %u", t.requests);
+    CHECK(t.responses == 8, "responses %u", t.responses);
+    CHECK(t.refused == 1, "refused %u", t.refused);
+    CHECK(t.dropped == 2, "dropped %u", t.dropped);
+
+    /* answered must never exceed asked. A ratio that can go above 1 is worse
+     * than no ratio -- it makes the one number that would have exposed the
+     * escaping bug look like a broken counter instead of a finding. Caught on
+     * hardware: the version probe was answered and never counted as asked, and
+     * the panel line read "asked 2 answered 3". */
+    CHECK(t.responses <= t.requests,
+          "answered (%u) exceeds asked (%u) -- every response needs a counted request",
+          t.responses, t.requests);
+
+    /* Counters are session accounting, not readings: they describe what WE
+     * did, so a link drop must not erase them. */
+    r2_telemetry_link(&t, R2_TM_DOWN, 200);
+    CHECK(t.requests == 10 && t.responses == 8,
+          "a link drop erased the request accounting");
+}
+
+int main(void)
+{
+    printf("r2_telemetry host tests\n");
+    printf("  a value must not outlive its link\n");
+    test_readings_do_not_survive_the_link();
+    test_a_new_link_does_not_inherit_the_old_ones_readings();
+    test_a_reading_arriving_while_down_is_discarded();
+    test_nothing_is_displayable_when_the_link_is_not_up();
+    test_displayable_refuses_a_dead_link_even_if_the_reading_looks_valid();
+    printf("  staleness\n");
+    test_age_and_the_staleness_cutoff();
+    test_the_clock_wrap_at_49_days();
+    test_age_refuses_when_there_is_nothing_to_age();
+    test_nulls();
+    printf("  values\n");
+    test_values_are_carried();
+    test_request_response_accounting();
+
+    printf("\n%d checks, %d failures\n", checks, failures);
+    return failures ? 1 : 0;
+}

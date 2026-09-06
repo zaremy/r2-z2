@@ -34,6 +34,7 @@
 #include "r2_link.h"
 #include "r2_ops.h"
 #include "r2_packet.h"
+#include "r2_telemetry.h"
 
 static const char *TAG = "link_check";
 
@@ -71,6 +72,43 @@ static const uint8_t k_gauntlet[] = { 0x8D, 0xAB, 0xD8, 0x07, 0x34, 0x52 };
 static volatile uint32_t s_gauntlet_sent = 0, s_gauntlet_ok = 0;
 static volatile bool s_in_gauntlet = false;
 
+/* The panel's view of the world (#114 AC6). Nothing renders it yet -- the
+ * display stack is #101 -- but it is FED from the live path here rather than
+ * built alongside it, because this repo's most expensive habit is landing a
+ * layer with no caller and discovering four PRs later that it was inert. */
+static r2_telemetry_t s_tm;
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+static void telemetry_report(void)
+{
+    uint32_t age;
+    const uint32_t t = now_ms();
+    ESP_LOGI(TAG, "PANEL WOULD SHOW:  link=%s", r2_telemetry_link_name(s_tm.link));
+
+    if (r2_telemetry_displayable(&s_tm, &s_tm.battery, t, 60000)
+        && r2_telemetry_age_ms(&s_tm.battery, t, &age))
+        ESP_LOGI(TAG, "   battery  %u.%02u V   (%u ms old)",
+                 s_tm.battery_centivolts / 100u, s_tm.battery_centivolts % 100u, age);
+    else
+        ESP_LOGI(TAG, "   battery  --  (nothing we can vouch for)");
+
+    if (r2_telemetry_displayable(&s_tm, &s_tm.dome, t, 60000)
+        && r2_telemetry_age_ms(&s_tm.dome, t, &age))
+        ESP_LOGI(TAG, "   dome     %.2f deg  (%u ms old)", (double)s_tm.dome_degrees, age);
+    else
+        ESP_LOGI(TAG, "   dome     --");
+
+    if (r2_telemetry_displayable(&s_tm, &s_tm.version, t, 3600000))
+        ESP_LOGI(TAG, "   firmware %u.%u.%u", s_tm.version_major,
+                 s_tm.version_minor, s_tm.version_revision);
+    else
+        ESP_LOGI(TAG, "   firmware --");
+
+    ESP_LOGI(TAG, "   asked %"PRIu32"  answered %"PRIu32"  refused %"PRIu32
+                  "  dropped %"PRIu32,
+             s_tm.requests, s_tm.responses, s_tm.refused, s_tm.dropped);
+}
+
 static uint8_t next_seq(void)
 {
     static uint8_t seq = 0;
@@ -80,6 +118,7 @@ static uint8_t next_seq(void)
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
     (void)ctx;
+    r2_telemetry_link(&s_tm, (r2_tm_link_t)s, now_ms());
     if (s == R2_LINK_DOWN && reason)
         ESP_LOGW(TAG, "LINK DOWN (reason=%d)", reason);
     else if (s == R2_LINK_UP)
@@ -105,6 +144,7 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 
     if (r2_ops_parse_battery(&r, &b) == R2_OPS_OK) {
         s_rsp_battery++;
+        r2_telemetry_battery(&s_tm, b.centivolts, now_ms());
         for (size_t i = 0; i < sizeof k_gauntlet; i++)
             if (r.seq == k_gauntlet[i]) { s_gauntlet_ok++; break; }
         ESP_LOGI(TAG, "battery   %u.%02u V   (seq=0x%02X)",
@@ -113,6 +153,7 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
     }
     if (r2_ops_parse_head(&r, &h) == R2_OPS_OK) {
         s_rsp_head++;
+        r2_telemetry_dome(&s_tm, h.degrees, now_ms());
         ESP_LOGI(TAG, "dome      %.2f deg  (seq=0x%02X)", (double)h.degrees, r.seq);
         return;
     }
@@ -120,6 +161,7 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
         s_rsp_version++;
         s_version = v;
         s_version_seen = true;
+        r2_telemetry_version(&s_tm, v.major, v.minor, v.revision, now_ms());
         ESP_LOGI(TAG, "*** VERSION ANSWERED: %u.%u.%u -- the library claim holds",
                  v.major, v.minor, v.revision);
         return;
@@ -313,6 +355,7 @@ static void ops_task(void *arg)
     bool probed_version = false;
     bool ran_gauntlet   = false;
     bool ran_leds       = false;
+    bool ran_tm_proof   = false;
     (void)ran_leds;
 
     while (1) {
@@ -328,6 +371,7 @@ static void ops_task(void *arg)
          * shows up as a ratio within a short run. */
         if (tick % 5 == 0) {
             s_req_battery++;
+            r2_telemetry_note_request(&s_tm);
             r2_ops_request_battery(next_seq(), r2_link_send, NULL);
         }
 
@@ -335,6 +379,7 @@ static void ops_task(void *arg)
          * does not turn him. */
         if (tick % 10 == 3) {
             s_req_head++;
+            r2_telemetry_note_request(&s_tm);
             r2_ops_request_head(next_seq(), r2_link_send, NULL);
         }
 
@@ -344,6 +389,11 @@ static void ops_task(void *arg)
         if (!probed_version && tick == 1) {
             probed_version = true;
             s_req_version++;
+            /* Counted like any other request. Without this the panel shows
+             * "asked 2 answered 3", and a ratio that can exceed 1 is worse
+             * than no ratio: it makes the one number that would have exposed
+             * the escaping bug look broken instead of informative. */
+            r2_telemetry_note_request(&s_tm);
             ESP_LOGI(TAG, "probing main app version (never sent before) ...");
             r2_ops_probe_version(next_seq(), r2_link_send, NULL);
         }
@@ -357,6 +407,7 @@ static void ops_task(void *arg)
             for (size_t i = 0; i < sizeof k_gauntlet; i++) {
                 s_gauntlet_sent++;
                 s_req_battery++;
+                r2_telemetry_note_request(&s_tm);
                 r2_ops_request_battery(k_gauntlet[i], r2_link_send, NULL);
                 vTaskDelay(pdMS_TO_TICKS(400));   /* let each reply land */
             }
@@ -370,7 +421,29 @@ static void ops_task(void *arg)
         if (!ran_leds) { ran_leds = true; led_step(); }
 #endif
 
-        if (++tick % 10 == 0) report();
+        /* THE TELEMETRY PROOF (#114 AC6), once, after readings exist.
+         *
+         * Host tests show a reading is invalidated when the link falls. They
+         * cannot show that the real link falling does it, because in a host
+         * test I am the one calling r2_telemetry_link() -- I am asserting the
+         * wiring by performing it. So: drop the actual BLE link and look at
+         * what the panel would show a tenth of a second later. */
+        if (!ran_tm_proof && s_tm.battery.valid && s_tm.dome.valid) {
+            ran_tm_proof = true;
+            ESP_LOGW(TAG, "=== AC6 PROOF: telemetry must not outlive its link ===");
+            ESP_LOGW(TAG, "--- before: link is up, readings are real ---");
+            telemetry_report();
+            ESP_LOGW(TAG, "--- dropping the BLE link deliberately ---");
+            r2_link_disconnect();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            ESP_LOGW(TAG, "--- after: every reading must read '--' ---");
+            telemetry_report();
+            ESP_LOGW(TAG, "    (it reconnects on its own; values return only");
+            ESP_LOGW(TAG, "     when the NEW link answers, never inherited)");
+            continue;
+        }
+
+        if (++tick % 10 == 0) { report(); telemetry_report(); }
     }
 }
 
@@ -389,6 +462,7 @@ void app_main(void)
     ESP_LOGI(TAG, "link_check -- ceiling is '%s', nothing here can move him",
              r2_gate_tier_name(r2_gate_get_ceiling()));
 
+    r2_telemetry_reset(&s_tm);
     const r2_link_cbs_t cbs = { .on_state = on_state, .on_frame = on_frame, .ctx = NULL };
     r2_link_init(&cbs);
 

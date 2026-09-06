@@ -75,6 +75,21 @@ const char     *r2_link_state_name(r2_link_state_t s);
  * assume an unconfirmed command took effect. */
 int r2_link_send(const uint8_t *frame, size_t len, void *ctx);
 
+/* Drop the link deliberately. Returns 0 if a disconnect was started.
+ *
+ * Two callers, present and future. Here it is how the telemetry rule gets
+ * PROVEN on hardware rather than only in host tests: a reading cannot be shown
+ * to outlive its link unless something can make the link end on demand.
+ *
+ * And it is the primitive D-023's panel RELEASE control needs. That ADR's
+ * finding was that powering him down is us STOPPING -- our keepalive is his
+ * wake command, so he has no idle timeout in practice because we suppress it
+ * every three seconds. Releasing him is letting go, and this is the letting
+ * go. It is deliberately NOT called "sleep": sleep (DID 0x13 / CID 0x01) is a
+ * command in the gate's FORBIDDEN table at every tier, and this sends nothing
+ * to R2 at all. */
+int r2_link_disconnect(void);
+
 /* Frames queued, and frames refused because the link was down. */
 void r2_link_stats(uint32_t *sent, uint32_t *dropped);
 

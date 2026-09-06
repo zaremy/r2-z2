@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
-                       REQUIRES bt nvs_flash r2_link r2_ops r2_gate r2_packet)
+                       REQUIRES bt nvs_flash r2_link r2_ops r2_gate r2_packet r2_telemetry)
 
 # The LED phase is OFF by default and must be asked for by name:
 #   idf.py -DLINK_CHECK_LEDS=ON build
