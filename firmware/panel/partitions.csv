@@ -1,0 +1,21 @@
+# D-022's table, and the first app to actually ship it.
+#
+# The stock layout is replaced, not joined: the vendor's `factory` held
+# esp-brookesia (4.46 MB) and its `ota_0` held a xiaozhi build that never
+# boots. Neither is ours and neither is kept. Sizes below are from D-022,
+# whose figures were read off THIS board's flash -- the dump is a 16 MB local
+# artifact and is not committed, so treat them as measured-locally.
+#
+# ota_1 is reserved although OTA is not implemented. Reserving costs nothing
+# today; adding it later means repartitioning, which means a cable and the
+# operator. The app slot is 6 MB because 4.46 MB is what a Brookesia build with
+# NO radios already cost -- sizing to today's 0.97 MB binary would guarantee a
+# repartition the first time this grows.
+#
+# Name,     Type, SubType, Offset,   Size,   Flags
+nvs,        data, nvs,     0x9000,   0x10000,
+otadata,    data, ota,     0x19000,  0x2000,
+phy_init,   data, phy,     0x1b000,  0x1000,
+ota_0,      app,  ota_0,   0x20000,  6M,
+ota_1,      app,  ota_1,   ,         6M,
+storage,    data, spiffs,  ,         3M,
