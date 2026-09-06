@@ -200,7 +200,7 @@ static void led_step(void)
     int rc = 0;
 
     ESP_LOGW(TAG, "=== LED STEP %d ===", n);
-    r2_gate_set_ceiling(R2_TIER_LEDS);
+    if (n != 8) r2_gate_set_ceiling(R2_TIER_LEDS);
 
     switch (n) {
     case 1:
@@ -246,9 +246,56 @@ static void led_step(void)
           rc = r2_ops_set_leds(1u << R2_LED_HOLO, full, 1, next_seq(),
                                r2_link_send, NULL); }
         break;
+    case 9:
+        /* The correct ENDING, as opposed to step 6's correct teardown.
+         *
+         * Step 6 sets all eight channels to zero and that state HOLDS -- he
+         * does not return to his own red/blue idiom. Measured: he sat dark for
+         * 25 minutes, awake and answering reads the whole time, and read to the
+         * operator as POWERED OFF. So "off" is the right primitive and the
+         * wrong place to stop.
+         *
+         * Blue is not a colour invented here. D-012 assigns blue steady to
+         * 'idle -- nothing engaged', chosen because it is the dimmest corner
+         * (0.072 relative luminance) and idle is the state that runs for
+         * hours. */
+        ESP_LOGW(TAG, "expect: front AND back BLUE -- D-012 idle, the state a");
+        ESP_LOGW(TAG, "        session should LEAVE him in. Never dark: dark");
+        ESP_LOGW(TAG, "        reads as broken to anyone walking past.");
+        rc = r2_ops_set_rgb(0, 0, 255, next_seq(), r2_link_send, NULL);
+        break;
+    case 8:
+        /* THE NULL CONTROL, and the only step that tests the safety property
+         * rather than the hardware.
+         *
+         * Every step above raised the ceiling first, so all of them prove the
+         * same thing: that an ALLOWED write renders. None of them shows that a
+         * REFUSED write does not -- and a gate that returns the right verdict
+         * while the frame still reaches the radio is a log line, not a gate.
+         *
+         * So: leave the ceiling at its default and ask for bright red on a
+         * droid that is currently dark. The host tests say tx is never called.
+         * This asks the only instrument that can see the difference. */
+        ESP_LOGW(TAG, "NULL CONTROL: ceiling deliberately LEFT at 'read'");
+        ESP_LOGW(TAG, "expect: NOTHING. He must stay dark. If he goes red, the");
+        ESP_LOGW(TAG, "        ceiling is decorative and slice 2 is a fiction.");
+        break;
     default:
         ESP_LOGE(TAG, "no such step");
         break;
+    }
+
+    if (n == 8) {
+        /* Ceiling never raised. This must be refused, and nothing must go out. */
+        uint32_t sent_before, sent_after, dropped;
+        r2_link_stats(&sent_before, &dropped);
+        rc = r2_ops_set_rgb(255, 0, 0, next_seq(), r2_link_send, NULL);
+        r2_link_stats(&sent_after, &dropped);
+        ESP_LOGW(TAG, "  set_rgb(255,0,0) at ceiling '%s' -> %s",
+                 r2_gate_tier_name(r2_gate_get_ceiling()),
+                 r2_gate_verdict_name((r2_gate_verdict_t)rc));
+        ESP_LOGW(TAG, "  frames that reached the radio: %"PRIu32
+                      "  (MUST be 0)", sent_after - sent_before);
     }
 
     r2_gate_set_ceiling(R2_TIER_READ);

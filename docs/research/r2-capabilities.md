@@ -852,6 +852,23 @@ backpack-speaker decision — wrong ADR.)
 - **OBSERVED — a colour we set HOLDS.** Front set to `{0:0, 1:255, 2:0}` and
   back to `{4:0, 5:255, 6:0}` both rendered pure green and stayed; the baseline
   alternation did not resume and overwrite them.
+- **OBSERVED 2026-09-06 — and that includes ZERO, which is a CX problem.**
+  All eight channels set to 0 also holds: he does not revert to his own
+  red/blue idiom, and stays dark until something sets him otherwise. Measured
+  over 25 minutes with the link up and battery/dome reads answering throughout.
+
+  The consequence is not a protocol fact but a household one. **A droid left
+  all-dark reads as broken or unplugged** — the operator's own words on walking
+  up to him were *"r2 is off"*, while he was awake and answering. So `leds_off`
+  is a correct teardown *primitive* and a wrong *ending*: any session that can
+  set LEDs must hand him back a defined lit state, and D-012's `blue` (idle,
+  nothing engaged) is the one that already exists for it. Evidence:
+  `firmware/link_check/results/led-survey-2026-09-06.txt`.
+- **OBSERVED 2026-09-06 — bit 7's dimming reproduces through the firmware
+  path.** 128 vs 255 read as visibly different when the frame was built by
+  `r2_packet` and sent by `r2_link` rather than by the Mac prototype. This adds
+  nothing to the 255 → 64 → 16 sweep above, which already settled the hardware
+  question; it says only that the C port did not lose the behaviour.
 - **OBSERVED — an animation transiently overrides a set colour, and the set
   colour returns when the animation ends.** Green survived a play of id 1
   without being re-issued. So our colour behaves as a **base layer**: masked
