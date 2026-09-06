@@ -76,7 +76,44 @@ The `--allow` ceiling mirrors the fixed bring-up ladder in `../CLAUDE.md`:
 **read-only → LEDs → audio → small dome → stance → locomotion.** Ops above the
 ceiling are **refused and logged, never executed** — so the class of physical
 behavior R2 can produce is set by you, at launch, not by whatever sends a
-command. Raising it means restarting the daemon, deliberately.
+command.
+
+### One approval per session, not one per rung (#88)
+
+Raising the ceiling used to mean restarting the daemon, and that — not the idle
+timeout — was the largest single drain on your attention. A session needing
+read → LEDs → dome cost **two relaunches**, each one landing mid-session while
+you were doing something else.
+
+A **session manifest** declares the whole plan before the link exists:
+
+```bash
+./start-daemon.command manifests/example-led-and-dome.json
+```
+
+The daemon prints the plan — every op, its tier, the hazards, the teardown —
+and the ceiling it computed, then starts. You approve a *plan*, which is
+strictly more than you could see before: a bare `--allow dome` never told you
+what was going to use it.
+
+Three properties make it a narrowing and never a grant:
+
+- **The tier is computed from the ops and cannot be declared.** A manifest that
+  names its own ceiling is *refused*, not ignored — a silently-dropped field
+  reads exactly like an honoured one.
+- **An op the manifest does not list is refused**, and the refusal prints what
+  *was* approved.
+- **The ladder still decides.** Membership is an extra check on the send path;
+  `op_tier` and the ceiling test run exactly as before. A manifest can never
+  admit something the ladder refuses.
+
+`stop` is the one op a manifest cannot exclude: refusing it is the single
+refusal that could leave him *moving*, and the rule here is default to STOP.
+
+There is now **one launcher**. `start-daemon-leds.command` and
+`start-daemon-stance.command` are gone — they were copies of the same
+"why Terminal is responsible" paragraph differing only in a tier, which existed
+only because the ceiling had to be picked before the link did.
 
 Other safety properties:
 

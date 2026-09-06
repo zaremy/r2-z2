@@ -505,10 +505,62 @@ class FakeR2:
         return await self._cmd("stop_audio")
 
 
-def handle(payload, ceiling="read", r2=None):
+def handle(payload, ceiling="read", r2=None, manifest=None):
     r2 = r2 or FakeR2()
-    resp = run(P.handle_request(r2, payload, ceiling, log=lambda *_: None))
+    resp = run(P.handle_request(r2, payload, ceiling, log=lambda *_: None,
+                                manifest=manifest))
     return resp, r2
+
+
+class ManifestIsEnforcedOnTheSendPath(unittest.TestCase):
+    """#88, and #97's lesson applied in advance: a manifest module that
+    `handle_request` never consults would pass every test in
+    test_r2_manifest.py and refuse nothing at all. These tests drive the
+    daemon's actual request path."""
+
+    def _man(self, ops, **over):
+        import r2_manifest
+        d = {"title": "test session", "ops": [{"op": o} for o in ops]}
+        d.update(over)
+        return r2_manifest.parse(d)
+
+    def test_an_op_outside_the_manifest_is_refused_by_handle_request(self):
+        man = self._man(["head"])
+        resp, r2 = handle({"op": "leg_pos"}, ceiling="dome", manifest=man)
+        self.assertFalse(resp["ok"])
+        self.assertIn("manifest", resp)
+        self.assertEqual(resp["manifest"]["ops"], ["head"])
+        # And it never reached the droid.
+        self.assertEqual(r2.calls, [])
+
+    def test_an_op_inside_the_manifest_still_runs(self):
+        man = self._man(["head"])
+        resp, r2 = handle({"op": "head"}, ceiling="read", manifest=man)
+        self.assertTrue(resp["ok"], resp)
+
+    def test_the_manifest_never_grants_above_the_ceiling(self):
+        """AC7. The manifest narrows; the ladder still decides. A manifest
+        listing `dome` on a daemon launched at `read` must still be refused --
+        otherwise the manifest would be an exemption."""
+        man = self._man(["head", "dome"])
+        resp, r2 = handle({"op": "dome", "params": {"travel": 12.0}},
+                          ceiling="read", manifest=man)
+        self.assertFalse(resp["ok"])
+        self.assertIn("needs tier", resp["error"])
+        self.assertEqual(r2.calls, [])
+
+    def test_stop_survives_a_manifest_that_forgot_it(self):
+        """DEFAULT TO STOP: refusing `stop` is the one refusal that can leave
+        him moving."""
+        man = self._man(["head"])
+        resp, _ = handle({"op": "stop"}, ceiling="read", manifest=man)
+        self.assertTrue(resp["ok"], resp)
+
+    def test_no_manifest_behaves_exactly_as_before(self):
+        """The feature is opt-in; every existing launcher and session must be
+        unaffected."""
+        resp, _ = handle({"op": "head"}, ceiling="read", manifest=None)
+        self.assertTrue(resp["ok"], resp)
 
 
 class GateControl(unittest.TestCase):

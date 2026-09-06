@@ -1613,7 +1613,8 @@ def allowed_ops(ceiling: str) -> list[str]:
     return sorted(o for o in OPS if _tier_ok(ceiling, OPS[o][0]))
 
 
-async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
+async def handle_request(r2, payload: dict, ceiling: str, log=print,
+                         manifest=None) -> dict:
     """Execute one bridge request and return the response dict.
 
     Split out of the daemon loop so the permission ladder and every op can be
@@ -1646,6 +1647,19 @@ async def handle_request(r2, payload: dict, ceiling: str, log=print) -> dict:
     except Exception as e:
         log(f"[{ts}] REFUSED {op} — bad params: {e}")
         return {"ok": False, "op": op, "error": f"{type(e).__name__}: {e}"}
+    # THE MANIFEST NARROWS; IT NEVER GRANTS (#88 AC7).
+    #
+    # This check is IN ADDITION to the tier check below, never instead of it.
+    # An op the manifest lists is still refused if it is above the ceiling --
+    # which cannot happen when the daemon was launched from the manifest,
+    # since the ceiling is computed from these very ops, but WOULD happen if
+    # somebody launched with a lower --allow and a wider manifest. The ladder
+    # stays the thing that decides.
+    if manifest is not None and not manifest.permits(op):
+        log(f"[{ts}] REFUSED {op} — not in the approved session manifest "
+            f"{manifest.title!r}")
+        return manifest.refusal(op)
+
     if not _tier_ok(ceiling, needed):
         log(f"[{ts}] REFUSED {op} — needs tier '{needed}', "
             f"daemon ceiling is '{ceiling}'")
@@ -1701,6 +1715,33 @@ async def _run_daemon(args) -> int:
     # refusal messages, the lock file — names the tier that is actually in
     # force. Printing "MOTION" while enforcing `dome` is the kind of mismatch
     # this whole split exists to remove.
+    # A MANIFEST COMPUTES THE CEILING; IT IS NEVER PASSED ALONGSIDE --allow.
+    #
+    # Accepting both would need a rule for which wins, and every such rule is
+    # a way to end up at a ceiling nobody read. Refusing the combination is
+    # one sentence to explain and has no ambiguous case.
+    manifest = None
+    if getattr(args, "manifest", None):
+        import r2_manifest
+        if args.allow != "read":          # i.e. the operator passed one
+            print("Pass --manifest OR --allow, not both. The manifest's "
+                  "ceiling is computed from its ops, so an --allow beside it "
+                  "is either redundant or a disagreement about what was "
+                  "approved.")
+            return 2
+        try:
+            manifest = r2_manifest.load(args.manifest)
+        except r2_manifest.ManifestError as e:
+            print(f"\nREFUSING to start: {e}\n")
+            return 2
+        # AC4: the operator reads the plan BEFORE the link exists. This is
+        # strictly better than approving a bare ceiling with no idea what will
+        # use it, which is what every session has done until now.
+        print()
+        print(manifest.describe())
+        print()
+        args.allow = manifest.required_tier
+
     ceiling = resolve_tier(args.allow)
     if ceiling != args.allow:
         print(f"\nNOTE: --allow {args.allow} is deprecated and has been read as "
@@ -1778,7 +1819,8 @@ async def _run_daemon(args) -> int:
                     # input, but nothing a queue file contains may end a live
                     # session — that session is the only way to send `stop`.
                     try:
-                        resp = await handle_request(r2, payload, ceiling)
+                        resp = await handle_request(r2, payload, ceiling,
+                                                    manifest=manifest)
                     except Exception as e:
                         resp = {"ok": False, "error":
                                 f"request handler crashed: {type(e).__name__}: {e}"}
@@ -1918,6 +1960,11 @@ def main() -> int:
                      help="permission ceiling (default: read-only). 'motion' is "
                           "a deprecated alias for 'dome' and does NOT grant "
                           "animations any more — see #11")
+    dae.add_argument("--manifest",
+                     help="path to a session manifest (#88). The ceiling is "
+                          "COMPUTED from the manifest's ops -- you do not pass "
+                          "--allow with it -- and any op the manifest does not "
+                          "list is refused for the whole session.")
     dae.add_argument("--idle-timeout", type=float, default=900.0,
                      help="disconnect after this many idle seconds")
     dae.add_argument("--verbose", action="store_true", help="log every BLE packet")
