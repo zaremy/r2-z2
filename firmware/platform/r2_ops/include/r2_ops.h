@@ -51,9 +51,56 @@ typedef enum {
     R2_OPS_NULL          = -4,
 } r2_ops_err_t;
 
+/* Returned by the LED builders when the request is malformed before it ever
+ * reaches the gate. Distinct from the gate's own verdicts, which are negative
+ * r2_gate_verdict_t values, so a caller can tell "you asked for something
+ * impossible" from "you are not allowed to ask". */
+#define R2_OPS_BAD_LED_REQUEST (-100)
+
 typedef struct { uint16_t centivolts; float volts; } r2_battery_t;
 typedef struct { float degrees; }                    r2_head_t;
 typedef struct { uint16_t major, minor, revision; }  r2_version_t;
+
+/* ---- LEDs (#114 slice 5) -----------------------------------------------
+ *
+ * DID 0x1A / CID 0x0E, the 16-bit-mask write. Payload is
+ * [mask_hi, mask_lo, values...] with one value per set bit, IN ASCENDING BIT
+ * ORDER. OBSERVED: spherov2 commands/io.py:76, corroborated by
+ * claude-r2d2-buddy translator.c:66 sending it on real hardware, and confirmed
+ * by us -- a single write setting all eight channels returned success
+ * (r2-capabilities.md:65, "AC4 confirmed"). The 8-bit variant (CID 0x1C) is
+ * flagged Untested upstream and is deliberately not implemented.
+ *
+ * THE EIGHT CHANNELS ARE NOT EQUIVALENT, and designing as if they were has
+ * already produced one wrong design in this project:
+ *
+ *   0,1,2  front RGB     full colour
+ *   3      logic display brightness only, and effectively ON/OFF -- the two
+ *          square grid panels. Do not design a fade for it.
+ *   4,5,6  back RGB      full colour
+ *   7      holo          brightness only, but genuinely dimmable
+ *
+ * And EVERY value change flickers. That is R2's LED update path, not our
+ * timing (r2-capabilities.md:874-885): a 30-unit step flickers exactly as much
+ * as a full swap, so there is no smooth ramp to be had at any step size. D-012
+ * was written against a fade that the fixtures cannot render.
+ *
+ * A colour we set is STATE. It survives the link dropping and it is what the
+ * household sees until he sleeps -- so leave him in a defined one.
+ */
+#define R2_LED_FRONT_R  0
+#define R2_LED_FRONT_G  1
+#define R2_LED_FRONT_B  2
+#define R2_LED_LOGIC    3
+#define R2_LED_BACK_R   4
+#define R2_LED_BACK_G   5
+#define R2_LED_BACK_B   6
+#define R2_LED_HOLO     7
+#define R2_LED_MAX_BIT  R2_LED_HOLO
+
+#define R2_LED_MASK_FRONT  0x0007u
+#define R2_LED_MASK_BACK   0x0070u
+#define R2_LED_MASK_ALL    0x00FFu
 
 /* Requests. Each returns the encoded length, or a negative r2_gate_verdict_t
  * if the ceiling refused it. All are READ tier, so all work at the default. */
@@ -68,6 +115,25 @@ int r2_ops_probe_version(uint8_t seq, r2_tx_fn tx, void *ctx);
 r2_ops_err_t r2_ops_parse_battery(const r2_response_t *r, r2_battery_t *out);
 r2_ops_err_t r2_ops_parse_head(const r2_response_t *r, r2_head_t *out);
 r2_ops_err_t r2_ops_parse_version(const r2_response_t *r, r2_version_t *out);
+
+/* Set an arbitrary set of channels. values must hold exactly one byte per set
+ * bit in mask, ordered by ascending bit -- a count that disagrees with the mask
+ * is the one way to build a packet R2 will misread, so it is refused here
+ * rather than sent. Returns the encoded length, or a negative
+ * r2_gate_verdict_t: at the default READ ceiling this is R2_GATE_ABOVE_CEILING
+ * and NOTHING is transmitted. Raising the ceiling is the operator's decision,
+ * per the fixed bring-up order in CLAUDE.md. */
+int r2_ops_set_leds(uint16_t mask, const uint8_t *values, size_t n_values,
+                    uint8_t seq, r2_tx_fn tx, void *ctx);
+
+/* Front and back RGB to one colour, in a single write. */
+int r2_ops_set_rgb(uint8_t r, uint8_t g, uint8_t b,
+                   uint8_t seq, r2_tx_fn tx, void *ctx);
+
+/* Every channel to zero. Worth its own name because "leave him in a defined
+ * state" is a rule here, and a teardown you have to spell out is a teardown
+ * that gets skipped. */
+int r2_ops_leds_off(uint8_t seq, r2_tx_fn tx, void *ctx);
 
 const char *r2_ops_err_name(r2_ops_err_t e);
 /* R2's own error codes, r2_probe.py Response.ERRORS. */
