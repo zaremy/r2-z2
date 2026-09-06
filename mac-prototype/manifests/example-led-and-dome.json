@@ -1,0 +1,13 @@
+{
+  "title": "S1g light language on hardware",
+  "why": "Confirm the LED state colours and one legible dome gesture, in one session.",
+  "ops": [
+    {"op": "status", "note": "assert on connect, never inherit (CLAUDE.md)"},
+    {"op": "head",   "note": "read the dome BEFORE moving it: it has no home position"},
+    {"op": "leds",   "params": {"front": [0, 0, 255]}, "note": "D-012 idle blue"},
+    {"op": "dome",   "params": {"travel": 12.0},
+     "note": "12 deg is the smallest legible gesture; below ~10.5 he silently ignores it (D-013)"}
+  ],
+  "expected_s": 240,
+  "teardown": "leds returned to the status colour, dome left where it is (it has no home)"
+}

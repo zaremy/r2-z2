@@ -120,7 +120,11 @@ def send_animation(bridge, anim_id: int, ceiling: str) -> str:
     # Liveness only where the bridge can answer it. FakeBridge cannot, and a
     # test double should not be the reason a safety path raises.
     if hasattr(bridge, "daemon") and bridge.daemon() is None:
-        return "DAEMON GONE — relaunch start-daemon-stance.command"
+        # start-daemon-stance.command was deleted by #88; naming a file that
+        # does not exist is worse than naming none, because the operator
+        # goes looking for it mid-session.
+        return ("DAEMON GONE — relaunch: ./start-daemon.command stance\n"
+                "  (or a manifest, which needs approving only once)")
     try:
         out = bridge._send((B.Step("animation", {"id": anim_id}),), 30.0)
         ok = all(r.get("ok") for r in out)
