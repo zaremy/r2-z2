@@ -1178,6 +1178,142 @@ class TestAC6TheNullCaseDoesNotFire(unittest.TestCase):
         self.assertEqual(mood.level(), 0.0)
 
 
+class TestTheRiseFollowsTheExpressionNotTheAckCount(unittest.TestCase):
+    """`ok` is a strict AND over every response, including the closing LED
+    reset and the two head reads the residual correction makes AFTER the
+    expression is over. Gating the mood rise on it means a dropped ack on any
+    of those erases a pet the operator watched happen."""
+
+    def build(self, *, fail_on=None):
+        import r2_mood as M
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        b.fail_on = fail_on
+        wall = [1_700_000_000.0]
+        mood = M.Mood(clock=lambda: wall[0], persist=False)
+        mood.state = M.Happiness(value=0.0, updated_at=wall[0])
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          beat_factory=B.express_delight, mood=mood,
+                          now=c.now, sleep=c.sleep)
+        return loop, mood
+
+    def test_a_failure_AFTER_the_expression_still_banks_the_touch(self):
+        # `head` fails only the post-expression residual reads: the operator
+        # saw the whole beat. Before this change `ok` was False and the pet
+        # vanished from his history.
+        loop, mood = self.build(fail_on="head")
+        rec = loop.react()
+        self.assertIsNone(rec.get("aborted_at_phrase"),
+                          "harness check: this must NOT abort mid-phrase")
+        self.assertGreater(rec["happiness_delta"], 0.0,
+                           "he performed the whole beat and was not credited")
+        self.assertGreater(mood.level(), 0.0)
+
+    def test_a_failure_DURING_the_expression_still_earns_nothing(self):
+        # The guard must not have become permissive. `sound` aborts phrase 1,
+        # so he did not visibly respond and must not be credited.
+        loop, mood = self.build(fail_on="sound")
+        rec = loop.react()
+        self.assertIsNotNone(rec.get("aborted_at_phrase"),
+                             "harness check: this must abort mid-phrase")
+        self.assertEqual(rec["happiness_delta"], 0.0)
+        self.assertEqual(mood.level(), 0.0)
+
+
+class TestTheArmCueSurvivesTheFirstPet(unittest.TestCase):
+
+    def test_every_arm_re_asserts_the_listen_frame(self):
+        """The status layer restores the status frame after each beat, so a
+        cue written once before the loop is gone the moment the first pet
+        lands. From then on `armed and listening` and `busy performing` look
+        identical, and a pet delivered during the ~23 s the loop is blind
+        produces nothing with no way to tell which it was."""
+        c = Clock()
+        b = ScriptedBridge(noisy=True)          # fires repeatedly
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        mark = len(b.batches)
+        out = loop.run(max_s=10_000.0, max_reactions=3)
+        self.assertEqual(out["count"], 3, "harness check: needs 3 reactions")
+
+        engaged = {**B.front(B.BASE_ENGAGED), **B.back(B.BASE_ENGAGED)}
+        arms = sum(1 for batch in b.batches[mark:]
+                   for st in batch
+                   if st.op == "leds" and st.params.get("channels") == engaged)
+        self.assertGreaterEqual(
+            arms, 3,
+            f"the listen frame was asserted {arms}x for 3 reactions -- an arm "
+            f"cue written once dies at the first beat")
+
+
+class TestTheTrialRunsInSoftwareBeforeItCostsAPet(unittest.TestCase):
+    """THE GATE. The hardware trial asks an operator to say which reaction was
+    smaller; this asserts the same thing with a scripted clock, at zero
+    operator cost, so a wiring bug is found in CI and not in the room.
+
+    It is deliberately written as the trial's own registered prediction:
+    the rendering changes on the FIRST reaction whose intensity < 0.5.
+    Scoring off the logged intensity rather than a pet ordinal is what makes
+    it immune to cadence -- the crossing moves between pet 4 and pet 5 for
+    cadences either side of ~26.7 s."""
+
+    CADENCE_S = 30.0
+
+    def run_trial(self, n=6):
+        import r2_mood as M
+        c = Clock()
+        b = ScriptedBridge(noisy=False)
+        wall = [1_700_000_000.0]
+        mood = M.Mood(clock=lambda: wall[0], persist=False)
+        mood.state = M.Happiness(value=0.0, updated_at=wall[0])
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          beat_factory=B.express_delight, mood=mood,
+                          now=c.now, sleep=c.sleep)
+        rows = []
+        for _ in range(n):
+            before = len(b.sent)
+            rec = loop.react()
+            domes = sum(1 for st in b.sent[before:] if st.op == "dome")
+            rows.append((rec["intensity"], domes, rec["happiness_delta"]))
+            wall[0] += self.CADENCE_S
+        return rows
+
+    def test_the_intensity_falls_monotonically_as_he_is_petted(self):
+        rows = self.run_trial()
+        intensities = [r[0] for r in rows]
+        self.assertEqual(intensities, sorted(intensities, reverse=True),
+                         f"deficit did not fall as he was petted: {intensities}")
+
+    def test_every_touch_is_banked(self):
+        # If any delta is 0 the sequence above is measuring a broken path.
+        for i, (_, _, delta) in enumerate(self.run_trial(), 1):
+            self.assertGreater(delta, 0.0, f"reaction {i} earned nothing")
+
+    def test_the_rendering_changes_exactly_at_the_intensity_crossing(self):
+        rows = self.run_trial()
+        crossing = next((i for i, (inten, _, _) in enumerate(rows)
+                         if inten < B.FULL_DELIGHT_INTENSITY), None)
+        self.assertIsNotNone(
+            crossing, f"never crossed in {len(rows)} reactions: "
+                      f"{[round(r[0], 3) for r in rows]}")
+        domes = [r[1] for r in rows]
+        # Full beat = 3 dome moves, brief = 2. Assert the SHAPE of the split,
+        # not the ordinal: every reaction before the crossing is full, every
+        # one from it onward is brief.
+        self.assertTrue(all(d == 3 for d in domes[:crossing]),
+                        f"a pre-crossing reaction was not the full beat: {domes}")
+        self.assertTrue(all(d == 2 for d in domes[crossing:]),
+                        f"a post-crossing reaction was not the brief beat: {domes}")
+
+    def test_the_crossing_is_not_at_the_first_reaction(self):
+        # A trial whose very first pet already renders brief proves nothing --
+        # it means the starting state was hot. The hardware protocol resets
+        # the mood store for exactly this reason; this is that check, in CI.
+        rows = self.run_trial()
+        self.assertGreaterEqual(rows[0][0], B.FULL_DELIGHT_INTENSITY,
+                                "reaction 1 started below the threshold")
+
+
 class TestMoodWiring(unittest.TestCase):
 
     def build(self, happiness: float, *, fail: bool = False):

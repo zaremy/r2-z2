@@ -423,8 +423,22 @@ class Reactive:
         # failed beat means he did not visibly respond, and crediting him for
         # contact he never acknowledged would let a broken send path look
         # like a well-treated robot.
+        #
+        # "ACTUALLY RAN" IS NOT `ok`. `ok` is a strict AND over every response
+        # in the beat -- including the closing LED reset and the two head
+        # reads the residual correction makes AFTER the expression is over.
+        # A dropped ack on any of those marks the whole beat failed, so on a
+        # marginal link the operator sees the full beat, counts a pet, and the
+        # touch is silently erased from his history. That is worse than losing
+        # the reaction: it rewrites his emotional past to say the contact
+        # never happened.
+        #
+        # The honest signal is whether the EXPRESSIVE steps ran: not refused
+        # by the gate, and not aborted part-way through a phrase.
+        expressive_ran = (not result.get("refused")
+                          and result.get("aborted_at_phrase") is None)
         happiness_delta = 0.0
-        if self.mood is not None and result.get("ok"):
+        if self.mood is not None and expressive_ran:
             happiness_delta = self.mood.touch()
 
         # Everything in the ring now is the beat's own noise, not a hand.
@@ -452,6 +466,12 @@ class Reactive:
                 "happiness": (round(self.mood.level(), 2)
                               if self.mood is not None else None),
                 "beat": result.get("beat"), "beat_ok": result.get("ok"),
+                # WHY a touch earned nothing, not just that it did. Without
+                # this the log says happiness_delta 0.0 and leaves you to
+                # guess between "the gate refused it", "it aborted mid-phrase"
+                # and "an ack dropped after the expression" -- three different
+                # faults with three different fixes.
+                "aborted_at_phrase": result.get("aborted_at_phrase"),
                 "refused": result.get("refused"),
                 "beat_error": result.get("error"),
                 "elapsed_s": result.get("elapsed_s"),
@@ -483,10 +503,19 @@ class Reactive:
         # operator waited out a whole window for a cue that had already
         # happened. Dark through the hands-off phases is what makes this edge
         # visible; neither half works alone.
-        self.bridge.send_batch([Step("leds", {"channels": {
-            **B.front(B.BASE_ENGAGED), **B.back(B.BASE_ENGAGED)}})])
         end = self.now() + max_s
         while self.now() < end and len(self.reactions) < max_reactions:
+            # RE-ASSERTED EVERY ARM, not written once before the loop. The
+            # status layer restores the status frame after each beat, so a cue
+            # written once is gone the moment the first pet lands -- and from
+            # then on "armed and listening" and "busy performing" look
+            # identical. The operator then pets him during the ~23 s the loop
+            # is blind, gets nothing, and has no way to tell whether the
+            # detector missed it or he simply was not listening yet. Every
+            # later pet ordinal shifts with it, which is fatal to a trial
+            # scored on WHICH pet changed.
+            self.bridge.send_batch([Step("leds", {"channels": {
+                **B.front(B.BASE_ENGAGED), **B.back(B.BASE_ENGAGED)}})])
             # FLUSH ON EVERY ARM, not once before the loop. Recovery can end
             # on its cap while the disturbance is still going -- and re-arming
             # then reads a window that is five parts aftermath to one part
@@ -505,6 +534,18 @@ class Reactive:
             rec["trigger_channel"] = chan
             rec["at_s"] = round(max_s - (end - self.now()), 2)
             self.reactions.append(rec)
+            # OUT LOUD, WHILE THE OPERATOR IS STILL STANDING THERE. The
+            # intensity and the earned happiness decide whether the beat they
+            # just watched was the full one or the brief one, and a delta of
+            # 0.0 means the touch was not banked at all. In the log only, that
+            # is discovered hours later; printed here, the operator can stop a
+            # run that is measuring nothing.
+            intensity = rec.get("intensity")
+            print(f"  reaction {len(self.reactions)}: "
+                  f"intensity={'--' if intensity is None else f'{intensity:.3f}'} "
+                  f"beat={rec.get('beat')} "
+                  f"happiness+{rec.get('happiness_delta', 0.0):.2f}"
+                  + ("" if rec.get("beat_ok") else "   !! BEAT DID NOT RUN"))
         # DISARM IS AN EDGE TOO -- and now it is one for free. `_tidy` ends on
         # BASE_NEUTRAL, so the exit reads cyan -> blue: `listen` -> `idle`,
         # two different hues and two rows of the same table. This used to
