@@ -894,8 +894,13 @@ def thinking(*, rest=BASE_NEUTRAL, pulses: int = 3) -> Beat:
 
 
 def express_delight(*, rest=BASE_NEUTRAL, intensity: float = 1.0,
-                    travel: float = 14.0) -> Beat:
+                    travel: float = 14.0, sound: int | None = None) -> Beat:
     """He was touched, and it landed. Composed from primitives (#85).
+
+    `sound` pins the chirp to one id, for experiments only -- see the note at
+    the pick below. It must be an id ALREADY IN the pool: pinning is about
+    removing a variable, never about reaching an id the pool deliberately
+    excludes.
 
     `intensity` is 0..1 and comes from `r2_mood`: it is the DEFICIT, how much
     the contact meant to him, read BEFORE the touch is applied. A starved R2
@@ -926,18 +931,51 @@ def express_delight(*, rest=BASE_NEUTRAL, intensity: float = 1.0,
     """
     if not 0.0 <= intensity <= 1.0:
         raise ValueError(f"intensity {intensity} outside 0..1")
+    # A pinned id must be one the pool already vouches for. Without this the
+    # parameter is a hole straight through the curated-pool rule: 176 of the
+    # 388 ids are BB-8/BB-9E/R2-Q5 voices or factory test tones, and the whole
+    # argument for pools is that "unheard ids do not go in one". An experiment
+    # knob that can reach any id is not a smaller experiment, it is a
+    # different droid saying something nobody has verified.
+    if sound is not None and sound not in DELIGHT_SOUNDS.ids:
+        raise ValueError(
+            f"sound {sound} is not in the delight pool {DELIGHT_SOUNDS.ids}")
     full = intensity >= FULL_DELIGHT_INTENSITY
 
     # ONE pick per beat, whatever the length. Two picks in the full beat would
     # halve the pool's effective period and make AC7's "four fires, four ids"
     # depend on which pick you counted.
-    laugh = DELIGHT_SOUNDS.pick(avoid_last=3)
+    #
+    # `sound` PINS the id, and exists for one reason: the pool is a
+    # deterministic LRU, so consecutive beats are GUARANTEED to sound
+    # different. That is right for a droid and fatal for an experiment. The
+    # trial that asks "did the second pet render smaller?" cannot use a
+    # changing chirp as its evidence, and an operator told to watch for a
+    # difference will hear one every time whether or not the beat changed.
+    # Pin it, and whatever difference remains is the beat.
+    #
+    # A pinned beat must NOT consume a pick: perturbing the pool would shift
+    # the very sequence a later unpinned run is being compared against.
+    laugh = sound if sound is not None else DELIGHT_SOUNDS.pick(avoid_last=3)
 
     # Phrase 1 — the holo comes up and the logic panel lights. Brightness
     # only: both are on/off-ish channels whose curve is too steep for
     # anything subtle (D-012 Amendment A section 3).
+    # Full opens brighter than brief. It shipped the other way round in #85
+    # -- holo(160 if full else 200) -- which put the channel carrying
+    # magnitude BACKWARDS on magnitude: the beat meaning "this mattered less"
+    # opened brighter than the one meaning "this mattered". Nothing pinned
+    # those values, no ADR ruled on them, and #86 merged inert, so no one had
+    # ever seen either render. Corrected here because the trial in the S7 plan
+    # asks an operator to judge which of two beats was bigger, and this is one
+    # of the channels they would judge it on.
+    #
+    # Judgment call, and hardware may refute it: the alternative reading is
+    # that the brief beat has less runway to reach holo(255) and so should
+    # start closer to it. If the corrected version reads worse in the room,
+    # that is the finding -- record it rather than quietly reverting.
     opening = Phrase((
-        Step("leds", {"channels": {**holo(160 if full else 200),
+        Step("leds", {"channels": {**holo(200 if full else 160),
                                    **logic(255)}}),
     ), gap_s=0.15)
 
