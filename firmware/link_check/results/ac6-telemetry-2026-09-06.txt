@@ -1,0 +1,36 @@
+I (319) link_check: link_check -- ceiling is 'read', nothing here can move him
+I (389) r2_link: state -> scanning
+I (849) r2_link: found D2-6F6B
+I (849) r2_link: state -> connecting
+I (1279) r2_link: state -> handshaking
+I (3179) r2_link: state -> up
+I (3179) link_check: LINK UP -- R2 is listening
+I (3629) link_check: battery   4.42 V   (seq=0x01)
+I (6399) link_check: probing main app version (never sent before) ...
+I (6629) link_check: *** VERSION ANSWERED: 7.0.101 -- the library claim holds
+I (12629) link_check: dome      -0.27 deg  (seq=0x06)
+W (15409) link_check: === AC6 PROOF: telemetry must not outlive its link ===
+W (15409) link_check: --- before: link is up, readings are real ---
+I (15419) link_check: PANEL WOULD SHOW:  link=up
+I (15419) link_check:    battery  4.42 V   (11789 ms old)
+I (15419) link_check:    dome     -0.27 deg  (2788 ms old)
+I (15429) link_check:    firmware 7.0.101
+I (15429) link_check:    asked 3  answered 3  refused 0  dropped 0
+W (15439) link_check: --- dropping the BLE link deliberately ---
+I (15479) r2_link: state -> down (disconnected)
+W (15479) link_check: LINK DOWN (reason=534)
+I (15489) r2_link: state -> scanning
+W (15549) link_check: --- after: every reading must read '--' ---
+I (15549) link_check: PANEL WOULD SHOW:  link=scanning
+I (15549) link_check:    battery  --  (nothing we can vouch for)
+I (15549) link_check:    dome     --
+I (15549) link_check:    firmware --
+I (15559) link_check:    asked 3  answered 3  refused 0  dropped 0
+W (15559) link_check:     (it reconnects on its own; values return only
+W (15569) link_check:      when the NEW link answers, never inherited)
+I (15739) r2_link: found D2-6F6B
+I (15739) r2_link: state -> connecting
+I (16179) r2_link: state -> handshaking
+I (18079) r2_link: state -> up
+I (18079) link_check: LINK UP -- R2 is listening
+I (21829) link_check: battery   4.42 V   (seq=0x0A)

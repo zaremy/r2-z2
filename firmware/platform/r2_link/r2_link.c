@@ -269,6 +269,13 @@ int r2_link_send(const uint8_t *frame, size_t len, void *ctx)
     return 0;
 }
 
+int r2_link_disconnect(void)
+{
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE) return -1;
+    /* No Sphero packet is sent. We stop talking; he does the rest. */
+    return ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+}
+
 void r2_link_stats(uint32_t *sent, uint32_t *dropped)
 {
     if (sent)    *sent    = s_sent;

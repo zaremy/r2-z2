@@ -1,0 +1,102 @@
+/* What the panel is allowed to show — #114 AC6.
+ *
+ * "Telemetry the panel needs is exposed as a struct with explicit staleness,
+ * so a value cannot outlive the link that carried it."
+ *
+ * That sentence is the whole design, and the word doing the work is OUTLIVE.
+ * A battery reading is not a fact about R2; it is a fact about R2 AT A MOMENT,
+ * carried by a link that may since have dropped. A panel that renders 4.42 V
+ * next to a dead link is not stale, it is lying -- and it lies most
+ * convincingly at exactly the moment someone is looking to find out whether
+ * anything is wrong.
+ *
+ * This project has the scar. An LED colour set in the afternoon was still lit
+ * an hour later across a daemon kill and a fresh connect, because a colour we
+ * set is state that survives its session; the rule that came out of it was
+ * ASSERT THE STATUS ON CONNECT, NEVER INHERIT IT. This is the same rule one
+ * layer up: a reading does not survive the link that produced it.
+ *
+ * So every value here is a triple -- have we ever had one, what was it, and how
+ * old is it -- and the link falling invalidates all of them at once. There is
+ * no path that yields a value without its age.
+ *
+ * Pure logic, no ESP dependency: time is passed in, never read. That is what
+ * makes staleness host-testable, and staleness is the part most likely to be
+ * wrong in a way nobody notices until the panel is showing a comforting number
+ * about a droid that is not there.
+ */
+#ifndef R2_TELEMETRY_H
+#define R2_TELEMETRY_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    R2_TM_DOWN = 0,
+    R2_TM_SCANNING,
+    R2_TM_CONNECTING,
+    R2_TM_HANDSHAKING,
+    R2_TM_UP,
+} r2_tm_link_t;
+
+/* One reading and everything needed to distrust it. */
+typedef struct {
+    bool     valid;      /* false until a reading arrives; false again on link loss */
+    uint32_t at_ms;      /* when it arrived, on the caller's monotonic clock */
+} r2_tm_stamp_t;
+
+typedef struct {
+    r2_tm_link_t  link;
+    uint32_t      link_since_ms;   /* when the link last entered its current state */
+
+    r2_tm_stamp_t battery;
+    uint16_t      battery_centivolts;
+
+    r2_tm_stamp_t dome;
+    float         dome_degrees;
+
+    r2_tm_stamp_t version;
+    uint16_t      version_major, version_minor, version_revision;
+
+    /* Accounting, so a panel can show that we are asking and not being
+     * answered -- the condition that hid the escaping bug for a whole
+     * endurance run because nothing ever displayed the ratio. */
+    uint32_t requests, responses, refused, dropped;
+} r2_telemetry_t;
+
+void r2_telemetry_reset(r2_telemetry_t *t);
+
+/* Link transitions. Falling out of UP invalidates every reading -- that is the
+ * single most important line in this module. */
+void r2_telemetry_link(r2_telemetry_t *t, r2_tm_link_t state, uint32_t now_ms);
+
+void r2_telemetry_battery(r2_telemetry_t *t, uint16_t centivolts, uint32_t now_ms);
+void r2_telemetry_dome(r2_telemetry_t *t, float degrees, uint32_t now_ms);
+void r2_telemetry_version(r2_telemetry_t *t, uint16_t major, uint16_t minor,
+                          uint16_t revision, uint32_t now_ms);
+
+void r2_telemetry_note_request(r2_telemetry_t *t);
+void r2_telemetry_note_refused(r2_telemetry_t *t);
+void r2_telemetry_note_dropped(r2_telemetry_t *t);
+
+/* Age of a reading. Returns false when there is nothing to age -- so a caller
+ * cannot get a number without also learning whether it means anything.
+ * Handles the monotonic clock wrapping at 2^32 ms (~49.7 days), which a
+ * household droid WILL reach. */
+bool r2_telemetry_age_ms(const r2_tm_stamp_t *s, uint32_t now_ms, uint32_t *age_ms);
+
+/* Should the panel show this reading at all? A reading older than max_age_ms,
+ * or taken before the current link came up, is not displayable. */
+bool r2_telemetry_displayable(const r2_telemetry_t *t, const r2_tm_stamp_t *s,
+                              uint32_t now_ms, uint32_t max_age_ms);
+
+const char *r2_telemetry_link_name(r2_tm_link_t s);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* R2_TELEMETRY_H */
