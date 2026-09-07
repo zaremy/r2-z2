@@ -25,9 +25,9 @@
 #define V5_TEXT_HI    0xE8F2F3
 #define V5_CYAN       0x3FD8E8   /* listen, thinking */
 #define V5_AMBER      0xF2B23C   /* attention, misheard, offline */
-#define V5_GREEN      0x4ED18B
+#define V5_GREEN      0x4ED18B   /* idle -- v5's resting colour */
 #define V5_RED        0xF0574A   /* danger */
-#define V5_BLUE       0x4A7BE8   /* idle, waiting */
+#define V5_BLUE       0x4A7BE8   /* waking, waiting */
 
 
 /* Panel geometry, MEASURED not assumed (#104, board-revision.md):
@@ -91,7 +91,7 @@ typedef struct {
  * reasoning layer that does not run here, and inventing a source for them
  * would be worse than an honest gap. */
 static const face_t k_face_up = {
-    "IDLE", "NOTHING ENGAGED", V5_GREEN, { CH_OK, CH_OK, CH_UNK, CH_UNK }, false, true, true
+    "IDLE", "NOTHING ENGAGED", V5_GREEN, { CH_UNK, CH_OK, CH_UNK, CH_UNK }, false, true, true
 };
 static const face_t k_face_offline_r2 = {
     /* v5's offline_r2, including its [FIX]: with the link down R2's battery is
@@ -109,13 +109,21 @@ static const face_t k_face_offline_r2 = {
      * four-row LINK case, which the face replaced -- and a future reader
      * restoring a red offline state would otherwise find no trace of why it
      * must not be. v5 agrees independently: its offline colour is #F2B23C. */
-    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_OK, CH_DOWN, CH_OK, CH_OK }, true, false, false
+    /* MIC, NET and LLM are CH_UNK, not CH_OK. The chain now appears only
+     * when a human is looking to find out what is wrong, which makes a green
+     * pip a CERTIFICATION -- and this build has no microphone, no network
+     * stack and no LLM client to certify. chain_colour() already treats
+     * CH_UNK as absence rather than a claim; only R2 has a real source. */
+    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_UNK, CH_DOWN, CH_UNK, CH_UNK }, true, false, false
 };
 static const face_t k_face_waking = {
-    "WAKING", "FINDING HIM", V5_BLUE, { CH_OK, CH_UNK, CH_OK, CH_OK }, false, false, false
+    "WAKING", "FINDING HIM", V5_BLUE, { CH_UNK, CH_UNK, CH_UNK, CH_UNK }, false, false, false
 };
 
 static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
+
+struct r2_telemetry;
+static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms);
 
 enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
 static lv_obj_t *s_page[PAGE_COUNT];
@@ -134,6 +142,10 @@ static const char *k_service_rows[] = {
 static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
 static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
 #define PWR_BARS 18
+#define DIAL_X   132
+#define DIAL_Y   198
+#define DIAL_D   104
+#define DIAL_R   (DIAL_D / 2)
 static lv_obj_t *s_pwr_bar[PWR_BARS];
 static lv_obj_t *s_dome_needle, *s_dome_hub;
 static lv_obj_t *s_chain_row;
@@ -350,22 +362,38 @@ static void build_status_face(lv_obj_t *pg)
      * running, so the status chrome stays true". It describes the BOARD --
      * its network, its reasoning service, its own power -- not R2, which is
      * what the face below is about. Missing it entirely was the most visible
-     * gap between this panel and the spec. */
+     * gap between this panel and the spec.
+     *
+     * BUT: this build has NO Wi-Fi stack, NO LLM client and NO battery ADC.
+     * The first version of this bar drew LV_SYMBOL_WIFI and
+     * LV_SYMBOL_BATTERY_2 -- a half-full battery glyph is a QUANTITATIVE
+     * claim -- in normal text colour, one swipe away from a NETWORK page that
+     * says "no Wi-Fi in this build" in so many words. The panel would have
+     * contradicted itself inside one build, in exactly the way the dome
+     * needle below refuses to.
+     *
+     * So the three slots exist and are drawn at V5_SURFACE, which is the
+     * colour chain_colour() already uses for CH_UNK: unknown is ABSENCE, not
+     * a claim. And the battery slot carries the word PWR rather than a level
+     * glyph, because there is no level to render. When a real source appears,
+     * these get a driver and a colour -- until then they are placeholders
+     * that say so. */
     s_chrome_wifi = lv_label_create(pg);
     lv_label_set_text(s_chrome_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(s_chrome_wifi, lv_color_hex(V5_MID), 0);
+    lv_obj_set_style_text_color(s_chrome_wifi, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_pos(s_chrome_wifi, 120, 16);
 
     s_chrome_llm = lv_label_create(pg);
     lv_label_set_text(s_chrome_llm, "LLM");
     lv_obj_set_style_text_font(s_chrome_llm, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_chrome_llm, lv_color_hex(V5_MID), 0);
+    lv_obj_set_style_text_color(s_chrome_llm, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_pos(s_chrome_llm, 160, 18);
 
     s_chrome_batt = lv_label_create(pg);
-    lv_label_set_text(s_chrome_batt, LV_SYMBOL_BATTERY_2);
-    lv_obj_set_style_text_color(s_chrome_batt, lv_color_hex(V5_MID), 0);
-    lv_obj_set_pos(s_chrome_batt, 212, 16);
+    lv_label_set_text(s_chrome_batt, "PWR");
+    lv_obj_set_style_text_font(s_chrome_batt, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_chrome_batt, lv_color_hex(V5_SURFACE), 0);
+    lv_obj_set_pos(s_chrome_batt, 208, 18);
 
     /* ---- SWATCH + WORD + SINCE ---------------------------------------- */
     s_face_swatch = lv_obj_create(pg);
@@ -422,8 +450,8 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_pos(dk, V5_PAD, 250);
 
     lv_obj_t *dial = lv_obj_create(pg);
-    lv_obj_set_size(dial, 104, 104);
-    lv_obj_set_pos(dial, 132, 198);
+    lv_obj_set_size(dial, DIAL_D, DIAL_D);
+    lv_obj_set_pos(dial, DIAL_X, DIAL_Y);
     lv_obj_set_style_radius(dial, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(dial, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(dial, 2, 0);
@@ -431,18 +459,27 @@ static void build_status_face(lv_obj_t *pg)
 
     s_dome_hub = lv_obj_create(pg);
     lv_obj_set_size(s_dome_hub, 6, 6);
-    lv_obj_set_pos(s_dome_hub, 132 + 52 - 3, 198 + 52 - 3);
+    lv_obj_set_pos(s_dome_hub, DIAL_X + DIAL_R - 3, DIAL_Y + DIAL_R - 3);
     lv_obj_set_style_radius(s_dome_hub, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(s_dome_hub, 0, 0);
     lv_obj_set_style_bg_color(s_dome_hub, lv_color_hex(V5_MID), 0);
 
+    /* The needle's points are DIAL-RELATIVE, and the line object is pinned
+     * over the dial to make that true. lv_line draws its points relative to
+     * its own origin; writing page coordinates into them worked only because
+     * the object happened to land at 0,0 with no padding, so any later
+     * set_pos, align or layout on this page would have silently displaced the
+     * needle with no error anywhere. */
     static lv_point_precise_t needle_pts[2];
     s_dome_needle = lv_line_create(pg);
-    needle_pts[0].x = 132 + 52; needle_pts[0].y = 198 + 52;
-    needle_pts[1].x = 132 + 52; needle_pts[1].y = 198 + 8;
+    lv_obj_set_pos(s_dome_needle, DIAL_X, DIAL_Y);
+    lv_obj_set_size(s_dome_needle, DIAL_D, DIAL_D);
+    needle_pts[0].x = DIAL_R; needle_pts[0].y = DIAL_R;
+    needle_pts[1].x = DIAL_R; needle_pts[1].y = DIAL_R;
     lv_line_set_points(s_dome_needle, needle_pts, 2);
     lv_obj_set_style_line_width(s_dome_needle, 3, 0);
     lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(V5_CYAN), 0);
+    lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
 
     s_kv_val[1] = lv_label_create(pg);
     lv_obj_set_style_text_font(s_kv_val[1], &lv_font_montserrat_28, 0);
@@ -515,7 +552,23 @@ void panel_ui_create(void)
 
     build_status_face(s_page[PAGE_STATUS]);
 
-
+    /* DRIVE THE FACE ONCE, before anything can be seen.
+     *
+     * build_status_face creates the word, the reason and the two values as
+     * empty labels and lets set_face fill them, which left them showing
+     * LVGL's default label text -- the literal string "Text", four times, at
+     * 34 px. Not a sub-frame flicker either: main.c releases the display lock
+     * here and only starts the UI task after NimBLE is up, so that frame is
+     * what sits on the glass for the whole BLE bring-up.
+     *
+     * The synthetic telemetry below is all-invalid on purpose, so every
+     * readout takes its unknown path: "----" against an empty gauge and a
+     * dial with no needle. The panel's first statement about R2 is that it
+     * does not know anything about him yet, which is true. */
+    {
+        const r2_telemetry_t empty = { 0 };
+        set_face(&k_face_waking, &empty, 0);
+    }
 
     make_pips(s_root);
     panel_ui_show_page(PAGE_STATUS);
@@ -599,16 +652,33 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         filled = pct * PWR_BARS / 100;
+        /* A known-but-critical battery must not render as an empty track,
+         * because the track is ALSO what "we have no reading" looks like.
+         * Any non-zero charge keeps at least one bar lit, so the two states
+         * are never the same picture. */
+        if (filled == 0 && pct > 0) filled = 1;
     }
+    /* V5_LABEL, not V5_GREEN. Green is a VERDICT -- "this is healthy" -- and
+     * the mapping behind this bar is inferred from an unmeasured curve, so it
+     * has no business rendering a verdict. A neutral instrument level is what
+     * we can actually justify. */
     for (int i = 0; i < PWR_BARS; i++)
         lv_obj_set_style_bg_color(s_pwr_bar[i],
-            lv_color_hex(i < filled ? V5_GREEN : V5_RULE), 0);
+            lv_color_hex(i < filled ? V5_LABEL : V5_RULE), 0);
 
     /* ---- DOME --------------------------------------------------------- */
-    const bool dome_ok = f->dome_known &&
+    /* isfinite() because dome_degrees is a float written straight off a BLE
+     * frame. Casting a NaN to int is undefined behaviour, and cosf/sinf of a
+     * NaN would put arbitrary values into the needle's points -- the one
+     * place in this file where an unvalidated wire value reached arithmetic.
+     * lroundf rather than a truncating cast: the dome has been observed at
+     * -0.06 deg, which truncates to 000 when the answer is 000 either way but
+     * would truncate -0.6 to 000 when it should read 359. */
+    const bool dome_ok = f->dome_known && isfinite(t->dome_degrees) &&
                          r2_telemetry_displayable(t, &t->dome, now_ms, 60000);
     if (dome_ok)
-        snprintf(buf, sizeof buf, "%03d", ((int)t->dome_degrees % 360 + 360) % 360);
+        snprintf(buf, sizeof buf, "%03d",
+                 (int)((lroundf(t->dome_degrees) % 360 + 360) % 360));
     else
         snprintf(buf, sizeof buf, "----");
     if (strcmp(lv_label_get_text(s_kv_val[1]), buf) != 0)
@@ -618,11 +688,10 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
      * confident lie; an empty dial is the truth. v5 does exactly this. */
     if (dome_ok) {
         static lv_point_precise_t pts[2];
-        const int cx = 132 + 52, cy = 198 + 52;
         const float rad = ((float)t->dome_degrees - 90.0f) * 3.14159265f / 180.0f;
-        pts[0].x = cx; pts[0].y = cy;
-        pts[1].x = cx + (int)(42.0f * cosf(rad));
-        pts[1].y = cy + (int)(42.0f * sinf(rad));
+        pts[0].x = DIAL_R; pts[0].y = DIAL_R;
+        pts[1].x = DIAL_R + (int)(42.0f * cosf(rad));
+        pts[1].y = DIAL_R + (int)(42.0f * sinf(rad));
         lv_line_set_points(s_dome_needle, pts, 2);
         lv_obj_remove_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
     } else {
