@@ -12,3 +12,12 @@ if(PANEL_P2_RECONNECT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_P2_RECONNECT=1)
     message(STATUS "panel: P2 reconnect timing ENABLED")
 endif()
+
+# P4: watch his advertisement without ever connecting (#101). OFF by default --
+# a panel that refuses to link to the droid is a measurement rig, not a panel.
+#   idf.py -DPANEL_P4_IDLE=ON build
+option(PANEL_P4_IDLE "Scan-only: measure his idle timeout (P4)" OFF)
+if(PANEL_P4_IDLE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_P4_IDLE=1)
+    message(STATUS "panel: P4 idle-timeout scan ENABLED (will NOT connect)")
+endif()

@@ -29,6 +29,7 @@
 #include "r2_uuids.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
@@ -47,6 +48,8 @@ static uint16_t s_connect_chr = 0;
 static bool     s_magic_written = false;
 
 static r2_stream_t s_rx;
+static bool s_scan_only;
+static uint32_t s_adverts, s_last_advert_ms;
 
 static const ble_uuid128_t k_main_svc    = { .u = {.type=BLE_UUID_TYPE_128}, .value = R2D2_MAIN_SVC };
 static const ble_uuid128_t k_cmd_chr     = { .u = {.type=BLE_UUID_TYPE_128}, .value = R2D2_CMD_CHR };
@@ -177,6 +180,14 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         memcpy(name, f.name, n);
         if (strncmp(name, R2D2_NAME, strlen(R2D2_NAME)) != 0) break;
 
+        if (s_scan_only) {
+            /* Log and keep scanning. RSSI is included because a droid that has
+             * moved or been switched off looks the same as one asleep, and the
+             * signal level is the only thing here that can tell them apart. */
+            s_adverts++;
+            s_last_advert_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            break;
+        }
         ESP_LOGI(TAG, "found %s", name);
         ble_gap_disc_cancel();
         set_state(R2_LINK_CONNECTING, 0);
@@ -243,8 +254,22 @@ void r2_link_start(void)
 {
     struct ble_gap_disc_params dp = {
         .itvl = 0x0040, .window = 0x0020, .filter_policy = 0,
-        .limited = 0, .passive = 0, .filter_duplicates = 1,
+        .limited = 0, .passive = 0,
+        /* Duplicate filtering is what makes a normal scan cheap, and it is
+         * exactly wrong here: with it on we would see him ONCE and then never
+         * again, and his silence at minute 40 would be indistinguishable from
+         * the radio having stopped reporting a device it already knew about. */
+        .filter_duplicates = s_scan_only ? 0 : 1,
     };
+    /* Cancel any scan already running, so a restart actually applies these
+     * parameters. Without this ble_gap_disc returns BLE_HS_EALREADY, which the
+     * check below treats as success -- and the OLD scan continues with the OLD
+     * settings. That silently defeated P4: scan-only wants duplicate filtering
+     * OFF, the running scan had it ON, and once he had been seen once he was
+     * suppressed forever. Zero adverts then looks exactly like a sleeping
+     * droid, which is the wrong answer in the most convincing direction. */
+    ble_gap_disc_cancel();
+
     const int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &dp, gap_event, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "ble_gap_disc rc=%d", rc);
@@ -288,6 +313,14 @@ int r2_link_disconnect(void)
     if (s_conn == BLE_HS_CONN_HANDLE_NONE) return -1;
     /* No Sphero packet is sent. We stop talking; he does the rest. */
     return ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+}
+
+void r2_link_set_scan_only(bool on) { s_scan_only = on; }
+
+void r2_link_adverts(uint32_t *count, uint32_t *last_ms)
+{
+    if (count)   *count   = s_adverts;
+    if (last_ms) *last_ms = s_last_advert_ms;
 }
 
 void r2_link_stats(uint32_t *sent, uint32_t *dropped)

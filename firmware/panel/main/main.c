@@ -234,6 +234,70 @@ static void p2_task(void *arg)
 }
 #endif
 
+#ifdef PANEL_P4_IDLE
+/* P4 — his idle timeout (#101, gates how `released` is presented over time).
+ *
+ * We never connect. The keepalive IS the wake command, so any session that
+ * connects has already destroyed the thing it wanted to measure.
+ *
+ * WHAT THIS CAN CONCLUDE IS NARROWER THAN IT LOOKS, and saying so up front is
+ * the point: the only sleep this project has ever observed was VISUAL -- he
+ * reverted to his resting alternation and faded out. Whether a sleeping droid
+ * stops advertising has never been established. So:
+ *
+ *   advertising STOPS   -> a real, machine-readable transition worth timing
+ *   advertising CONTINUES -> INSTRUMENT-LIMITED. Not "he stayed awake".
+ *
+ * The second outcome is the likely one and must not be written up as a
+ * finding about the droid. */
+static void p4_task(void *arg)
+{
+    (void)arg;
+    r2_link_set_scan_only(true);
+    /* RESTART the scan. The flag is read when ble_gap_disc is called, and
+     * on_sync already started one with filter_duplicates=1 -- so without this
+     * we see him ONCE and never again, and the very comment in r2_link warning
+     * about that was written by the same hand that then wired it wrong. The
+     * first run reported "1 advert this minute", which is the dedup filter, not
+     * his advertising rate, and would have made a real silence unmeasurable. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    r2_link_start();
+    ESP_LOGW(TAG, "P4: scan-only. We will NOT connect, because the keepalive");
+    ESP_LOGW(TAG, "    is his wake command and connecting destroys the thing");
+    ESP_LOGW(TAG, "    being measured. Watching the advertisement only.");
+    const uint32_t t0 = now_ms();
+    uint32_t last_seen = 0, adverts = 0, prev_adverts = 0;
+    bool ever_seen = false;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(60000));
+        r2_link_adverts(&adverts, &last_seen);
+        const uint32_t mins = (now_ms() - t0) / 60000u;
+        const uint32_t since = adverts - prev_adverts;
+        prev_adverts = adverts;
+        if (since > 0) {
+            ever_seen = true;
+            ESP_LOGW(TAG, "P4 t+%2umin: %u adverts this minute (still advertising)",
+                     (unsigned)mins, (unsigned)since);
+        } else if (!ever_seen) {
+            /* Never seen him AT ALL. That is an instrument failure, not a
+             * sleeping droid, and the two are indistinguishable unless this
+             * says so -- the first P4 run reported zero adverts because a
+             * stale scan was deduplicating him, and it read exactly like
+             * sleep. */
+            ESP_LOGE(TAG, "P4 t+%2umin: NO ADVERTS EVER SEEN. The scanner has "
+                          "not produced a single positive, so silence here is "
+                          "an INSTRUMENT FAILURE and proves nothing about him.",
+                     (unsigned)mins);
+        } else {
+            ESP_LOGW(TAG, "P4 t+%2umin: *** NO ADVERTS THIS MINUTE *** "
+                          "(last seen t+%umin, after %u total)",
+                     (unsigned)mins, (unsigned)((last_seen - t0) / 60000u),
+                     (unsigned)adverts);
+        }
+    }
+}
+#endif
+
 static void on_sync(void) { r2_link_start(); }
 static void host_task(void *p) { (void)p; nimble_port_run(); nimble_port_freertos_deinit(); }
 
@@ -272,6 +336,9 @@ void app_main(void)
     xTaskCreate(link_task, "r2_link_task", 4096, NULL, 4, NULL);
     xTaskCreate(ui_task,   "panel_ui",     4096, NULL, 3, NULL);
     xTaskCreate(shot_task, "panel_shot",   8192, NULL, 2, NULL);
+#ifdef PANEL_P4_IDLE
+    xTaskCreate(p4_task,   "panel_p4",     4096, NULL, 4, NULL);
+#endif
 #ifdef PANEL_P2_RECONNECT
     xTaskCreate(p2_task,   "panel_p2",     4096, NULL, 4, NULL);
 #endif
