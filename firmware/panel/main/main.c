@@ -130,6 +130,31 @@ static void ui_task(void *arg)
         panel_touch_poll();
         if (bsp_display_lock(100)) {
             panel_touch_render();
+
+            /* THE SWIPE NOW REACHES SOMETHING. It was inert when #150 merged
+             * and the PR said so in those words, because there was nowhere to
+             * swipe to. There are three pages now, so this is the call site
+             * that stops it being dead code -- and it is one line, which is
+             * exactly the point CLAUDE.md makes about wiring one path before
+             * building the layer above. */
+            const panel_swipe_t sw = panel_touch_take_swipe();
+            if (sw != PANEL_SWIPE_NONE) {
+                const int n = (sw == PANEL_SWIPE_LEFT) ? 1 : -1;
+                int next = panel_ui_page() + n;
+                /* Clamp, do not wrap. The pages are an ordered strip, and the
+                 * vault's own argument for a fixed ring was that "position in
+                 * the ring is itself an orientation cue" -- wrapping destroys
+                 * that cue on a panel with no back button. */
+                if (next < 0) next = 0;
+                if (next > 2) next = 2;
+                if (next != panel_ui_page()) {
+                    panel_ui_show_page(next);
+                    ESP_LOGI(TAG, "swipe %s -> page %s",
+                             sw == PANEL_SWIPE_LEFT ? "left" : "right",
+                             panel_ui_page_name(next));
+                }
+            }
+
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
             bsp_display_unlock();

@@ -25,6 +25,34 @@ static const char *k_row_label[N_ROWS] = { "LINK", "R2", "STORAGE", "BRAIN" };
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_root;
+
+/* THE THREE LATERAL PAGES: STATUS, SERVICE, NETWORK.
+ *
+ * Named in the vault's Prototypes/README.md:18 -- "Three lateral pages --
+ * STATUS / SERVICE / NETWORK, swipe or tap the dots." I spent two loop ticks
+ * calling these undefined and building around the gap, because I had assumed
+ * the gitignored vault was unreachable. It is a directory.
+ *
+ * What is built here is the FRAME of each page and the navigation between
+ * them, not the contents of SERVICE and NETWORK. SERVICE's seven interiors are
+ * named in #101 and are rendered as titles; their interiors are child 6.
+ * NETWORK's contents are not defined in any source I can find, so the page
+ * says so rather than inventing them -- the same choice as STORAGE and BRAIN
+ * on the status page, and the one D-017 Amendment B just ruled for. */
+enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
+static lv_obj_t *s_page[PAGE_COUNT];
+static lv_obj_t *s_pip[PAGE_COUNT];
+static int s_page_at = PAGE_STATUS;
+
+static const char *k_page_name[PAGE_COUNT] = { "STATUS", "SERVICE", "NETWORK" };
+
+/* #101: "The 7 interiors from SERVICE are unchanged." NETWORK is deliberately
+ * absent -- the epic says it is not an interior, it jumps to the lateral page. */
+static const char *k_service_rows[] = {
+    "R2 LINK", "DIAGNOSTICS", "HARDWARE TEST", "PROVISIONING",
+    "VOICE", "CAMERA", "ABOUT",
+};
+#define N_SERVICE_ROWS (sizeof k_service_rows / sizeof k_service_rows[0])
 static lv_obj_t *s_header_val;
 static lv_obj_t *s_row_value[N_ROWS];
 static lv_obj_t *s_row_dot[N_ROWS];
@@ -98,6 +126,113 @@ static lv_obj_t *make_row(lv_obj_t *parent, int index)
     return row;
 }
 
+/* The page dots. The vault's description is "swipe or tap the dots", so they
+ * are an affordance and not decoration -- but they are drawn here and made
+ * tappable in child 4 proper. Drawn small and low-contrast: this is an
+ * instrument, and a navigation cue that competes with the reading is a
+ * navigation cue in the wrong place. */
+static void make_pips(lv_obj_t *parent)
+{
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        lv_obj_t *d = lv_obj_create(parent);
+        lv_obj_set_size(d, 8, 8);
+        lv_obj_set_pos(d, PANEL_W / 2 - 22 + i * 16, PANEL_H - 22);
+        lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(d, 0, 0);
+        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(d, LV_OBJ_FLAG_SCROLLABLE);
+        s_pip[i] = d;
+    }
+}
+
+static lv_obj_t *make_page(lv_obj_t *parent)
+{
+    lv_obj_t *pg = lv_obj_create(parent);
+    lv_obj_set_size(pg, PANEL_W, PANEL_H);
+    lv_obj_set_pos(pg, 0, 0);
+    lv_obj_set_style_bg_color(pg, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(pg, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pg, 0, 0);
+    lv_obj_set_style_radius(pg, 0, 0);
+    lv_obj_set_style_pad_all(pg, 0, 0);
+    lv_obj_clear_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
+    return pg;
+}
+
+static void build_service_page(lv_obj_t *pg)
+{
+    lv_obj_t *t = lv_label_create(pg);
+    lv_label_set_text(t, "SERVICE");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
+    lv_obj_set_pos(t, ROW_PAD, 20);
+
+    /* 87 px rows, because that is the 44 pt tap target at this panel's
+     * 322 ppi and #106 confirmed rows of that height are clickable. Seven of
+     * them do not fit on 448 px, which is a real layout problem for child 6
+     * and is stated here rather than solved by shrinking the target below
+     * what was measured. */
+    for (unsigned i = 0; i < N_SERVICE_ROWS && i < 4; i++) {
+        lv_obj_t *r = lv_label_create(pg);
+        lv_label_set_text(r, k_service_rows[i]);
+        lv_obj_set_style_text_font(r, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(r, lv_color_hex(0x8A8A98), 0);
+        lv_obj_set_pos(r, ROW_PAD + 26, 74 + (int)i * 60);
+    }
+    lv_obj_t *n = lv_label_create(pg);
+    lv_label_set_text(n, "interiors: child 6");
+    lv_obj_set_style_text_font(n, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(n, lv_color_hex(0x606060), 0);
+    lv_obj_set_pos(n, ROW_PAD + 26, 74 + 4 * 60);
+}
+
+static void build_network_page(lv_obj_t *pg)
+{
+    lv_obj_t *t = lv_label_create(pg);
+    lv_label_set_text(t, "NETWORK");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
+    lv_obj_set_pos(t, ROW_PAD, 20);
+
+    /* Honest blank, like STORAGE and BRAIN. This page is NAMED in the vault
+     * and its CONTENTS are defined nowhere I can find. Inventing them is what
+     * D-017 Amendment B ruled against, and a page that invents plausible
+     * content to look finished is worse than one that admits it is not
+     * specified. */
+    lv_obj_t *n = lv_label_create(pg);
+    lv_label_set_text(n, "not specified");
+    lv_obj_set_style_text_font(n, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(n, lv_color_hex(0x606060), 0);
+    lv_obj_set_pos(n, ROW_PAD, 90);
+
+    lv_obj_t *w = lv_label_create(pg);
+    lv_label_set_text(w, "the page is named in the panel\ndesign; its contents are not");
+    lv_obj_set_style_text_font(w, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(w, lv_color_hex(0x505058), 0);
+    lv_obj_set_pos(w, ROW_PAD, 140);
+}
+
+void panel_ui_show_page(int page)
+{
+    if (page < 0 || page >= PAGE_COUNT) return;
+    s_page_at = page;
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        if (s_page[i] == NULL) continue;
+        if (i == page) lv_obj_remove_flag(s_page[i], LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_page[i], LV_OBJ_FLAG_HIDDEN);
+        if (s_pip[i])
+            lv_obj_set_style_bg_color(s_pip[i],
+                lv_color_hex(i == page ? 0xF0F0F4 : 0x404048), 0);
+    }
+}
+
+int panel_ui_page(void) { return s_page_at; }
+
+const char *panel_ui_page_name(int page)
+{
+    return (page >= 0 && page < PAGE_COUNT) ? k_page_name[page] : "?";
+}
+
 void panel_ui_create(void)
 {
     s_screen = lv_scr_act();
@@ -119,7 +254,13 @@ void panel_ui_create(void)
     lv_obj_set_style_pad_all(s_root, 0, 0);
     lv_obj_clear_flag(s_root, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *header = lv_obj_create(s_root);
+    s_page[PAGE_STATUS] = make_page(s_root);
+    s_page[PAGE_SERVICE] = make_page(s_root);
+    s_page[PAGE_NETWORK] = make_page(s_root);
+    build_service_page(s_page[PAGE_SERVICE]);
+    build_network_page(s_page[PAGE_NETWORK]);
+
+    lv_obj_t *header = lv_obj_create(s_page[PAGE_STATUS]);
     lv_obj_set_size(header, PANEL_W, HEADER_H);
     lv_obj_set_pos(header, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x000000), 0);
@@ -141,10 +282,13 @@ void panel_ui_create(void)
     lv_obj_set_pos(s_header_val, 150, 25);
 
     for (int i = 0; i < N_ROWS; i++) {
-        make_row(s_root, i);
+        make_row(s_page[PAGE_STATUS], i);
         s_row_sev[i] = PANEL_UNKNOWN;
         lv_obj_set_style_bg_color(s_row_dot[i], sev_colour(PANEL_UNKNOWN), 0);
     }
+
+    make_pips(s_root);
+    panel_ui_show_page(PAGE_STATUS);
 }
 
 static bool s_changed;
