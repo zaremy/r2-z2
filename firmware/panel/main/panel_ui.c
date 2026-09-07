@@ -1,6 +1,7 @@
 #include "panel_ui.h"
 
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -81,6 +82,7 @@ typedef struct {
     const char *since;      /* why, under it */
     uint32_t    colour;
     chain_t     chain[4];   /* MIC / R2 / NET / LLM */
+    bool        has_chain;  /* v5 defines a chain only for faults */
     bool        pwr_known;  /* v5 sets pwrTxt null when the link is down */
     bool        dome_known;
 } face_t;
@@ -89,7 +91,7 @@ typedef struct {
  * reasoning layer that does not run here, and inventing a source for them
  * would be worse than an honest gap. */
 static const face_t k_face_up = {
-    "IDLE", "NOTHING ENGAGED", V5_BLUE, { CH_OK, CH_OK, CH_UNK, CH_UNK }, true, true
+    "IDLE", "NOTHING ENGAGED", V5_GREEN, { CH_OK, CH_OK, CH_UNK, CH_UNK }, false, true, true
 };
 static const face_t k_face_offline_r2 = {
     /* v5's offline_r2, including its [FIX]: with the link down R2's battery is
@@ -107,10 +109,10 @@ static const face_t k_face_offline_r2 = {
      * four-row LINK case, which the face replaced -- and a future reader
      * restoring a red offline state would otherwise find no trace of why it
      * must not be. v5 agrees independently: its offline colour is #F2B23C. */
-    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_OK, CH_DOWN, CH_OK, CH_OK }, false, false
+    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_OK, CH_DOWN, CH_OK, CH_OK }, true, false, false
 };
 static const face_t k_face_waking = {
-    "WAKING", "FINDING HIM", V5_BLUE, { CH_OK, CH_UNK, CH_OK, CH_OK }, false, false
+    "WAKING", "FINDING HIM", V5_BLUE, { CH_OK, CH_UNK, CH_OK, CH_OK }, false, false, false
 };
 
 static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
@@ -129,7 +131,12 @@ static const char *k_service_rows[] = {
     "VOICE", "CAMERA", "ABOUT",
 };
 #define N_SERVICE_ROWS (sizeof k_service_rows / sizeof k_service_rows[0])
-static lv_obj_t *s_face_word, *s_face_since;
+static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
+static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
+#define PWR_BARS 18
+static lv_obj_t *s_pwr_bar[PWR_BARS];
+static lv_obj_t *s_dome_needle, *s_dome_hub;
+static lv_obj_t *s_chain_row;
 static lv_obj_t *s_kv_val[2];                 /* PWR, DOME */
 static lv_obj_t *s_chain_pip[4];
 static const face_t *s_face_now;
@@ -152,12 +159,28 @@ static const face_t *s_face_now;
  * tappable in child 4 proper. Drawn small and low-contrast: this is an
  * instrument, and a navigation cue that competes with the reading is a
  * navigation cue in the wrong place. */
+#define PIP_W   20      /* v5 .dot-a { width: 20px } */
+#define PIP_DOT  6      /* v5 .dot   { width: 6px }  */
+#define PIP_H    6
+#define PIP_PITCH 22
+
+static int pip_slot_x(int i)
+{
+    return PANEL_W / 2 - (PAGE_COUNT * PIP_PITCH - (PIP_PITCH - PIP_W)) / 2
+           + i * PIP_PITCH;
+}
+
 static void make_pips(lv_obj_t *parent)
 {
     for (int i = 0; i < PAGE_COUNT; i++) {
         lv_obj_t *d = lv_obj_create(parent);
-        lv_obj_set_size(d, 8, 8);
-        lv_obj_set_pos(d, PANEL_W / 2 - 22 + i * 16, PANEL_H - 22);
+        /* Sized and positioned by set_page: v5 draws the ACTIVE one as a 20x6
+         * pill and the rest as 6 px dots, so the geometry is state, not
+         * construction. Slots are a fixed 22 px pitch and the dot is centred
+         * inside its own slot, which keeps the row centred whichever one is
+         * wide. */
+        lv_obj_set_size(d, PIP_DOT, PIP_H);
+        lv_obj_set_pos(d, pip_slot_x(i) + (PIP_W - PIP_DOT) / 2, PANEL_H - 22);
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(d, 0, 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
@@ -279,9 +302,15 @@ void panel_ui_show_page(int page)
         if (s_page[i] == NULL) continue;
         if (i == page) lv_obj_remove_flag(s_page[i], LV_OBJ_FLAG_HIDDEN);
         else           lv_obj_add_flag(s_page[i], LV_OBJ_FLAG_HIDDEN);
-        if (s_pip[i])
+        if (s_pip[i]) {
+            const bool on = (i == page);
+            lv_obj_set_size(s_pip[i], on ? PIP_W : PIP_DOT, PIP_H);
+            lv_obj_set_pos(s_pip[i],
+                pip_slot_x(i) + (PIP_W - (on ? PIP_W : PIP_DOT)) / 2,
+                PANEL_H - 22);
             lv_obj_set_style_bg_color(s_pip[i],
-                lv_color_hex(i == page ? 0xF0F0F4 : 0x404048), 0);
+                lv_color_hex(on ? V5_LABEL : V5_SURFACE), 0);
+        }
     }
 }
 
@@ -316,64 +345,145 @@ static void build_status_face(lv_obj_t *pg)
 {
     lv_obj_set_style_bg_color(pg, lv_color_hex(V5_GROUND), 0);
 
+    /* ---- TOP CHROME: wifi, LLM, battery ------------------------------
+     * Always present, and v5 is explicit about why: "the system is still
+     * running, so the status chrome stays true". It describes the BOARD --
+     * its network, its reasoning service, its own power -- not R2, which is
+     * what the face below is about. Missing it entirely was the most visible
+     * gap between this panel and the spec. */
+    s_chrome_wifi = lv_label_create(pg);
+    lv_label_set_text(s_chrome_wifi, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_color(s_chrome_wifi, lv_color_hex(V5_MID), 0);
+    lv_obj_set_pos(s_chrome_wifi, 120, 16);
+
+    s_chrome_llm = lv_label_create(pg);
+    lv_label_set_text(s_chrome_llm, "LLM");
+    lv_obj_set_style_text_font(s_chrome_llm, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_chrome_llm, lv_color_hex(V5_MID), 0);
+    lv_obj_set_pos(s_chrome_llm, 160, 18);
+
+    s_chrome_batt = lv_label_create(pg);
+    lv_label_set_text(s_chrome_batt, LV_SYMBOL_BATTERY_2);
+    lv_obj_set_style_text_color(s_chrome_batt, lv_color_hex(V5_MID), 0);
+    lv_obj_set_pos(s_chrome_batt, 212, 16);
+
+    /* ---- SWATCH + WORD + SINCE ---------------------------------------- */
+    s_face_swatch = lv_obj_create(pg);
+    lv_obj_set_size(s_face_swatch, 22, 22);
+    lv_obj_set_pos(s_face_swatch, V5_PAD, 54);
+    lv_obj_set_style_radius(s_face_swatch, 2, 0);
+    lv_obj_set_style_border_width(s_face_swatch, 0, 0);
+
     s_face_word = lv_label_create(pg);
-    lv_label_set_text(s_face_word, "WAKING");
     lv_obj_set_style_text_font(s_face_word, &lv_font_montserrat_34, 0);
-    lv_obj_set_style_text_color(s_face_word, lv_color_hex(V5_BLUE), 0);
-    lv_obj_set_pos(s_face_word, V5_PAD, 44);
+    lv_obj_set_pos(s_face_word, V5_PAD + 34, 44);
 
     s_face_since = lv_label_create(pg);
-    lv_label_set_text(s_face_since, "STARTING");
     lv_obj_set_style_text_font(s_face_since, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_face_since, lv_color_hex(V5_MID), 0);
-    lv_obj_set_pos(s_face_since, V5_PAD, 92);
+    lv_obj_set_style_text_color(s_face_since, lv_color_hex(V5_LABEL), 0);
+    lv_obj_set_pos(s_face_since, V5_PAD + 34, 88);
 
-    /* PWR and DOME as key/value, 52 px rows with a hairline -- v5's .krow. */
-    static const char *k_keys[2] = { "PWR", "DOME" };
-    for (int i = 0; i < 2; i++) {
-        lv_obj_t *k = lv_label_create(pg);
-        lv_label_set_text(k, k_keys[i]);
-        lv_obj_set_style_text_font(k, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(k, lv_color_hex(V5_LABEL), 0);
-        lv_obj_set_pos(k, V5_PAD, 150 + i * 62 + 10);
+    lv_obj_t *rule = lv_obj_create(pg);
+    lv_obj_set_size(rule, PANEL_W - 2 * V5_PAD, 1);
+    lv_obj_set_pos(rule, V5_PAD, 128);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(V5_SURFACE), 0);
+    lv_obj_set_style_border_width(rule, 0, 0);
 
-        s_kv_val[i] = lv_label_create(pg);
-        lv_label_set_text(s_kv_val[i], "---");
-        lv_obj_set_style_text_font(s_kv_val[i], &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(s_kv_val[i], lv_color_hex(V5_TEXT), 0);
-        lv_obj_set_pos(s_kv_val[i], PANEL_W - V5_PAD - 130, 150 + i * 62);
+    /* ---- R2 PWR: label, bar graph, value ------------------------------ */
+    lv_obj_t *pk = lv_label_create(pg);
+    lv_label_set_text(pk, "R2 PWR");
+    lv_obj_set_style_text_font(pk, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(pk, lv_color_hex(V5_LABEL), 0);
+    lv_obj_set_pos(pk, V5_PAD, 160);
 
-        lv_obj_t *rule = lv_obj_create(pg);
-        lv_obj_set_size(rule, PANEL_W - 2 * V5_PAD, 1);
-        lv_obj_set_pos(rule, V5_PAD, 150 + i * 62 + 52);
-        lv_obj_set_style_bg_color(rule, lv_color_hex(V5_HAIRLINE), 0);
-        lv_obj_set_style_border_width(rule, 0, 0);
+    for (int i = 0; i < PWR_BARS; i++) {
+        lv_obj_t *b = lv_obj_create(pg);
+        lv_obj_set_size(b, 4, 26);
+        lv_obj_set_pos(b, 118 + i * 7, 152);
+        lv_obj_set_style_radius(b, 0, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        s_pwr_bar[i] = b;
     }
 
-    /* The fault chain: a line with four nodes. This is the mechanism by which
-     * ONE `offline` state shows WHICH thing is unreachable -- the three
-     * display modes D-017 Amendment B ruled are views, not states. */
-    lv_obj_t *line = lv_obj_create(pg);
-    lv_obj_set_size(line, PANEL_W - 2 * 30, 2);
-    lv_obj_set_pos(line, 30, 372);
+    s_kv_val[0] = lv_label_create(pg);
+    lv_obj_set_style_text_font(s_kv_val[0], &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_kv_val[0], lv_color_hex(V5_TEXT), 0);
+    lv_obj_set_pos(s_kv_val[0], 254, 154);
+
+    /* ---- DOME: label, dial, value -------------------------------------
+     * v5 draws the dial with NO NEEDLE when the heading is unknown rather
+     * than hiding the dial or parking the needle at zero -- "[FIX] heading
+     * may be unknown (link down)". A needle at zero is a confident lie; an
+     * empty dial is the truth. */
+    lv_obj_t *dk = lv_label_create(pg);
+    lv_label_set_text(dk, "DOME");
+    lv_obj_set_style_text_font(dk, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(dk, lv_color_hex(V5_LABEL), 0);
+    lv_obj_set_pos(dk, V5_PAD, 250);
+
+    lv_obj_t *dial = lv_obj_create(pg);
+    lv_obj_set_size(dial, 104, 104);
+    lv_obj_set_pos(dial, 132, 198);
+    lv_obj_set_style_radius(dial, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(dial, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(dial, 2, 0);
+    lv_obj_set_style_border_color(dial, lv_color_hex(V5_SURFACE), 0);
+
+    s_dome_hub = lv_obj_create(pg);
+    lv_obj_set_size(s_dome_hub, 6, 6);
+    lv_obj_set_pos(s_dome_hub, 132 + 52 - 3, 198 + 52 - 3);
+    lv_obj_set_style_radius(s_dome_hub, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(s_dome_hub, 0, 0);
+    lv_obj_set_style_bg_color(s_dome_hub, lv_color_hex(V5_MID), 0);
+
+    static lv_point_precise_t needle_pts[2];
+    s_dome_needle = lv_line_create(pg);
+    needle_pts[0].x = 132 + 52; needle_pts[0].y = 198 + 52;
+    needle_pts[1].x = 132 + 52; needle_pts[1].y = 198 + 8;
+    lv_line_set_points(s_dome_needle, needle_pts, 2);
+    lv_obj_set_style_line_width(s_dome_needle, 3, 0);
+    lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(V5_CYAN), 0);
+
+    s_kv_val[1] = lv_label_create(pg);
+    lv_obj_set_style_text_font(s_kv_val[1], &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_kv_val[1], lv_color_hex(V5_TEXT), 0);
+    lv_obj_set_pos(s_kv_val[1], 254, 236);
+
+    /* ---- FAULT CHAIN: only when something is actually wrong -----------
+     * I had this permanently on the resting face. v5 defines `chain` for
+     * exactly four states -- the three offline modes and danger -- so a
+     * healthy panel does not carry it. A fault indicator that is always
+     * visible is one nobody reads. */
+    s_chain_row = lv_obj_create(pg);
+    lv_obj_set_size(s_chain_row, PANEL_W, 58);
+    lv_obj_set_pos(s_chain_row, 0, 336);
+    lv_obj_set_style_bg_opa(s_chain_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_chain_row, 0, 0);
+    lv_obj_set_style_pad_all(s_chain_row, 0, 0);
+    lv_obj_clear_flag(s_chain_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *line = lv_obj_create(s_chain_row);
+    lv_obj_set_size(line, PANEL_W - 60, 2);
+    lv_obj_set_pos(line, 30, 40);
     lv_obj_set_style_bg_color(line, lv_color_hex(V5_RULE), 0);
     lv_obj_set_style_border_width(line, 0, 0);
 
     for (int i = 0; i < 4; i++) {
-        const int cx = 30 + i * ((PANEL_W - 60) / 3);
-        lv_obj_t *pip = lv_obj_create(pg);
-        lv_obj_set_size(pip, 16, 16);
-        lv_obj_set_pos(pip, cx - 8, 365);
-        lv_obj_set_style_radius(pip, 3, 0);
-        lv_obj_set_style_border_width(pip, 0, 0);
-        s_chain_pip[i] = pip;
-
-        lv_obj_t *lbl = lv_label_create(pg);
+        const int cx = 40 + i * ((PANEL_W - 80) / 3);
+        lv_obj_t *lbl = lv_label_create(s_chain_row);
         lv_label_set_text(lbl, k_chain_label[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(V5_MID), 0);
-        lv_obj_set_pos(lbl, cx - 14, 340);
+        lv_obj_set_pos(lbl, cx - 14, 8);
+
+        lv_obj_t *pip = lv_obj_create(s_chain_row);
+        lv_obj_set_size(pip, 16, 16);
+        lv_obj_set_pos(pip, cx - 8, 33);
+        lv_obj_set_style_radius(pip, 2, 0);
+        lv_obj_set_style_border_width(pip, 0, 0);
+        s_chain_pip[i] = pip;
     }
+    lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
 }
 
 void panel_ui_create(void)
@@ -440,35 +550,84 @@ static uint32_t chain_colour(chain_t c)
 static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
 {
     char buf[32];
+
     if (f != s_face_now) {
         s_face_now = f;
         s_changed = true;                       /* worth looking at */
         lv_label_set_text(s_face_word, f->word);
         lv_obj_set_style_text_color(s_face_word, lv_color_hex(f->colour), 0);
+        lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(f->colour), 0);
         lv_label_set_text(s_face_since, f->since);
-        for (int i = 0; i < 4; i++)
-            lv_obj_set_style_bg_color(s_chain_pip[i],
-                                      lv_color_hex(chain_colour(f->chain[i])), 0);
+
+        /* The chain appears only when something is wrong. v5 defines it for
+         * the three offline modes and danger, and for nothing else. */
+        if (f->has_chain) {
+            lv_obj_remove_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < 4; i++)
+                lv_obj_set_style_bg_color(s_chain_pip[i],
+                                          lv_color_hex(chain_colour(f->chain[i])), 0);
+        } else {
+            lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
-    /* PWR and DOME. v5 sets both to null when the link is down, because R2's
-     * battery arrives over that link and is not knowable without it -- the
-     * transport-health rule, which r2_telemetry already enforces. The face
-     * asks the telemetry layer rather than deciding for itself. */
-    if (f->pwr_known && r2_telemetry_displayable(t, &t->battery, now_ms, 60000))
+    /* ---- R2 PWR ------------------------------------------------------- */
+    const bool pwr_ok = f->pwr_known &&
+                        r2_telemetry_displayable(t, &t->battery, now_ms, 60000);
+    if (pwr_ok)
         snprintf(buf, sizeof buf, "%u.%02u V",
                  t->battery_centivolts / 100u, t->battery_centivolts % 100u);
     else
-        snprintf(buf, sizeof buf, "---");
+        snprintf(buf, sizeof buf, "----");
     if (strcmp(lv_label_get_text(s_kv_val[0]), buf) != 0)
         lv_label_set_text(s_kv_val[0], buf);
 
-    if (f->dome_known && r2_telemetry_displayable(t, &t->dome, now_ms, 60000))
-        snprintf(buf, sizeof buf, "%d deg", (int)t->dome_degrees);
+    /* The bar graph's fill needs a percentage and we have VOLTS.
+     *
+     * Mapping one to the other needs his discharge curve, which is UNMEASURED
+     * -- every reading this project has ever taken is 4.42 or 4.43 V on a
+     * charger. The provisional range below (3.60 V empty, 4.50 V full, a
+     * nominal 1S Li-ion) is INFERRED and labelled as such; it must not
+     * graduate to OBSERVED because a bar looked plausible.
+     *
+     * When the value is not knowable, ALL bars go to the track colour -- v5's
+     * treatment, and the honest one: an empty gauge beside "----". */
+    int filled = 0;
+    if (pwr_ok) {
+        const int mv = (int)t->battery_centivolts * 10;
+        int pct = (mv - 3600) * 100 / (4500 - 3600);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        filled = pct * PWR_BARS / 100;
+    }
+    for (int i = 0; i < PWR_BARS; i++)
+        lv_obj_set_style_bg_color(s_pwr_bar[i],
+            lv_color_hex(i < filled ? V5_GREEN : V5_RULE), 0);
+
+    /* ---- DOME --------------------------------------------------------- */
+    const bool dome_ok = f->dome_known &&
+                         r2_telemetry_displayable(t, &t->dome, now_ms, 60000);
+    if (dome_ok)
+        snprintf(buf, sizeof buf, "%03d", ((int)t->dome_degrees % 360 + 360) % 360);
     else
-        snprintf(buf, sizeof buf, "---");
+        snprintf(buf, sizeof buf, "----");
     if (strcmp(lv_label_get_text(s_kv_val[1]), buf) != 0)
         lv_label_set_text(s_kv_val[1], buf);
+
+    /* No needle when the heading is unknown. A needle parked at zero is a
+     * confident lie; an empty dial is the truth. v5 does exactly this. */
+    if (dome_ok) {
+        static lv_point_precise_t pts[2];
+        const int cx = 132 + 52, cy = 198 + 52;
+        const float rad = ((float)t->dome_degrees - 90.0f) * 3.14159265f / 180.0f;
+        pts[0].x = cx; pts[0].y = cy;
+        pts[1].x = cx + (int)(42.0f * cosf(rad));
+        pts[1].y = cy + (int)(42.0f * sinf(rad));
+        lv_line_set_points(s_dome_needle, pts, 2);
+        lv_obj_remove_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
