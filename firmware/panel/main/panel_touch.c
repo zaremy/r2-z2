@@ -2,6 +2,8 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_lvgl_port.h"
+#include "esp_lvgl_port_touch.h"
 #include "lvgl.h"
 #include "driver/i2c_master.h"
 
@@ -219,9 +221,21 @@ void panel_touch_init(void)
          * reader, and it is ours. */
         lv_indev_t *indev = bsp_display_get_input_dev();
         if (indev != NULL) {
-            lv_indev_delete(indev);
-            ESP_LOGI(TAG, "deleted the BSP's LVGL touch indev -- two drivers "
-                          "on one controller steal each other's reads");
+            /* lvgl_port_remove_touch(), NOT lv_indev_delete().
+             *
+             * The first fix used the bare LVGL call and the re-review blocked
+             * it: esp_lvgl_port's lvgl_port_add_touch() allocated a touch_ctx
+             * and registered an interrupt callback, and deleting the indev
+             * underneath it leaks both and leaves the BSP's static disp_indev
+             * pointer dangling. Reaching past a wrapper to free the thing it
+             * owns is how you get a use-after-free that only shows up when
+             * something later asks the BSP for its input device.
+             *
+             * This is the paired teardown for the paired constructor. */
+            lvgl_port_remove_touch(indev);
+            ESP_LOGI(TAG, "removed the BSP's LVGL touch indev via "
+                          "lvgl_port_remove_touch -- two drivers on one "
+                          "controller steal each other's reads");
         }
     }
 

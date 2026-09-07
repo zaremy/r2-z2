@@ -1,7 +1,16 @@
 idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_timer bt nvs_flash
-                                r2_link r2_ops r2_gate r2_packet r2_telemetry)
+                                r2_link r2_ops r2_gate r2_packet r2_telemetry
+                                # esp_lcd_touch and esp_lvgl_port are needed for
+                                # lvgl_port_remove_touch(). Without esp_lcd_touch
+                                # on the include path, esp_lvgl_port_touch.h
+                                # compiles its whole API out behind
+                                # __has_include("esp_lcd_touch.h") -- so the
+                                # function silently does not exist and the error
+                                # is "implicit declaration", which points at the
+                                # call rather than at the missing dependency.
+                                esp_lcd_touch espressif__esp_lvgl_port)
 
 # P2: time the panel's own reconnect (#101, gates AC8). OFF by default --
 # deliberately dropping the BLE link over and over is a measurement, not
