@@ -1,0 +1,69 @@
+W (1801668) panel: P4 t+30min: 117 adverts this minute (still advertising)
+W (1861668) panel: P4 t+31min: 109 adverts this minute (still advertising)
+W (3961668) panel: P4 t+66min: 115 adverts this minute (still advertising)
+W (4021668) panel: P4 t+67min: 108 adverts this minute (still advertising)
+
+P4 — his idle timeout: INSTRUMENT-LIMITED, not answered
+=======================================================
+2026-09-06. 67 minutes with R2 left completely alone: the panel scanned for his
+advertisement and never once connected, because our keepalive IS his wake
+command and any session that connects has already destroyed what it wanted to
+measure.
+
+RESULT, SCOPED TO WHAT WAS ACTUALLY OBSERVED: eight sampled minutes across a
+67-minute window -- t+0,1,2,3 (the validation run) and t+30,31,66,67 -- every
+one of them showing 108-124 adverts. No sampled minute was silent, and the run
+spans all four of the epic's checkpoints (5, 15, 30, 60 min).
+
+A FIRST DRAFT OF THIS FILE SAID "advertised continuously for the whole 67
+minutes, with no gap at any point". That is not what was measured. The board
+logged every minute; I only CAPTURED eight of them, because reading the serial
+line is a sampled operation and the rest scrolled past unrecorded. Eight
+samples cannot rule out a gap in the other fifty-nine.
+
+What the sampling does establish is that he was advertising at t+67 as
+strongly as at t+0, so if he slept in between he was advertising again by the
+end -- which makes a silent-while-asleep model harder, not impossible.
+
+The fix for a future run is cheap and worth doing: report the CUMULATIVE
+advert count, not a per-minute delta. A total of ~7,400 over 67 minutes would
+bound the total silence to almost nothing from a single reading, where eight
+per-minute samples bound nothing at all.
+
+THIS DOES NOT MEAN HE STAYED AWAKE, and that was written down BEFORE the run
+rather than after it. Two readings fit the data equally well:
+
+  (a) he did not sleep within 67 minutes, or
+  (b) he slept, and a sleeping droid keeps advertising.
+
+Nothing here can separate them. The ONLY sleep this project has ever observed
+was VISUAL -- CLAUDE.md, 2026-08-18: he "reverted to his resting alternation
+and then faded out". Whether that state stops the advertisement has never been
+established, so the advertisement is not a validated proxy for it.
+
+THE INSTRUMENT ITSELF IS SOUND, which is worth separating from the result.
+108-124 adverts/min is ~2/second, sensitive enough that a real stop would be
+unmistakable and a single silent minute would be meaningful. It was validated
+against a known positive before the run, which caught two earlier versions
+reporting 1/min and 0/min -- both of which were a stale duplicate filter, and
+the second of which read EXACTLY like a sleeping droid.
+
+WHAT WOULD ACTUALLY SETTLE IT: the operator looking at him. The observable is
+his lights fading, and it needs an eye. That makes P4 not "free" as the epic
+estimated -- it is free of hardware time and costs operator attention, which is
+the resource this project is actually short of.
+
+CHEAPEST PATH: the operator is already needed at the droid for P1
+(corner-to-corner touch calibration). If they glance at whether he is lit while
+they are there, and again on a later pass, P4 gets its answer for no extra
+trip. That is worth more than another hour of scanning.
+
+CONSEQUENCE FOR D-023 AND CHILD 5: `released` still has no duration behind it.
+AC2b already says it "renders provisionally until P4 lands", and it still does.
+What has changed is that we now know a BLE scan cannot land it.
+
+WORTH KEEPING ANYWAY: 67 minutes of uninterrupted advertisement is itself a
+datum. Whatever he does when idle, he does not stop advertising for at least an
+hour -- so a panel that treats "no advert" as "he is asleep" would be wrong for
+at least that long, and any scan-based presence detection can rely on him being
+findable across that window.
