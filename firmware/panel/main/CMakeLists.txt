@@ -1,7 +1,7 @@
 idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_timer bt nvs_flash
-                                r2_link r2_ops r2_gate r2_packet r2_telemetry
+                                r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state
                                 # esp_lcd_touch and esp_lvgl_port are needed for
                                 # lvgl_port_remove_touch(). Without esp_lcd_touch
                                 # on the include path, esp_lvgl_port_touch.h
