@@ -159,6 +159,64 @@ static void shot_task(void *arg)
     }
 }
 
+#ifdef PANEL_P2_RECONNECT
+/* P2 — time the PANEL'S OWN reconnect (#101, gates AC8).
+ *
+ * AC8 wants `waking` to show BOUNDED PROGRESS against a real duration, and the
+ * epic is explicit that the ~12 s figure floating around is the MAC DAEMON'S
+ * and must not calibrate this bar. Nobody has ever timed the board's.
+ *
+ * Behind a build flag because dropping the link on purpose, repeatedly, is the
+ * last thing a resting panel should do. It is safe -- every op here is read
+ * tier, and a dropped link is what "default to STOP" already contemplates --
+ * but it is not resting behaviour and must not be reachable by accident.
+ *
+ * n > 1 deliberately. A single reconnect is an anecdote, and a progress bar
+ * calibrated to one sample will overrun or stall for every user of it. */
+#define P2_TRIALS 8
+
+static void p2_task(void *arg)
+{
+    (void)arg;
+    uint32_t ms[P2_TRIALS];
+    int n = 0;
+
+    while (!r2_link_is_up()) vTaskDelay(pdMS_TO_TICKS(200));
+    ESP_LOGW(TAG, "P2: timing %d deliberate reconnects", P2_TRIALS);
+
+    while (n < P2_TRIALS) {
+        vTaskDelay(pdMS_TO_TICKS(4000));      /* settle between trials */
+        if (!r2_link_is_up()) continue;
+
+        const uint32_t t0 = now_ms();
+        r2_link_disconnect();
+        /* Wait for the link to LEAVE up first. Timing from the request would
+         * fold our own teardown into his reconnect and quietly inflate it. */
+        while (r2_link_is_up()) vTaskDelay(pdMS_TO_TICKS(5));
+        const uint32_t dropped = now_ms();
+
+        while (!r2_link_is_up()) vTaskDelay(pdMS_TO_TICKS(5));
+        ms[n] = now_ms() - dropped;
+        ESP_LOGW(TAG, "P2 trial %d/%d: %"PRIu32" ms  (teardown %"PRIu32" ms)",
+                 n + 1, P2_TRIALS, ms[n], dropped - t0);
+        n++;
+    }
+
+    uint32_t lo = ms[0], hi = ms[0], sum = 0;
+    for (int i = 0; i < n; i++) {
+        if (ms[i] < lo) lo = ms[i];
+        if (ms[i] > hi) hi = ms[i];
+        sum += ms[i];
+    }
+    ESP_LOGW(TAG, "P2 RESULT: n=%d  min %"PRIu32" ms  max %"PRIu32
+                  " ms  mean %"PRIu32" ms", n, lo, hi, sum / (uint32_t)n);
+    ESP_LOGW(TAG, "  AC8's bar should be bounded by the MAX, not the mean:");
+    ESP_LOGW(TAG, "  a bar that finishes early and waits reads as broken, and");
+    ESP_LOGW(TAG, "  one that overruns reads as a hang.");
+    vTaskDelete(NULL);
+}
+#endif
+
 static void on_sync(void) { r2_link_start(); }
 static void host_task(void *p) { (void)p; nimble_port_run(); nimble_port_freertos_deinit(); }
 
@@ -197,4 +255,7 @@ void app_main(void)
     xTaskCreate(link_task, "r2_link_task", 4096, NULL, 4, NULL);
     xTaskCreate(ui_task,   "panel_ui",     4096, NULL, 3, NULL);
     xTaskCreate(shot_task, "panel_shot",   8192, NULL, 2, NULL);
+#ifdef PANEL_P2_RECONNECT
+    xTaskCreate(p2_task,   "panel_p2",     4096, NULL, 4, NULL);
+#endif
 }

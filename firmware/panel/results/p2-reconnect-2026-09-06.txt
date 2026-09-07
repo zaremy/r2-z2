@@ -1,0 +1,149 @@
+I (1075) panel: STATUS frame drawn; ceiling is 'read'
+I (1134) r2_link: state -> scanning
+I (1137) panel: link -> scanning
+I (1466) r2_link: found D2-6F6B
+I (1466) r2_link: state -> connecting
+I (1466) panel: link -> connecting
+I (2676) r2_link: state -> handshaking
+I (2676) panel: link -> handshaking
+I (4626) r2_link: state -> up
+I (4626) panel: link -> up
+W (4752) panel: P2: timing 8 deliberate reconnects
+I (7145) panel: t+6s  answered 0/1  | gate adm=2 ref=0  link sent=2 drop=0
+I (8776) r2_link: state -> down (disconnected)
+I (8777) panel: link -> down
+I (8790) r2_link: state -> scanning
+I (8793) panel: link -> scanning
+I (9036) r2_link: found D2-6F6B
+I (9036) r2_link: state -> connecting
+I (9037) panel: link -> connecting
+I (9476) r2_link: state -> handshaking
+I (9476) panel: link -> handshaking
+I (11426) r2_link: state -> up
+I (11426) panel: link -> up
+W (11427) panel: P2 trial 1/8: 2650 ms  (teardown 25 ms)
+I (15476) r2_link: state -> down (disconnected)
+I (15477) panel: link -> down
+I (15490) r2_link: state -> scanning
+I (15493) panel: link -> scanning
+I (15732) r2_link: found D2-6F6B
+I (15733) r2_link: state -> connecting
+I (15733) panel: link -> connecting
+I (16176) r2_link: state -> handshaking
+I (16176) panel: link -> handshaking
+I (18076) r2_link: state -> up
+I (18076) panel: link -> up
+W (18077) panel: P2 trial 2/8: 2600 ms  (teardown 50 ms)
+I (22126) r2_link: state -> down (disconnected)
+I (22127) panel: link -> down
+I (22140) r2_link: state -> scanning
+I (22144) panel: link -> scanning
+I (22901) r2_link: found D2-6F6B
+I (22902) r2_link: state -> connecting
+I (22902) panel: link -> connecting
+I (23326) r2_link: state -> handshaking
+I (23326) panel: link -> handshaking
+I (25226) r2_link: state -> up
+I (25226) panel: link -> up
+W (25228) panel: P2 trial 3/8: 3101 ms  (teardown 50 ms)
+I (29276) r2_link: state -> down (disconnected)
+I (29277) panel: link -> down
+I (29290) r2_link: state -> scanning
+I (29293) panel: link -> scanning
+I (29540) r2_link: found D2-6F6B
+I (29541) r2_link: state -> connecting
+I (29541) panel: link -> connecting
+I (29976) r2_link: state -> handshaking
+I (29976) panel: link -> handshaking
+I (31876) r2_link: state -> up
+I (31876) panel: link -> up
+W (31878) panel: P2 trial 4/8: 2600 ms  (teardown 50 ms)
+I (35926) r2_link: state -> down (disconnected)
+I (35927) panel: link -> down
+I (35940) r2_link: state -> scanning
+I (35944) panel: link -> scanning
+I (36195) r2_link: found D2-6F6B
+I (36196) r2_link: state -> connecting
+I (36196) panel: link -> connecting
+I (36626) r2_link: state -> handshaking
+I (36626) panel: link -> handshaking
+I (38576) r2_link: state -> up
+I (38576) panel: link -> up
+W (38578) panel: P2 trial 5/8: 2650 ms  (teardown 50 ms)
+I (42626) r2_link: state -> down (disconnected)
+I (42627) panel: link -> down
+I (42640) r2_link: state -> scanning
+I (42643) panel: link -> scanning
+I (42895) r2_link: found D2-6F6B
+I (42896) r2_link: state -> connecting
+I (42896) panel: link -> connecting
+I (43326) r2_link: state -> handshaking
+I (43326) panel: link -> handshaking
+I (45226) r2_link: state -> up
+I (45226) panel: link -> up
+W (45229) panel: P2 trial 6/8: 2601 ms  (teardown 50 ms)
+I (49276) r2_link: state -> down (disconnected)
+I (49277) panel: link -> down
+I (49290) r2_link: state -> scanning
+I (49293) panel: link -> scanning
+I (49548) r2_link: found D2-6F6B
+I (49549) r2_link: state -> connecting
+I (49549) panel: link -> connecting
+I (49976) r2_link: state -> handshaking
+I (49976) panel: link -> handshaking
+I (51926) r2_link: state -> up
+I (51926) panel: link -> up
+W (51929) panel: P2 trial 7/8: 2650 ms  (teardown 50 ms)
+I (55976) r2_link: state -> down (disconnected)
+I (55977) panel: link -> down
+I (55990) r2_link: state -> scanning
+I (55993) panel: link -> scanning
+I (56239) r2_link: found D2-6F6B
+I (56240) r2_link: state -> connecting
+I (56240) panel: link -> connecting
+I (56676) r2_link: state -> handshaking
+I (56676) panel: link -> handshaking
+I (58576) r2_link: state -> up
+I (58576) panel: link -> up
+W (58579) panel: P2 trial 8/8: 2600 ms  (teardown 50 ms)
+W (58579) panel: P2 RESULT: n=8  min 2600 ms  max 3101 ms  mean 2681 ms
+W (58582) panel:   AC8's bar should be bounded by the MAX, not the mean:
+W (58588) panel:   a bar that finishes early and waits reads as broken, and
+W (58595) panel:   one that overruns reads as a hang.
+I (91171) panel: t+90s  answered 4/5  | gate adm=26 ref=0  link sent=26 drop=0
+
+P2 — the panel's own reconnect (#101, gates AC8)
+================================================
+2026-09-06. 8 deliberate disconnects on the real board against the real droid.
+
+  min 2600 ms   max 3101 ms   mean 2681 ms   n=8
+
+WHY THIS NEEDED MEASURING AT ALL. AC8 wants `waking` to show BOUNDED PROGRESS,
+and the epic states plainly that the ~12 s figure in circulation is the MAC
+DAEMON'S and must not calibrate this bar. It is out by more than 4x. A bar
+drawn against 12 s would sit at a quarter full and then jump, every single
+time -- which reads as a hang, and would have been "correct" against a
+documented number.
+
+BOUND THE BAR BY THE MAX, NOT THE MEAN. A bar that finishes early and waits
+reads as broken; one that overruns reads as a hang. 3101 ms is the observed
+worst case over 8 trials, so ~3.5 s is a defensible bound with a little headroom.
+
+THE DISTRIBUTION IS SUSPICIOUSLY TIGHT and worth naming rather than admiring:
+six of eight trials are 2600 or 2650 ms, one is 2601, one is 3101. Values
+clustering on 50 ms boundaries with a single 500 ms outlier looks like
+QUANTISATION BY THE SCAN INTERVAL, not like a smooth distribution -- the
+central estimate is therefore more trustworthy than the spread is, and the
+3101 ms sample is probably one missed scan window rather than a slow reconnect.
+That matters for the bar: the real tail may be a multiple of the scan window
+rather than anything continuous, and 8 trials cannot see a rare double miss.
+
+Teardown was 25-50 ms throughout, and is timed separately so our own disconnect
+is not folded into his reconnect and quietly inflating it.
+
+MEASURED ON: the panel firmware itself, not a test app -- the same r2_link that
+child 5 will use.
+
+NOT MEASURED: reconnect after a LONG absence, after R2 sleeps, or when he is out
+of range. Every trial here dropped a healthy link and reconnected to a droid
+that was awake, present, and had just been talking to us. That is the easy case.
