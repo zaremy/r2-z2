@@ -541,8 +541,9 @@ class Reactive:
             # is discovered hours later; printed here, the operator can stop a
             # run that is measuring nothing.
             intensity = rec.get("intensity")
+            shown = "--" if intensity is None else f"{intensity:.3f}"
             print(f"  reaction {len(self.reactions)}: "
-                  f"intensity={'--' if intensity is None else f'{intensity:.3f}'} "
+                  f"intensity={shown} "
                   f"beat={rec.get('beat')} "
                   f"happiness+{rec.get('happiness_delta', 0.0):.2f}"
                   + ("" if rec.get("beat_ok") else "   !! BEAT DID NOT RUN"))
