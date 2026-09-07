@@ -6,6 +6,29 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
+/* THE v5 PALETTE. Taken from the reference prototype the vault calls "the
+ * reference the LVGL firmware should match", not invented.
+ *
+ * The panel was built to the epic's PROSE -- row names, page names -- and
+ * never to the design itself, which is why it looked nothing like it: a
+ * neutral black/grey scheme with generic accents, where v5 is a cool
+ * blue-grey system. Values below are lifted from panel-v5-interactive.html. */
+#define V5_GROUND     0x14191B   /* page ground */
+#define V5_HAIRLINE   0x14191B   /* 1 px row separator */
+#define V5_RULE       0x1E2628   /* 2 px separator, chain line */
+#define V5_SURFACE    0x2A3438   /* borders, inactive dots */
+#define V5_DIM        0x43535A
+#define V5_MID        0x5E7276   /* captions */
+#define V5_LABEL      0x7C8A8D   /* key labels, active dot */
+#define V5_TEXT       0xF2F6F7   /* values */
+#define V5_TEXT_HI    0xE8F2F3
+#define V5_CYAN       0x3FD8E8   /* listen, thinking */
+#define V5_AMBER      0xF2B23C   /* attention, misheard, offline */
+#define V5_GREEN      0x4ED18B
+#define V5_RED        0xF0574A   /* danger */
+#define V5_BLUE       0x4A7BE8   /* idle, waiting */
+
+
 /* Panel geometry, MEASURED not assumed (#104, board-revision.md):
  * 368 x 448 px, 29.0 x 35.3 mm at 322 ppi. A 44 pt tap target is 87 px here,
  * which is why the rows are 87 tall -- the row IS the tap target, so child 4
@@ -18,11 +41,8 @@
 #define HEADER_H       64
 #define ROW_H          87
 #define ROW_PAD        14
-#define N_ROWS          4
 
-enum { ROW_LINK = 0, ROW_R2, ROW_STORAGE, ROW_BRAIN };
 
-static const char *k_row_label[N_ROWS] = { "LINK", "R2", "STORAGE", "BRAIN" };
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_root;
@@ -40,6 +60,61 @@ static lv_obj_t *s_root;
  * NETWORK's contents are not defined in any source I can find, so the page
  * says so rather than inventing them -- the same choice as STORAGE and BRAIN
  * on the status page, and the one D-017 Amendment B just ruled for. */
+/* THE STATE FACE, from v5. This is what the STATUS page actually is, and
+ * getting it wrong is why the panel "looked nothing like the spec".
+ *
+ * The four rows LINK / R2 / STORAGE / BRAIN were built as the whole page. AC4
+ * calls them TOP-BAR rows, and the prototype does not have a BRAIN row at all
+ * -- the status page is a FACE: one large state word, the reason under it, a
+ * key/value pair for power and dome, and a four-node MIC/R2/NET/LLM fault
+ * chain along the bottom.
+ *
+ * `offline` appears three times here with different chains and reasons. Those
+ * are the three DISPLAY MODES of one canonical `offline` that D-017 Amendment
+ * B ruled on -- the chain is exactly the mechanism by which one state shows
+ * which thing is unreachable. The prototype was already right about this; the
+ * ruling made it legible. */
+typedef enum { CH_OK = 0, CH_DOWN, CH_FAULT, CH_UNK } chain_t;
+
+typedef struct {
+    const char *word;       /* the large word */
+    const char *since;      /* why, under it */
+    uint32_t    colour;
+    chain_t     chain[4];   /* MIC / R2 / NET / LLM */
+    bool        pwr_known;  /* v5 sets pwrTxt null when the link is down */
+    bool        dome_known;
+} face_t;
+
+/* Only the states this board can actually reach are populated. The rest need a
+ * reasoning layer that does not run here, and inventing a source for them
+ * would be worse than an honest gap. */
+static const face_t k_face_up = {
+    "IDLE", "NOTHING ENGAGED", V5_BLUE, { CH_OK, CH_OK, CH_UNK, CH_UNK }, true, true
+};
+static const face_t k_face_offline_r2 = {
+    /* v5's offline_r2, including its [FIX]: with the link down R2's battery is
+     * not knowable, "exactly like the dome heading beside it". Our telemetry
+     * layer already enforces that; this is the presentation catching up.
+     *
+     * AMBER, NOT RED, and this is where D-012 Amendment A's one concrete code
+     * effect now lives. That ruling demoted a dead link from red to yellow: a
+     * dropped link is not danger -- nothing is going to hurt him because the
+     * radio stopped answering -- and D-012 reserves red for danger and stop
+     * only, citing IEC 60073. The panel had used red because the row FELT bad,
+     * which is exactly the reasoning D-012 rejected.
+     *
+     * The reasoning is repeated here because its previous home was the
+     * four-row LINK case, which the face replaced -- and a future reader
+     * restoring a red offline state would otherwise find no trace of why it
+     * must not be. v5 agrees independently: its offline colour is #F2B23C. */
+    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_OK, CH_DOWN, CH_OK, CH_OK }, false, false
+};
+static const face_t k_face_waking = {
+    "WAKING", "FINDING HIM", V5_BLUE, { CH_OK, CH_UNK, CH_OK, CH_OK }, false, false
+};
+
+static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
+
 enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
 static lv_obj_t *s_page[PAGE_COUNT];
 static lv_obj_t *s_pip[PAGE_COUNT];
@@ -54,10 +129,10 @@ static const char *k_service_rows[] = {
     "VOICE", "CAMERA", "ABOUT",
 };
 #define N_SERVICE_ROWS (sizeof k_service_rows / sizeof k_service_rows[0])
-static lv_obj_t *s_header_val;
-static lv_obj_t *s_row_value[N_ROWS];
-static lv_obj_t *s_row_dot[N_ROWS];
-static panel_sev_t s_row_sev[N_ROWS];
+static lv_obj_t *s_face_word, *s_face_since;
+static lv_obj_t *s_kv_val[2];                 /* PWR, DOME */
+static lv_obj_t *s_chain_pip[4];
+static const face_t *s_face_now;
 
 /* Severity colours: D-012's SEMANTICS, not its values (D-012 Amendment A).
  *
@@ -72,80 +147,6 @@ static panel_sev_t s_row_sev[N_ROWS];
  * RED IS DANGER AND STOP, ONLY. D-012 narrowed it deliberately, citing IEC
  * 60073, and moved pending-attention to yellow. That constrains this table
  * more than it looks: see the LINK row below. */
-static lv_color_t sev_colour(panel_sev_t s)
-{
-    switch (s) {
-    case PANEL_OK:      return lv_color_hex(0x35C46A);
-    case PANEL_WARN:    return lv_color_hex(0xE0A020);
-    /* NOTHING CURRENTLY RENDERS PANEL_BAD, and that is the point rather than
-     * an oversight. Red is danger and stop only (D-012), and no state the
-     * panel can reach today qualifies: a dead link is needs-monitoring, an
-     * unwired row is unknown. Kept because the ladder needs a rung above
-     * warn the day something genuinely alarming exists -- a fallen droid, a
-     * thermal fault. Declared here so its absence reads as deliberate. */
-    case PANEL_BAD:     return lv_color_hex(0xE04040);
-    case PANEL_UNKNOWN:
-    default:
-        /* Grey is NOT a colour claim -- it is the absence of one. D-012 has
-         * six colours for six meanings and none of them is "we cannot say".
-         * Adding a seventh would be a new decision about the BODY made for a
-         * screen's convenience, which D-012 Amendment A explicitly declines. */
-        return lv_color_hex(0x606060);
-    }
-}
-
-const char *panel_sev_name(panel_sev_t s)
-{
-    switch (s) {
-    case PANEL_OK:      return "ok";
-    case PANEL_WARN:    return "warn";
-    case PANEL_BAD:     return "bad";
-    case PANEL_UNKNOWN: return "unknown";
-    default:            return "?";
-    }
-}
-
-static lv_obj_t *make_row(lv_obj_t *parent, int index)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, PANEL_W, ROW_H);
-    lv_obj_set_pos(row, 0, HEADER_H + index * ROW_H);
-    lv_obj_set_style_bg_color(row, lv_color_hex(0x101014), 0);
-    lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(row, 1, 0);
-    lv_obj_set_style_border_color(row, lv_color_hex(0x282830), 0);
-    lv_obj_set_style_radius(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* The severity dot. It carries the state; the text explains it. A row must
-     * be readable as ok/not-ok before any word is read. */
-    lv_obj_t *dot = lv_obj_create(row);
-    lv_obj_set_size(dot, 14, 14);
-    lv_obj_set_pos(dot, ROW_PAD, (ROW_H - 14) / 2);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    s_row_dot[index] = dot;
-
-    lv_obj_t *label = lv_label_create(row);
-    lv_label_set_text(label, k_row_label[index]);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0x8A8A98), 0);
-    lv_obj_set_pos(label, ROW_PAD + 26, 16);
-
-    lv_obj_t *value = lv_label_create(row);
-    lv_label_set_text(value, "--");
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(value, lv_color_hex(0xF0F0F4), 0);
-    lv_obj_set_pos(value, ROW_PAD + 26, 42);
-    s_row_value[index] = value;
-
-    return row;
-}
-
 /* The page dots. The vault's description is "swipe or tap the dots", so they
  * are an affordance and not decoration -- but they are drawn here and made
  * tappable in child 4 proper. Drawn small and low-contrast: this is an
@@ -292,6 +293,89 @@ const char *panel_ui_page_name(int page)
     return (page >= 0 && page < PAGE_COUNT) ? k_page_name[page] : "?";
 }
 
+
+/* THE STATUS FACE (v5). Replaces the four-row page.
+ *
+ * A SPEC CONFLICT IS BEING RESOLVED HERE AND MUST NOT BE BURIED. D-017 says
+ * the panel is "a fixed header plus four rows that never scroll", and #101's
+ * AC4 names them LINK / R2 / STORAGE / BRAIN. The v5 prototype -- which the
+ * vault calls "the reference the LVGL firmware should match" -- has NO BRAIN
+ * ROW and no four-row status page at all. It is a face: one large state word,
+ * the reason beneath it, power and dome as key/value, and a four-node
+ * MIC/R2/NET/LLM fault chain.
+ *
+ * Two normative sources describing different screens, exactly like the states
+ * disagreement P3 resolved. The operator ruled that the UI must match the
+ * panel spec, so the face wins here -- and AC4 needs the same treatment P3
+ * got: a ruling, in writing, about which document governs the LAYOUT.
+ *
+ * Geometry follows v5: 26 px side padding, 52 px key rows, 58 px chain. */
+#define V5_PAD 26
+
+static void build_status_face(lv_obj_t *pg)
+{
+    lv_obj_set_style_bg_color(pg, lv_color_hex(V5_GROUND), 0);
+
+    s_face_word = lv_label_create(pg);
+    lv_label_set_text(s_face_word, "WAKING");
+    lv_obj_set_style_text_font(s_face_word, &lv_font_montserrat_34, 0);
+    lv_obj_set_style_text_color(s_face_word, lv_color_hex(V5_BLUE), 0);
+    lv_obj_set_pos(s_face_word, V5_PAD, 44);
+
+    s_face_since = lv_label_create(pg);
+    lv_label_set_text(s_face_since, "STARTING");
+    lv_obj_set_style_text_font(s_face_since, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_face_since, lv_color_hex(V5_MID), 0);
+    lv_obj_set_pos(s_face_since, V5_PAD, 92);
+
+    /* PWR and DOME as key/value, 52 px rows with a hairline -- v5's .krow. */
+    static const char *k_keys[2] = { "PWR", "DOME" };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *k = lv_label_create(pg);
+        lv_label_set_text(k, k_keys[i]);
+        lv_obj_set_style_text_font(k, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(k, lv_color_hex(V5_LABEL), 0);
+        lv_obj_set_pos(k, V5_PAD, 150 + i * 62 + 10);
+
+        s_kv_val[i] = lv_label_create(pg);
+        lv_label_set_text(s_kv_val[i], "---");
+        lv_obj_set_style_text_font(s_kv_val[i], &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(s_kv_val[i], lv_color_hex(V5_TEXT), 0);
+        lv_obj_set_pos(s_kv_val[i], PANEL_W - V5_PAD - 130, 150 + i * 62);
+
+        lv_obj_t *rule = lv_obj_create(pg);
+        lv_obj_set_size(rule, PANEL_W - 2 * V5_PAD, 1);
+        lv_obj_set_pos(rule, V5_PAD, 150 + i * 62 + 52);
+        lv_obj_set_style_bg_color(rule, lv_color_hex(V5_HAIRLINE), 0);
+        lv_obj_set_style_border_width(rule, 0, 0);
+    }
+
+    /* The fault chain: a line with four nodes. This is the mechanism by which
+     * ONE `offline` state shows WHICH thing is unreachable -- the three
+     * display modes D-017 Amendment B ruled are views, not states. */
+    lv_obj_t *line = lv_obj_create(pg);
+    lv_obj_set_size(line, PANEL_W - 2 * 30, 2);
+    lv_obj_set_pos(line, 30, 372);
+    lv_obj_set_style_bg_color(line, lv_color_hex(V5_RULE), 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+
+    for (int i = 0; i < 4; i++) {
+        const int cx = 30 + i * ((PANEL_W - 60) / 3);
+        lv_obj_t *pip = lv_obj_create(pg);
+        lv_obj_set_size(pip, 16, 16);
+        lv_obj_set_pos(pip, cx - 8, 365);
+        lv_obj_set_style_radius(pip, 3, 0);
+        lv_obj_set_style_border_width(pip, 0, 0);
+        s_chain_pip[i] = pip;
+
+        lv_obj_t *lbl = lv_label_create(pg);
+        lv_label_set_text(lbl, k_chain_label[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(V5_MID), 0);
+        lv_obj_set_pos(lbl, cx - 14, 340);
+    }
+}
+
 void panel_ui_create(void)
 {
     s_screen = lv_scr_act();
@@ -319,32 +403,9 @@ void panel_ui_create(void)
     build_service_page(s_page[PAGE_SERVICE]);
     build_network_page(s_page[PAGE_NETWORK]);
 
-    lv_obj_t *header = lv_obj_create(s_page[PAGE_STATUS]);
-    lv_obj_set_size(header, PANEL_W, HEADER_H);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    build_status_face(s_page[PAGE_STATUS]);
 
-    lv_obj_t *name = lv_label_create(header);
-    lv_label_set_text(name, "R2-Z2");
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(name, lv_color_hex(0xF0F0F4), 0);
-    lv_obj_set_pos(name, ROW_PAD, 20);
 
-    s_header_val = lv_label_create(header);
-    lv_label_set_text(s_header_val, "starting");
-    lv_obj_set_style_text_font(s_header_val, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_header_val, lv_color_hex(0x8A8A98), 0);
-    lv_obj_set_pos(s_header_val, 150, 25);
-
-    for (int i = 0; i < N_ROWS; i++) {
-        make_row(s_page[PAGE_STATUS], i);
-        s_row_sev[i] = PANEL_UNKNOWN;
-        lv_obj_set_style_bg_color(s_row_dot[i], sev_colour(PANEL_UNKNOWN), 0);
-    }
 
     make_pips(s_root);
     panel_ui_show_page(PAGE_STATUS);
@@ -362,106 +423,70 @@ void panel_ui_create(void)
  * value's last digit wobbling is not, and merely repaints. */
 static bool s_changed;      /* worth looking at: severity moved */
 
-static void set_row(int i, panel_sev_t sev, const char *text)
+static uint32_t chain_colour(chain_t c)
 {
-    if (s_row_sev[i] != sev) {
-        s_row_sev[i] = sev;
-        s_changed = true;
-        lv_obj_set_style_bg_color(s_row_dot[i], sev_colour(sev), 0);
+    switch (c) {
+    case CH_OK:    return V5_GREEN;
+    case CH_DOWN:  return V5_AMBER;
+    case CH_FAULT: return V5_RED;
+    case CH_UNK:
+    default:       return V5_SURFACE;   /* unknown is absence, not a claim */
     }
-    /* A value differing repaints and NOTHING ELSE -- deliberately no flag.
-     * An earlier version recorded it in `s_repainted`, which nothing ever
-     * read: write-only state, the same shape as the `int ticks = 0;` that
-     * survived a failed edit in this file and left the P1 readout missing. If
-     * a caller ever needs to distinguish a redraw from a state change, add the
-     * accessor then. */
-    const char *cur = lv_label_get_text(s_row_value[i]);
-    if (cur == NULL || strcmp(cur, text) != 0)
-        lv_label_set_text(s_row_value[i], text);
+}
+
+/* Drive the face. Only the states this board can REACH are selectable: the
+ * rest need a reasoning layer that does not run here, and a face driven by an
+ * invented source would be worse than an honest three. */
+static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
+{
+    char buf[32];
+    if (f != s_face_now) {
+        s_face_now = f;
+        s_changed = true;                       /* worth looking at */
+        lv_label_set_text(s_face_word, f->word);
+        lv_obj_set_style_text_color(s_face_word, lv_color_hex(f->colour), 0);
+        lv_label_set_text(s_face_since, f->since);
+        for (int i = 0; i < 4; i++)
+            lv_obj_set_style_bg_color(s_chain_pip[i],
+                                      lv_color_hex(chain_colour(f->chain[i])), 0);
+    }
+
+    /* PWR and DOME. v5 sets both to null when the link is down, because R2's
+     * battery arrives over that link and is not knowable without it -- the
+     * transport-health rule, which r2_telemetry already enforces. The face
+     * asks the telemetry layer rather than deciding for itself. */
+    if (f->pwr_known && r2_telemetry_displayable(t, &t->battery, now_ms, 60000))
+        snprintf(buf, sizeof buf, "%u.%02u V",
+                 t->battery_centivolts / 100u, t->battery_centivolts % 100u);
+    else
+        snprintf(buf, sizeof buf, "---");
+    if (strcmp(lv_label_get_text(s_kv_val[0]), buf) != 0)
+        lv_label_set_text(s_kv_val[0], buf);
+
+    if (f->dome_known && r2_telemetry_displayable(t, &t->dome, now_ms, 60000))
+        snprintf(buf, sizeof buf, "%d deg", (int)t->dome_degrees);
+    else
+        snprintf(buf, sizeof buf, "---");
+    if (strcmp(lv_label_get_text(s_kv_val[1]), buf) != 0)
+        lv_label_set_text(s_kv_val[1], buf);
 }
 
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
-    char buf[48];
     s_changed = false;
 
-    /* ---- LINK ---------------------------------------------------------- */
     switch (t->link) {
-    case R2_TM_UP:
-        set_row(ROW_LINK, PANEL_OK, "connected");
-        break;
-    case R2_TM_SCANNING:
-        set_row(ROW_LINK, PANEL_WARN, "looking for him");
-        break;
-    case R2_TM_CONNECTING:
-    case R2_TM_HANDSHAKING:
-        set_row(ROW_LINK, PANEL_WARN, "connecting");
-        break;
-    case R2_TM_DOWN:
-    default:
-        /* YELLOW, not red. A dropped link is not danger -- nothing is going to
-         * hurt him or anyone because the radio stopped answering -- and D-012
-         * reserves red for danger and stop only. This row WAS red, because it
-         * felt bad, which is exactly the reasoning D-012 rejected when it took
-         * red away from "issue pending resolution". Red stays available for a
-         * state that genuinely warrants alarm. */
-        set_row(ROW_LINK, PANEL_WARN, "no link");
-        break;
+    case R2_TM_UP:          set_face(&k_face_up, t, now_ms); break;
+    case R2_TM_DOWN:        set_face(&k_face_offline_r2, t, now_ms); break;
+    default:                set_face(&k_face_waking, t, now_ms); break;
     }
 
-    /* ---- R2 ------------------------------------------------------------
-     * Battery, and the staleness rule is the whole reason this reads "--"
-     * rather than the last number we saw. r2_telemetry_displayable() refuses a
-     * reading whose link has dropped, so a dead link CANNOT leave a comforting
-     * voltage on the glass. That is the failure this panel exists to not have:
-     * it would look most trustworthy at the exact moment it was wrong. */
-    if (r2_telemetry_displayable(t, &t->battery, now_ms, 60000)) {
-        snprintf(buf, sizeof buf, "%u.%02u V",
-                 t->battery_centivolts / 100u, t->battery_centivolts % 100u);
-        /* Thresholds are PLACEHOLDERS and are marked as such. 4.42 V is the
-         * only value ever observed and he was on the charger for all of it, so
-         * the discharge curve is unmeasured -- there is no evidence for where
-         * "low" begins. Showing a warn colour from a guessed threshold would be
-         * inventing a fact on the glass, so everything readable is OK until
-         * somebody measures it. */
-        set_row(ROW_R2, PANEL_OK, buf);
-    } else if (t->link == R2_TM_UP) {
-        set_row(ROW_R2, PANEL_UNKNOWN, "asking...");
-    } else {
-        set_row(ROW_R2, PANEL_UNKNOWN, "--");
-    }
+    /* The four rows LINK / R2 / STORAGE / BRAIN are GONE from this page.
+     * They were built as the whole status screen from AC4's wording; the v5
+     * reference has no BRAIN row and no four-row status page. See
+     * build_status_face() for the conflict this resolves and the ruling it
+     * still needs. */
 
-    /* ---- STORAGE -------------------------------------------------------
-     * Nothing writes to storage yet, so this row states that rather than
-     * showing a plausible number. A row that invents content to look finished
-     * is worse than one that admits it is not wired. */
-    set_row(ROW_STORAGE, PANEL_UNKNOWN, "not wired");
-
-    /* ---- BRAIN ---------------------------------------------------------
-     * Likewise: no reasoning layer runs on this board yet. */
-    set_row(ROW_BRAIN, PANEL_UNKNOWN, "not wired");
-
-    /* The header carries LOSSES, not a ratio -- and only real ones.
-     *
-     * It first showed "N/N+1 answered", which is always one short because the
-     * most recent request has not been answered yet: at any instant one is in
-     * flight. Over six minutes it read 4/5, 8/9, 12/13, 16/17, 20/21, 24/25
-     * with ZERO actual losses. On an instrument meant to be glanced at, a
-     * permanent one-short reads as a standing fault, and a fault indicator
-     * that is always on is one nobody reads -- the same failure as the fifty
-     * keepalive acks that buried a real unmatched frame.
-     *
-     * So: one outstanding request is normal and invisible. More than one is
-     * the condition worth naming, and it is the number that would have made
-     * the escaping bug legible instead of it hiding in an endurance run. */
-    const uint32_t outstanding = t->requests - t->responses;
-    if (outstanding > 1)
-        snprintf(buf, sizeof buf, "%u unanswered", (unsigned)(outstanding - 1));
-    else
-        snprintf(buf, sizeof buf, "%s", r2_telemetry_link_name(t->link));
-    const char *cur = lv_label_get_text(s_header_val);
-    if (cur == NULL || strcmp(cur, buf) != 0)
-        lv_label_set_text(s_header_val, buf);
     /* Only the severity kind. The dim timer must not be resettable by noise,
      * or it never expires and the panel never rests. */
     return s_changed;

@@ -29,14 +29,16 @@
 extern "C" {
 #endif
 
-/* Severity, which is the only thing the rows are sorted by and the only thing
- * the wake frame reads. Ordered: worse is greater. */
-typedef enum {
-    PANEL_OK = 0,
-    PANEL_UNKNOWN,   /* we cannot say -- distinct from fine, and drawn as such */
-    PANEL_WARN,
-    PANEL_BAD,
-} panel_sev_t;
+/* The four-row severity API is GONE, with the four rows it served.
+ *
+ * `panel_sev_t`, `sev_colour()` and `panel_sev_name()` existed only to colour
+ * LINK / R2 / STORAGE / BRAIN. The v5 status page is a face, so nothing calls
+ * them -- and a severity API left exported in a header is one a reader will
+ * reasonably build against. Deleted rather than reserved: the face carries its
+ * own colour per state, and the fault chain its own four-way `chain_t`.
+ *
+ * D-017's severity RANK is untouched by this. It orders which state wins a
+ * conflict and is a different thing from a row's colour. */
 
 /* Build the frame. Call once, with the display already started and locked. */
 void panel_ui_create(void);
@@ -76,7 +78,6 @@ int         panel_ui_page(void);
 int         panel_ui_page_count(void);
 const char *panel_ui_page_name(int page);
 
-const char *panel_sev_name(panel_sev_t s);
 
 #ifdef __cplusplus
 }
