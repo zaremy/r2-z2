@@ -58,19 +58,38 @@ static lv_obj_t *s_row_value[N_ROWS];
 static lv_obj_t *s_row_dot[N_ROWS];
 static panel_sev_t s_row_sev[N_ROWS];
 
-/* Severity colours. Deliberately NOT D-012's LED language: that scheme is
- * tuned for a fixture glanced from across a room, where blue is idle because
- * it is the dimmest corner. This is read up close and deliberately, and its
- * job is legibility, not mood. Reusing the LED palette here would make two
- * different vocabularies look like one. */
+/* Severity colours: D-012's SEMANTICS, not its values (D-012 Amendment A).
+ *
+ * An earlier version of this comment argued the opposite -- that the panel
+ * should not reuse the LED language because that scheme is tuned for a fixture
+ * glanced across a room. Half right. The RULING is that what a colour MEANS is
+ * one vocabulary and must not fork (yellow is needs-monitoring on the body and
+ * on the glass); what luminance and hue best deliver that meaning is the
+ * medium's business, so the values here are chosen for an OLED read at arm's
+ * length rather than inherited from a diffused lens.
+ *
+ * RED IS DANGER AND STOP, ONLY. D-012 narrowed it deliberately, citing IEC
+ * 60073, and moved pending-attention to yellow. That constrains this table
+ * more than it looks: see the LINK row below. */
 static lv_color_t sev_colour(panel_sev_t s)
 {
     switch (s) {
     case PANEL_OK:      return lv_color_hex(0x35C46A);
     case PANEL_WARN:    return lv_color_hex(0xE0A020);
+    /* NOTHING CURRENTLY RENDERS PANEL_BAD, and that is the point rather than
+     * an oversight. Red is danger and stop only (D-012), and no state the
+     * panel can reach today qualifies: a dead link is needs-monitoring, an
+     * unwired row is unknown. Kept because the ladder needs a rung above
+     * warn the day something genuinely alarming exists -- a fallen droid, a
+     * thermal fault. Declared here so its absence reads as deliberate. */
     case PANEL_BAD:     return lv_color_hex(0xE04040);
     case PANEL_UNKNOWN:
-    default:            return lv_color_hex(0x606060);
+    default:
+        /* Grey is NOT a colour claim -- it is the absence of one. D-012 has
+         * six colours for six meanings and none of them is "we cannot say".
+         * Adding a seventh would be a new decision about the BODY made for a
+         * screen's convenience, which D-012 Amendment A explicitly declines. */
+        return lv_color_hex(0x606060);
     }
 }
 
@@ -167,23 +186,45 @@ static void build_service_page(lv_obj_t *pg)
     lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
     lv_obj_set_pos(t, ROW_PAD, 20);
 
-    /* 87 px rows, because that is the 44 pt tap target at this panel's
-     * 322 ppi and #106 confirmed rows of that height are clickable. Seven of
-     * them do not fit on 448 px, which is a real layout problem for child 6
-     * and is stated here rather than solved by shrinking the target below
-     * what was measured. */
-    for (unsigned i = 0; i < N_SERVICE_ROWS && i < 4; i++) {
-        lv_obj_t *r = lv_label_create(pg);
+    /* VERTICAL SCROLL, keeping 87 px rows. Operator ruling, 2026-09-07.
+     *
+     * Seven 87 px rows are 609 px and the panel is 448. Something had to give,
+     * and the alternative on the table was shrinking the rows -- which would
+     * have traded the 44 pt tap target #106 actually measured as clickable for
+     * a tidier screen. Measured hit accuracy beats a screen that fits.
+     *
+     * It also matches the design: the vault's v5 says "vertical scroll inside
+     * a page, horizontal swipe reserved for back". Accepted cost, stated: the
+     * panel stops being wholly glanceable here, because something is always
+     * off-screen. */
+    lv_obj_t *list = lv_obj_create(pg);
+    lv_obj_set_size(list, PANEL_W, PANEL_H - 64 - 30);
+    lv_obj_set_pos(list, 0, 64);
+    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(list, 0, 0);
+    lv_obj_set_style_pad_all(list, 0, 0);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+
+    for (unsigned i = 0; i < N_SERVICE_ROWS; i++) {
+        lv_obj_t *row = lv_obj_create(list);
+        lv_obj_set_size(row, PANEL_W, ROW_H);
+        lv_obj_set_pos(row, 0, (int)i * ROW_H);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0x101014), 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(0x282830), 0);
+        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *r = lv_label_create(row);
         lv_label_set_text(r, k_service_rows[i]);
-        lv_obj_set_style_text_font(r, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(r, lv_color_hex(0x8A8A98), 0);
-        lv_obj_set_pos(r, ROW_PAD + 26, 74 + (int)i * 60);
+        lv_obj_set_style_text_font(r, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(r, lv_color_hex(0xF0F0F4), 0);
+        lv_obj_set_pos(r, ROW_PAD + 12, (ROW_H - 28) / 2);
     }
-    lv_obj_t *n = lv_label_create(pg);
-    lv_label_set_text(n, "interiors: child 6");
-    lv_obj_set_style_text_font(n, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(n, lv_color_hex(0x606060), 0);
-    lv_obj_set_pos(n, ROW_PAD + 26, 74 + 4 * 60);
 }
 
 static void build_network_page(lv_obj_t *pg)
@@ -194,22 +235,38 @@ static void build_network_page(lv_obj_t *pg)
     lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
     lv_obj_set_pos(t, ROW_PAD, 20);
 
-    /* Honest blank, like STORAGE and BRAIN. This page is NAMED in the vault
-     * and its CONTENTS are defined nowhere I can find. Inventing them is what
-     * D-017 Amendment B ruled against, and a page that invents plausible
-     * content to look finished is worse than one that admits it is not
-     * specified. */
-    lv_obj_t *n = lv_label_create(pg);
-    lv_label_set_text(n, "not specified");
-    lv_obj_set_style_text_font(n, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(n, lv_color_hex(0x606060), 0);
-    lv_obj_set_pos(n, ROW_PAD, 90);
+    /* Wi-Fi status and provisioning state. Operator ruling, 2026-09-07,
+     * replacing the "not specified" placeholder.
+     *
+     * EVERY FIELD READS "not wired", and that is accurate rather than lazy:
+     * this firmware compiles NO Wi-Fi stack at all. The panel holds its own
+     * BLE link to R2 (D-006) and nothing else, so there is no SSID to show
+     * and no provisioning state to read.
+     *
+     * The fields are drawn anyway because the page now has a defined SHAPE,
+     * and a reader deserves to see what will appear here rather than a blank.
+     * Same choice as STORAGE and BRAIN on the status page: name the thing,
+     * admit it is not connected, never invent a plausible value. */
+    static const char *k_fields[] = { "SSID", "SIGNAL", "ADDRESS", "PROVISIONED" };
+    for (unsigned i = 0; i < 4; i++) {
+        lv_obj_t *k = lv_label_create(pg);
+        lv_label_set_text(k, k_fields[i]);
+        lv_obj_set_style_text_font(k, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(k, lv_color_hex(0x8A8A98), 0);
+        lv_obj_set_pos(k, ROW_PAD, 78 + (int)i * 72);
 
-    lv_obj_t *w = lv_label_create(pg);
-    lv_label_set_text(w, "the page is named in the panel\ndesign; its contents are not");
-    lv_obj_set_style_text_font(w, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(w, lv_color_hex(0x505058), 0);
-    lv_obj_set_pos(w, ROW_PAD, 140);
+        lv_obj_t *v = lv_label_create(pg);
+        lv_label_set_text(v, "not wired");
+        lv_obj_set_style_text_font(v, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(v, lv_color_hex(0x606060), 0);
+        lv_obj_set_pos(v, ROW_PAD, 78 + (int)i * 72 + 24);
+    }
+
+    lv_obj_t *n = lv_label_create(pg);
+    lv_label_set_text(n, "no Wi-Fi in this build");
+    lv_obj_set_style_text_font(n, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(n, lv_color_hex(0x505058), 0);
+    lv_obj_set_pos(n, ROW_PAD, PANEL_H - 52);
 }
 
 void panel_ui_show_page(int page)
@@ -327,7 +384,13 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
         break;
     case R2_TM_DOWN:
     default:
-        set_row(ROW_LINK, PANEL_BAD, "no link");
+        /* YELLOW, not red. A dropped link is not danger -- nothing is going to
+         * hurt him or anyone because the radio stopped answering -- and D-012
+         * reserves red for danger and stop only. This row WAS red, because it
+         * felt bad, which is exactly the reasoning D-012 rejected when it took
+         * red away from "issue pending resolution". Red stays available for a
+         * state that genuinely warrants alarm. */
+        set_row(ROW_LINK, PANEL_WARN, "no link");
         break;
     }
 

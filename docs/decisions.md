@@ -695,6 +695,66 @@ question.
   board — AXP2101 `STATUS1` battery-present bit clear across ten samples, see
   D-017 Amendment A and `research/board-capabilities.md`.
 
+### Amendment A — 2026-09-07: the panel inherits the semantics, not the values
+
+**Status:** accepted · **Operator ruling** · unblocks #101 child 5, whose AC2
+asks for states rendered "with correct colour" and had no normative source for
+what correct meant.
+
+#### The question
+
+Every word of the colour reasoning above is about **LED fixtures glanced from
+across a room** — blue is idle *because it is the dimmest corner at 0.072
+relative luminance*, cyan is the engaged baseline the back PSI holds. None of
+it is about a 29 mm panel read deliberately at arm's length, and
+`firmware/panel/main/panel_ui.c` had in fact chosen its own palette with a
+comment arguing exactly that.
+
+D-017 says the wake frame "carries the state colour", implying one shared
+notion. Two readings, no ruling, and building either way was inventing.
+
+#### The ruling
+
+**The panel inherits D-012's colour SEMANTICS. It does not inherit the
+values.**
+
+One vocabulary: `yellow` means needs-monitoring on the body and on the glass,
+`red` means danger in both places. What a colour *means* is the shared language
+and must not fork. What luminance and hue best deliver that meaning is a
+property of the medium — an OLED read at arm's length is not a diffused lens
+seen across a room, and forcing the panel to 0.072-luminance blue because that
+suited an LED would be obeying the letter of a decision against its purpose.
+
+This is the same split D-017 Amendment B drew for states two days ago: one
+model, several views.
+
+#### The consequence that changes shipped code
+
+**Red is narrowed here too, and the panel was over-using it.** The section
+above reserves red for "danger and stop, only" and puts pending-attention on
+yellow — a correction D-012 made deliberately, citing IEC 60073.
+
+`panel_ui.c` rendered `no link` in **red**. A dropped link is not danger:
+nothing is going to hurt him or anyone because the radio stopped answering. It
+is the definition of needs-monitoring, so it becomes **yellow**, and red is
+kept for a state that genuinely warrants alarm.
+
+That is worth noticing as a pattern rather than a fix: the panel reached for
+red because the row felt bad, which is exactly the reasoning D-012 rejected
+when it took red away from "issue pending resolution".
+
+#### What this ruling does NOT give the panel
+
+**A colour for "we cannot say".** D-012 assigns six colours to six meanings and
+none of them is absence of knowledge. The panel needs one — `STORAGE` and
+`BRAIN` are not wired, and a reading whose link has dropped is not stale but
+unvouchable.
+
+It uses a neutral grey, and that is deliberately **not** a colour claim: it is
+the absence of one. Adding a seventh meaning to the light language would be a
+new decision about the body, made for the convenience of a screen, and this
+amendment does not make it.
+
 ---
 
 ## D-013 — Behaviours are composed from primitives, and the dome is not a fine instrument
@@ -2139,16 +2199,39 @@ duration it is drawn against must be **measured on the panel's own reconnect**;
 the ~12 s from the Mac daemon path justifies having the state, not the length of
 its bar.
 
-### What is deliberately not decided here
+### ~~What is deliberately not decided here~~ — DECIDED 2026-09-07
 
-- **The word on the panel.** `RELEASE` is this ADR's placeholder and a
-  structural claim, not a CX one. `REST`, `STAND DOWN` and `GOODNIGHT` all fit
-  the same mechanism, and the choice is the operator's.
-- **Whether release needs a confirm.** It is not dangerous — the worst case is
-  that he sleeps and takes a reconnect to come back, on the order of the Mac
-  path's ~12 s though unmeasured from the panel — but it does end a session.
+Both open items are now ruled, by the operator.
+
+- **The word is `GOODNIGHT`.** `RELEASE` was this ADR's placeholder and a
+  structural claim, not a CX one. `GOODNIGHT` is honest about what actually
+  happens — he goes to sleep, he is not switched off — and it suits a droid
+  that is meant to feel continuously present rather than operated. It is also
+  the only one of the four candidates that says the true thing: this ADR's
+  whole finding is that there is no off, only us stopping.
+- **No confirm.** The action is not dangerous, and the cost of coming back is
+  now measured rather than assumed: **P2 timed the panel's own reconnect at
+  2600-3101 ms** (#142), not the ~12 s guessed from the Mac path. A confirm on
+  a harmless, quickly-reversible action teaches people to dismiss confirms,
+  which is a real cost paid on the day one guards something that matters.
+
+  The counter-argument was recorded and rejected knowingly: the vault warns
+  that a gesture on a 29 mm panel held one-handed while steadying the robot is
+  easy to fire by accident. That is an argument for the control being hard to
+  hit, not for a dialogue after it.
 
 ### The measurement this now depends on
+
+**His idle timeout is PARTLY measured now (2026-09-07), and the answer is
+awkward.** A 67-minute scan with nothing connected never saw him stop
+advertising, but the operator observed him back in his own red/blue
+alternation — and a colour we set survives a link drop and NOT a sleep cycle,
+so he had slept. **He sleeps while continuing to advertise**, which means no
+radio-side signal marks the transition and `released` cannot converge on
+`asleep` by watching the air. Evidence: `firmware/panel/results/p4-idle-2026-09-06.txt`.
+
+The original wording of this section follows, and its concern still stands
+because the TIMING remains unknown -- only the mechanism is now understood.
 
 **His idle timeout is unmeasured, and how honest `released` feels depends on
 it.** If it is five minutes, `released` converges on asleep quickly and the

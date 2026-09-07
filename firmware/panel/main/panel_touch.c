@@ -133,6 +133,8 @@ static void note(int16_t x, int16_t y)
 #define REG_GESTURE   0x01
 
 static i2c_master_dev_handle_t s_dev;
+static lv_indev_t *s_lv_indev;
+static void indev_read(lv_indev_t *indev, lv_indev_data_t *data);
 
 static esp_err_t rd(uint8_t reg, uint8_t *out, size_t n)
 {
@@ -266,6 +268,21 @@ void panel_touch_init(void)
                           "lvgl_port_remove_touch -- two drivers on one "
                           "controller steal each other's reads");
         }
+
+        /* ...and give LVGL one back, fed from OUR reads. Without this LVGL has
+         * no input device at all, and the SERVICE page's scrollable list is
+         * decorative: the three interiors below the fold cannot be reached by
+         * any gesture. Found in review of #153. */
+        s_lv_indev = lv_indev_create();
+        if (s_lv_indev != NULL) {
+            lv_indev_set_type(s_lv_indev, LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(s_lv_indev, indev_read);
+            ESP_LOGI(TAG, "LVGL indev re-created, fed from our register reads "
+                          "-- one hardware reader, and LVGL can scroll again");
+        } else {
+            ESP_LOGE(TAG, "lv_indev_create failed: the SERVICE list will not "
+                          "scroll and its lower rows are UNREACHABLE");
+        }
     }
 
     if (s_dev == NULL) {
@@ -300,6 +317,34 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
  * NETWORK (vault Prototypes/README.md:18), and only STATUS is built. Wiring
  * this to page navigation is the rest of child 4, and inventing the other two
  * pages' contents is what D-017 Amendment B just ruled against. */
+/* LVGL's input device, fed from OUR register reads.
+ *
+ * #150 deleted the BSP's indev because two drivers polling one CST816 steal
+ * each other's events -- the controller clears its data on read. That was
+ * right, and it left LVGL with NO input at all, which was fine while nothing
+ * in the UI needed touch.
+ *
+ * The SERVICE page needs it: a scrollable list that LVGL cannot receive a
+ * finger for is decorative, and the three interiors below the fold were
+ * unreachable. Child 6's tappable rows need it for the same reason.
+ *
+ * So LVGL gets an indev back, but NOT another driver: this callback serves
+ * the state panel_touch_poll() already read. One reader of the hardware,
+ * still ours, and LVGL gets its events.
+ *
+ * THREADING: poll() runs on ui_task and this runs on the LVGL timer task, so
+ * these scalars are genuinely shared now rather than same-task as before.
+ * They are word-sized and volatile; the worst case is one frame of stale
+ * coordinate, which is a redraw away from correct and is why a lock would be
+ * more cost than the problem. */
+static void indev_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    data->point.x = (s_dot_x >= 0) ? (int32_t)s_dot_x : 0;
+    data->point.y = (s_dot_y >= 0) ? (int32_t)s_dot_y : 0;
+    data->state   = s_pressing ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
 bool panel_touch_take_activity(void)
 {
     const bool a = s_activity;
