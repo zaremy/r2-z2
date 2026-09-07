@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "lvgl.h"
+#include "panel_state.h"
 
 /* THE v5 PALETTE. Taken from the reference prototype the vault calls "the
  * reference the LVGL firmware should match", not invented.
@@ -77,52 +78,61 @@ static lv_obj_t *s_root;
  * ruling made it legible. */
 typedef enum { CH_OK = 0, CH_DOWN, CH_FAULT, CH_UNK } chain_t;
 
-typedef struct {
-    const char *word;       /* the large word */
-    const char *since;      /* why, under it */
-    uint32_t    colour;
-    chain_t     chain[4];   /* MIC / R2 / NET / LLM */
-    bool        has_chain;  /* v5 defines a chain only for faults */
-    bool        pwr_known;  /* v5 sets pwrTxt null when the link is down */
-    bool        dome_known;
-} face_t;
+/* THE THREE HARDCODED FACES ARE GONE, replaced by `panel_state`.
+ *
+ * They carried their own word, reason and colour, which made this file a
+ * second normative source for a universe D-017 Amendment B had already ruled
+ * belongs to `docs/behaviour-states.md`. Twelve states now come from one
+ * table with host tests over the severity rank, and this file renders it.
+ *
+ * The `pwr_known` / `dome_known` flags went with them, and their removal is
+ * a fix rather than a tidy: they duplicated a rule `r2_telemetry_displayable`
+ * already enforces -- no reading survives its link -- so the panel had two
+ * places that could disagree about whether a value was showable. One of them
+ * was a hand-maintained bool per face, which is the half that would have
+ * drifted the first time somebody added a state.
+ *
+ * What stays here is the part that IS the rendering: which chain pips light,
+ * and whether the chain appears at all. */
 
-/* Only the states this board can actually reach are populated. The rest need a
- * reasoning layer that does not run here, and inventing a source for them
- * would be worse than an honest gap. */
-static const face_t k_face_up = {
-    "IDLE", "NOTHING ENGAGED", V5_GREEN, { CH_UNK, CH_OK, CH_UNK, CH_UNK }, false, true, true
-};
-static const face_t k_face_offline_r2 = {
-    /* v5's offline_r2, including its [FIX]: with the link down R2's battery is
-     * not knowable, "exactly like the dome heading beside it". Our telemetry
-     * layer already enforces that; this is the presentation catching up.
-     *
-     * AMBER, NOT RED, and this is where D-012 Amendment A's one concrete code
-     * effect now lives. That ruling demoted a dead link from red to yellow: a
-     * dropped link is not danger -- nothing is going to hurt him because the
-     * radio stopped answering -- and D-012 reserves red for danger and stop
-     * only, citing IEC 60073. The panel had used red because the row FELT bad,
-     * which is exactly the reasoning D-012 rejected.
-     *
-     * The reasoning is repeated here because its previous home was the
-     * four-row LINK case, which the face replaced -- and a future reader
-     * restoring a red offline state would otherwise find no trace of why it
-     * must not be. v5 agrees independently: its offline colour is #F2B23C. */
-    /* MIC, NET and LLM are CH_UNK, not CH_OK. The chain now appears only
-     * when a human is looking to find out what is wrong, which makes a green
-     * pip a CERTIFICATION -- and this build has no microphone, no network
-     * stack and no LLM client to certify. chain_colour() already treats
-     * CH_UNK as absence rather than a claim; only R2 has a real source. */
-    "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_UNK, CH_DOWN, CH_UNK, CH_UNK }, true, false, false
-};
-static const face_t k_face_waking = {
-    "WAKING", "FINDING HIM", V5_BLUE, { CH_UNK, CH_UNK, CH_UNK, CH_UNK }, false, false, false
-};
+/* The chain appears for `danger` and `offline` ONLY.
+ *
+ * Not for `attention`, although attention also fires the wake frame -- the
+ * two are different questions. The wake frame asks "should this interrupt
+ * you"; the chain asks "which link in the path is broken", which attention
+ * does not answer, because attention is about him and not about the path.
+ * v5 draws a chain for exactly these four renderings. */
+static bool face_has_chain(panel_state_t st)
+{
+    return st == PANEL_ST_DANGER || st == PANEL_ST_OFFLINE;
+}
+
+/* MIC / R2 / NET / LLM.
+ *
+ * Everything is CH_UNK unless this build has a source for it, and this build
+ * has exactly one: the BLE link to R2. There is no microphone, no network
+ * stack and no LLM client here, so a green pip beside any of those three
+ * would be a certification of a subsystem that does not exist -- shown, by
+ * design, at the very moment a human is looking to find out what is wrong. */
+static void face_chain(panel_state_t st, panel_offline_mode_t mode, chain_t out[4])
+{
+    for (int i = 0; i < 4; i++) out[i] = CH_UNK;
+
+    if (st == PANEL_ST_DANGER) { out[1] = CH_FAULT; return; }
+    if (st != PANEL_ST_OFFLINE) return;
+
+    switch (mode) {
+    case PANEL_OFF_R2:  out[1] = CH_DOWN; break;
+    case PANEL_OFF_NET: out[2] = CH_DOWN; break;
+    case PANEL_OFF_LLM: out[3] = CH_DOWN; break;
+    default: break;
+    }
+}
 
 static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
 
-static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms);
+static void set_face(panel_state_t st, panel_offline_mode_t mode,
+                     const r2_telemetry_t *t, uint32_t now_ms);
 
 enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
 static lv_obj_t *s_page[PAGE_COUNT];
@@ -150,7 +160,8 @@ static lv_obj_t *s_dome_needle, *s_dome_hub;
 static lv_obj_t *s_chain_row;
 static lv_obj_t *s_kv_val[2];                 /* PWR, DOME */
 static lv_obj_t *s_chain_pip[4];
-static const face_t *s_face_now;
+static panel_state_t        s_state_now = PANEL_ST_COUNT;
+static panel_offline_mode_t s_mode_now  = PANEL_OFF_COUNT;
 
 /* Severity colours: D-012's SEMANTICS, not its values (D-012 Amendment A).
  *
@@ -566,7 +577,7 @@ void panel_ui_create(void)
      * does not know anything about him yet, which is true. */
     {
         const r2_telemetry_t empty = { 0 };
-        set_face(&k_face_waking, &empty, 0);
+        set_face(PANEL_ST_WAKING, PANEL_OFF_COUNT, &empty, 0);
     }
 
     make_pips(s_root);
@@ -599,33 +610,41 @@ static uint32_t chain_colour(chain_t c)
 /* Drive the face. Only the states this board can REACH are selectable: the
  * rest need a reasoning layer that does not run here, and a face driven by an
  * invented source would be worse than an honest three. */
-static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
+static void set_face(panel_state_t st, panel_offline_mode_t mode,
+                     const r2_telemetry_t *t, uint32_t now_ms)
 {
     char buf[32];
 
-    if (f != s_face_now) {
-        s_face_now = f;
+    /* The MODE is part of the identity, not a detail under it: the three
+     * offline views are what makes one `offline` state able to say which
+     * thing is unreachable, so a change from R2 to LLM must repaint even
+     * though the state has not moved. Comparing only the state would leave
+     * the panel reading "R2 LINK DOWN" after the fault moved elsewhere. */
+    if (st != s_state_now || mode != s_mode_now) {
+        s_state_now = st;
+        s_mode_now  = mode;
         s_changed = true;                       /* worth looking at */
-        lv_label_set_text(s_face_word, f->word);
-        lv_obj_set_style_text_color(s_face_word, lv_color_hex(f->colour), 0);
-        lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(f->colour), 0);
-        lv_label_set_text(s_face_since, f->since);
 
-        /* The chain appears only when something is wrong. v5 defines it for
-         * the three offline modes and danger, and for nothing else. */
-        if (f->has_chain) {
+        const uint32_t colour = panel_state_colour(st);
+        lv_label_set_text(s_face_word, panel_state_word(st));
+        lv_obj_set_style_text_color(s_face_word, lv_color_hex(colour), 0);
+        lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(colour), 0);
+        lv_label_set_text(s_face_since, panel_state_since(st, mode));
+
+        if (face_has_chain(st)) {
+            chain_t chain[4];
+            face_chain(st, mode, chain);
             lv_obj_remove_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
             for (int i = 0; i < 4; i++)
                 lv_obj_set_style_bg_color(s_chain_pip[i],
-                                          lv_color_hex(chain_colour(f->chain[i])), 0);
+                                          lv_color_hex(chain_colour(chain[i])), 0);
         } else {
             lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
         }
     }
 
     /* ---- R2 PWR ------------------------------------------------------- */
-    const bool pwr_ok = f->pwr_known &&
-                        r2_telemetry_displayable(t, &t->battery, now_ms, 60000);
+    const bool pwr_ok = r2_telemetry_displayable(t, &t->battery, now_ms, 60000);
     if (pwr_ok)
         snprintf(buf, sizeof buf, "%u.%02u V",
                  t->battery_centivolts / 100u, t->battery_centivolts % 100u);
@@ -679,7 +698,7 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
      * is there because isfinite() admits 1e30, and lroundf() of a value
      * outside long's range is unspecified -- finite is not the same as
      * sane, and a corrupt frame is finite. */
-    const bool dome_ok = f->dome_known && isfinite(t->dome_degrees) &&
+    const bool dome_ok = isfinite(t->dome_degrees) &&
                          fabsf(t->dome_degrees) < 1.0e6f &&
                          r2_telemetry_displayable(t, &t->dome, now_ms, 60000);
     if (dome_ok)
@@ -709,11 +728,24 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
     s_changed = false;
 
-    switch (t->link) {
-    case R2_TM_UP:          set_face(&k_face_up, t, now_ms); break;
-    case R2_TM_DOWN:        set_face(&k_face_offline_r2, t, now_ms); break;
-    default:                set_face(&k_face_waking, t, now_ms); break;
-    }
+    /* The derivation lives in `panel_state` and is host-tested there.
+     *
+     * It was written here first, and that was wrong for a reason worth
+     * keeping: a screenshot of `IDLE` looks identical whether the wiring is
+     * live or dead, so a decision that only exists inside the renderer has no
+     * evidence available to it short of an operator unplugging the droid. The
+     * decision moved to where a test can reach it and this stayed a renderer.
+     *
+     * Only three of the twelve states are reachable from this board -- it has
+     * one sensor, the BLE link. The other nine are defined and rendered by a
+     * table nothing selects yet, and that is stated rather than discovered
+     * later: four PRs of the LED stack once merged completely inert because
+     * each was built above the last without one path reaching the hardware. */
+    panel_state_t st;
+    panel_offline_mode_t mode;
+    panel_state_from_link(t->link == R2_TM_UP, t->link == R2_TM_DOWN,
+                          &st, &mode);
+    set_face(st, mode, t, now_ms);
 
     /* The four rows LINK / R2 / STORAGE / BRAIN are GONE from this page.
      * They were built as the whole status screen from AC4's wording; the v5
