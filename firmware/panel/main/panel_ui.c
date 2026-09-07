@@ -122,7 +122,6 @@ static const face_t k_face_waking = {
 
 static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
 
-struct r2_telemetry;
 static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms);
 
 enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
@@ -652,11 +651,14 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         filled = pct * PWR_BARS / 100;
-        /* A known-but-critical battery must not render as an empty track,
-         * because the track is ALSO what "we have no reading" looks like.
-         * Any non-zero charge keeps at least one bar lit, so the two states
-         * are never the same picture. */
-        if (filled == 0 && pct > 0) filled = 1;
+        /* A known battery must never render as an empty track, because the
+         * track is ALSO what "we have no reading" looks like. The floor is
+         * unconditional inside this branch, NOT gated on pct > 0: pct is
+         * clamped to zero at 3.60 V and below, so gating on it left the one
+         * case that matters most -- a genuinely flat droid -- pixel-identical
+         * to no reading at all. Having a reading is what lights a bar; what
+         * the reading says is the bar count above it. */
+        if (filled == 0) filled = 1;
     }
     /* V5_LABEL, not V5_GREEN. Green is a VERDICT -- "this is healthy" -- and
      * the mapping behind this bar is inferred from an unmeasured curve, so it
@@ -673,8 +675,12 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
      * place in this file where an unvalidated wire value reached arithmetic.
      * lroundf rather than a truncating cast: the dome has been observed at
      * -0.06 deg, which truncates to 000 when the answer is 000 either way but
-     * would truncate -0.6 to 000 when it should read 359. */
+     * would truncate -0.6 to 000 when it should read 359. The magnitude bound
+     * is there because isfinite() admits 1e30, and lroundf() of a value
+     * outside long's range is unspecified -- finite is not the same as
+     * sane, and a corrupt frame is finite. */
     const bool dome_ok = f->dome_known && isfinite(t->dome_degrees) &&
+                         fabsf(t->dome_degrees) < 1.0e6f &&
                          r2_telemetry_displayable(t, &t->dome, now_ms, 60000);
     if (dome_ok)
         snprintf(buf, sizeof buf, "%03d",
