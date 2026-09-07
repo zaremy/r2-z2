@@ -431,7 +431,7 @@ class TestStalledStream(unittest.TestCase):
         loop = R.Reactive(b, feed, baseline_thresholds(), 6,
                           now=c.now, sleep=c.sleep)
         b.__class__ = self.DeadBridge     # ...and now nothing more arrives
-        outcome, _ = loop._watch_until(c.now() + 10.0,
+        outcome, _, _ = loop._watch_until(c.now() + 10.0,
                                        want_quiet_s=R.SETTLE_QUIET_S)
         self.assertEqual(outcome, "timeout")
 
@@ -1312,6 +1312,77 @@ class TestTheTrialRunsInSoftwareBeforeItCostsAPet(unittest.TestCase):
         rows = self.run_trial()
         self.assertGreaterEqual(rows[0][0], B.FULL_DELIGHT_INTENSITY,
                                 "reaction 1 started below the threshold")
+
+
+class TestAReactionCanBeReScoredWithoutTheRobot(unittest.TestCase):
+    """#149. The log stored raw samples for the calibration baseline and
+    nothing else, so no reaction and neither control could be re-decided
+    offline. On 2026-09-06 the operator called two of six reactions
+    desk-triggered rather than hand-triggered and there was no way to check;
+    the published result had to rest on their recollection."""
+
+    def _run(self, reactions=2):
+        c = Clock()
+        b = ScriptedBridge(noisy=True)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        out = loop.run(max_s=10_000.0, max_reactions=reactions)
+        self.assertEqual(out["count"], reactions, "harness check")
+        return loop, out
+
+    def test_every_reaction_carries_the_inputs_not_just_the_verdict(self):
+        loop, _ = self._run()
+        for i, rec in enumerate(loop.reactions, 1):
+            with self.subTest(reaction=i):
+                ev = rec.get("detection")
+                self.assertIsNotNone(ev, "reaction has no detection evidence")
+                self.assertTrue(ev.get("series"), "no raw series to re-score")
+                self.assertIn("ratios", ev)
+                self.assertIn("over", ev)
+
+    def test_the_verdict_is_RE_DERIVABLE_from_the_stored_series(self):
+        """THE acceptance criterion. Not 'evidence is present' -- that a
+        third party can recompute `over` from `series` alone. Storing the
+        verdict beside its inputs proves nothing if the two never agree."""
+        loop, _ = self._run()
+        th = baseline_thresholds()
+        for i, rec in enumerate(loop.reactions, 1):
+            ev = rec["detection"]
+            # rebuild the window from the stored per-channel series
+            # Through the OFFLINE entry point, on the stored bytes only.
+            recomputed = R.rescore(ev["series"], th)
+            with self.subTest(reaction=i):
+                self.assertEqual(recomputed["over"], ev["over"],
+                                 "stored verdict does not follow from stored inputs")
+                self.assertEqual(recomputed["ratios"], ev["ratios"])
+
+    def test_both_controls_carry_evidence(self):
+        # A control that FIRES is the one that most needs re-scoring: it is
+        # the difference between a stuck detector and a transmitting surface.
+        c = Clock()
+        for noisy in (False, True):
+            b = ScriptedBridge(noisy=noisy)
+            loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                              now=c.now, sleep=c.sleep)
+            out = loop.control(5.0)
+            with self.subTest(fired=noisy):
+                self.assertIn("evidence", out)
+                self.assertTrue(out["evidence"].get("series"))
+
+    def test_a_fired_control_no_longer_asserts_the_detector_is_stuck(self):
+        # It cannot tell that apart from a surface still transmitting, and on
+        # 2026-09-06 the surface was the cause while the message blamed the
+        # detector. Assert the REASON names both, not merely that it fired.
+        c = Clock()
+        b = ScriptedBridge(noisy=True)
+        loop = R.Reactive(b, quiet_feed(b, 20), baseline_thresholds(), 6,
+                          now=c.now, sleep=c.sleep)
+        out = loop.control(5.0)
+        self.assertFalse(out["ok"], "harness check: this control must fire")
+        why = out["why"]
+        self.assertIn("stuck", why)
+        self.assertIn("surface", why,
+                      "the message names only the detector branch")
 
 
 class TestMoodWiring(unittest.TestCase):

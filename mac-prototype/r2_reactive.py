@@ -217,6 +217,54 @@ def fires(window: list[dict], thresholds) -> tuple[bool, str | None]:
     return trial_fires(channels(window), thresholds)
 
 
+def rescore(series: dict[str, list[float]], thresholds) -> dict:
+    """Re-derive the verdict from a STORED series -- no robot, no re-run.
+
+    This is the offline entry point #149 exists to provide. It takes the
+    flattened `{"group.component": [values]}` form the log keeps, NOT a list
+    of raw samples: `channels()` reads the nested `decoded` shape off the
+    wire, so feeding a stored series back through it silently yields nothing
+    and every channel reads clean. A re-scoring path that quietly returns "no
+    channels over" is worse than none, because it exonerates.
+    """
+    out = {}
+    for name, (_, limit) in thresholds.items():
+        vals = series.get(name)
+        if vals and limit > 0:
+            out[name] = window_stat(vals) / limit
+    return {"ratios": {k: round(v, 4) for k, v in sorted(out.items())},
+            "over": sorted(k for k, v in out.items() if v >= 1.0)}
+
+
+def detection_evidence(window: list[dict], thresholds) -> dict:
+    """Everything needed to re-decide this moment WITHOUT the robot.
+
+    The run log used to store raw samples for the calibration baseline and
+    nothing else, so a reaction could never be re-scored (#149). That is not a
+    completeness nicety: on 2026-09-06 the operator identified two of six
+    reactions as desk-triggered rather than hand-triggered, and there was no
+    way to check them. The published result had to rest on their recollection.
+
+    `CLAUDE.md`: store raw samples with every trial "so a rubric that turns out
+    wrong can be re-scored offline instead of re-run on the operator's
+    patience." Their patience is the scarce resource; bytes are not.
+
+    The verdict here is computed THROUGH `rescore` on the same series that gets
+    stored, so "the log reproduces its own verdict" is true by construction
+    rather than by coincidence -- and the test that checks it is testing the
+    stored bytes, not a parallel code path.
+
+    Rounded to 6 dp: the rubric's statistic is a peak-to-peak over a handful of
+    samples, so the seventh decimal cannot change a verdict, and full repr
+    roughly doubles the file.
+    """
+    series = {k: [round(x, 6) for x in v]
+              for k, v in sorted(channels(window).items())}
+    verdict = rescore(series, thresholds)
+    return {"ratios": verdict["ratios"], "over": verdict["over"],
+            "samples": len(window), "series": series}
+
+
 def ratios(window: list[dict], thresholds) -> dict[str, float]:
     """How close each channel came to its limit, as a fraction of it.
 
@@ -316,18 +364,25 @@ class Reactive:
         """Poll until `deadline`. If `want_quiet_s` is set, return as soon as
         that much continuous quiet has passed; otherwise return on the first
         firing. Returns (outcome, channel) where outcome is one of
-        'fired' | 'quiet' | 'timeout'."""
+        'fired' | 'quiet' | 'timeout'.
+
+        Also returns the EVIDENCE for the moment it decided -- the window it
+        judged and the per-channel ratios -- so the verdict can be re-derived
+        offline instead of taken on trust (#149)."""
         quiet_since = None
         last_chan = None
+        last_ev: dict = {}
         while self.now() < deadline:
             self.feed.drain()
             win = self.feed.window(self.window_n)
             hot, chan = fires(win, self.thresholds)
+            if win:
+                last_ev = detection_evidence(win, self.thresholds)
             if hot:
                 last_chan = chan
                 quiet_since = None
                 if want_quiet_s is None:
-                    return "fired", chan
+                    return "fired", chan, last_ev
             elif win and not self.feed.stalled(self.STALE_POLLS):
                 # Only a FULL window counts toward quiet, AND only while
                 # samples are still arriving. A partial window is not evidence
@@ -341,9 +396,9 @@ class Reactive:
                     quiet_since = self.now()
                 elif want_quiet_s is not None and \
                         self.now() - quiet_since >= want_quiet_s:
-                    return "quiet", last_chan
+                    return "quiet", last_chan, last_ev
             self.sleep(POLL_S)
-        return "timeout", last_chan
+        return "timeout", last_chan, last_ev
 
     def control(self, seconds: float) -> dict:
         """The negative control. Hands off; the detector must stay silent.
@@ -356,14 +411,25 @@ class Reactive:
         """
         self.feed.flush()
         end = self.now() + seconds
-        outcome, chan = self._watch_until(end, want_quiet_s=None)
+        outcome, chan, evidence = self._watch_until(end, want_quiet_s=None)
         ok = outcome != "fired"
         return {"ok": ok, "seconds": seconds, "outcome": outcome,
                 "channel": chan,
+                # NAMES BOTH BRANCHES. The old wording asserted "it is stuck
+                # on", which this control cannot actually distinguish: a fire
+                # with nobody touching him means either a stuck detector OR a
+                # surface still transmitting. The desk limit is already
+                # OBSERVED (r2-capabilities.md), and on 2026-09-06 the desk was
+                # the cause -- so the alarming branch was asserted and the true
+                # one went unmentioned. `evidence` below is what tells them
+                # apart: a stuck channel reads hot on quiet data.
                 "why": "detector stayed silent with nothing touching him" if ok
                        else f"detector fired on {chan} with nobody touching "
-                            f"him -- it is stuck on, and every reaction it "
-                            f"produces would be void"}
+                            f"him -- either it is stuck on, or the surface is "
+                            f"still transmitting (see `evidence`, and the desk "
+                            f"limit in r2-capabilities.md). Reactions in this "
+                            f"run are unadjudicated until that is settled",
+                "evidence": evidence}
 
     # 1.5 s of COMPLETE silence at a 0.25 s poll. At 4 Hz that is six
     # consecutive missed samples, which is not jitter. It also has to be
@@ -375,8 +441,8 @@ class Reactive:
     def react(self) -> dict:
         """Settle, perform, recover. Returns the record for one reaction."""
         t0 = self.now()
-        settle, _ = self._watch_until(self.now() + SETTLE_MAX_S,
-                                      want_quiet_s=SETTLE_QUIET_S)
+        settle, _, _ = self._watch_until(self.now() + SETTLE_MAX_S,
+                                         want_quiet_s=SETTLE_QUIET_S)
         settled_s = round(self.now() - t0, 2)
 
         # DO NOT PERFORM INTO A DEAD STREAM. `settle` returning "quiet" on a
@@ -443,7 +509,7 @@ class Reactive:
 
         # Everything in the ring now is the beat's own noise, not a hand.
         self.feed.flush()
-        recover, _ = self._watch_until(self.now() + RECOVER_MAX_S,
+        recover, _, _ = self._watch_until(self.now() + RECOVER_MAX_S,
                                        want_quiet_s=RECOVER_QUIET_S)
 
         # HONOUR THE BEAT'S OWN COOLDOWN. `Beat.cooldown_s` is not decoration
@@ -524,7 +590,7 @@ class Reactive:
             # before this moment is never right, so the invariant belongs
             # here rather than in a longer recovery timeout.
             self.feed.flush()
-            outcome, chan = self._watch_until(end, want_quiet_s=None)
+            outcome, chan, evidence = self._watch_until(end, want_quiet_s=None)
             if self.feed.stalled(self.STALE_POLLS):
                 self.stalled = True
                 break
@@ -532,6 +598,11 @@ class Reactive:
                 break
             rec = self.react()
             rec["trigger_channel"] = chan
+            # THE INPUTS, not just the verdict. Without this the reaction says
+            # which channel crossed first and nothing about which others
+            # corroborated -- and #67 measured that a real pet lights 9 of 10,
+            # so the trigger channel alone cannot separate a hand from a desk.
+            rec["detection"] = evidence
             rec["at_s"] = round(max_s - (end - self.now()), 2)
             self.reactions.append(rec)
             # OUT LOUD, WHILE THE OPERATOR IS STILL STANDING THERE. The
