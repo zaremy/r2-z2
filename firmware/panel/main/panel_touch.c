@@ -2,6 +2,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "esp_lvgl_port_touch.h"
 #include "lvgl.h"
@@ -48,6 +49,26 @@ static void dot_to(int16_t x, int16_t y)
     }
     lv_obj_set_pos(s_dot, x - 11, y - 11);
     lv_obj_remove_flag(s_dot, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* How long the dot lingers after the finger lifts.
+ *
+ * NOT forever, which is what the first version did. A 22 px circle at 80%
+ * opacity, parented to lv_layer_top() so the burn-in drift never moves it,
+ * sitting on the same pixels of an always-on OLED for the rest of the
+ * session -- the single most pixel-static element on the panel, added by the
+ * same hand that implemented AC9's mitigation two PRs earlier.
+ *
+ * Four seconds is the whole point of the linger: someone who taps once and
+ * looks up still sees the confirmation, which is exactly what was missing
+ * when the operator reported "nothing happened" three times. It just does not
+ * outlive their attention. */
+#define DOT_LINGER_MS 4000
+static uint32_t s_dot_shown_at;
+
+static void dot_hide(void)
+{
+    if (s_dot != NULL) lv_obj_add_flag(s_dot, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void note(int16_t x, int16_t y)
@@ -115,24 +136,6 @@ static esp_err_t rd(uint8_t reg, uint8_t *out, size_t n)
     return i2c_master_transmit_receive(s_dev, &reg, 1, out, n, 20);
 }
 
-/* Old, dead: kept only as a name so the history above is not abstract.
- * POLL THE INPUT DEVICE. Do not use LVGL events for this.
- *
- * The first version attached PRESSED/PRESSING/RELEASED handlers to
- * lv_screen_active(). It never saw a real touch, because the burn-in work put
- * a full-size root container over the screen and LVGL does NOT propagate a
- * press to a parent unless LV_OBJ_FLAG_EVENT_BUBBLE is set. Every touch landed
- * on the container and stopped there.
- *
- * What made that expensive rather than merely wrong: it still recorded 47
- * "points", all inside x 1..3 / y 7..9, which looked like a coordinate-mapping
- * bug and sent me after the driver. They were not the operator's taps at all.
- * The operator tapped four corners, saw nothing, and reported dead touch --
- * and the log agreed with them for the wrong reason.
- *
- * Polling the indev cannot be defeated by hit-testing, bubbling, z-order or a
- * widget added later. For a calibration instrument that is the right trade:
- * it reads the device, not the UI's opinion of the device. */
 void panel_touch_poll(void)
 {
     uint8_t buf[6];
@@ -179,7 +182,24 @@ void panel_touch_poll(void)
  * different locks, so they are different functions. */
 void panel_touch_render(void)
 {
-    if (s_dot_x >= 0) dot_to((int16_t)s_dot_x, (int16_t)s_dot_y);
+    static int32_t drawn_x = -1, drawn_y = -1;
+
+    if (s_dot_x < 0) return;
+
+    /* Only when it MOVED. Re-issuing lv_obj_set_pos with identical values 25
+     * times a second marks the area dirty every tick and redraws a region that
+     * did not change -- forever, once any touch has happened. */
+    if (s_dot_x != drawn_x || s_dot_y != drawn_y) {
+        drawn_x = s_dot_x; drawn_y = s_dot_y;
+        dot_to((int16_t)s_dot_x, (int16_t)s_dot_y);
+        s_dot_shown_at = (uint32_t)(esp_timer_get_time() / 1000);
+    } else if (!s_pressing && s_dot_shown_at != 0 &&
+               (uint32_t)(esp_timer_get_time() / 1000) - s_dot_shown_at > DOT_LINGER_MS) {
+        dot_hide();
+        s_dot_shown_at = 0;
+        drawn_x = drawn_y = -1;
+        s_dot_x = s_dot_y = -1;
+    }
 }
 
 void panel_touch_init(void)
