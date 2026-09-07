@@ -146,7 +146,8 @@ static void ui_task(void *arg)
                  * the ring is itself an orientation cue" -- wrapping destroys
                  * that cue on a panel with no back button. */
                 if (next < 0) next = 0;
-                if (next > 2) next = 2;
+                if (next > panel_ui_page_count() - 1)
+                    next = panel_ui_page_count() - 1;
                 if (next != panel_ui_page()) {
                     panel_ui_show_page(next);
                     ESP_LOGI(TAG, "swipe %s -> page %s",
@@ -155,8 +156,14 @@ static void ui_task(void *arg)
                 }
             }
 
+            /* A HUMAN TOUCHING IT COUNTS AS ACTIVITY. Without this the dim
+             * timer keys only on the DATA changing, so someone who picks up
+             * the droid and taps is reading a 40% screen because the battery
+             * happened to report the same voltage as a minute ago. */
+            const bool touched = panel_touch_take_activity();
             const bool changed = panel_ui_update(&s_tm, now_ms());
-            panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
+            panel_ui_burn_in(now_ms(), changed || touched || sw != PANEL_SWIPE_NONE,
+                             set_brightness_pct);
             bsp_display_unlock();
         }
         /* P1 progress, once a minute (#101). Without this the panel records

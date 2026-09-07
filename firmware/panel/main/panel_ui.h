@@ -65,6 +65,11 @@ bool panel_ui_is_dimmed(void);
 /* The three lateral pages (vault Prototypes/README.md:18). */
 void        panel_ui_show_page(int page);
 int         panel_ui_page(void);
+
+/* The number of lateral pages. Exported so callers clamp against the real
+ * count rather than a literal: a hardcoded last-index makes a page added
+ * later unreachable, with no compile error and no test to catch it. */
+int         panel_ui_page_count(void);
 const char *panel_ui_page_name(int page);
 
 const char *panel_sev_name(panel_sev_t s);

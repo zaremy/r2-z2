@@ -227,6 +227,7 @@ void panel_ui_show_page(int page)
 }
 
 int panel_ui_page(void) { return s_page_at; }
+int panel_ui_page_count(void) { return PAGE_COUNT; }
 
 const char *panel_ui_page_name(int page)
 {

@@ -52,6 +52,11 @@ void panel_touch_extremes(panel_touch_extremes_t *out);
 /* The most recent completed swipe, consumed by reading it. */
 panel_swipe_t panel_touch_take_swipe(void);
 
+/* True if a finger has been seen since the last call. Feeds the burn-in
+ * dimmer: a person touching the panel is the clearest possible signal that
+ * someone is looking at it. */
+bool panel_touch_take_activity(void);
+
 #ifdef __cplusplus
 }
 #endif
