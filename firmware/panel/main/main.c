@@ -123,8 +123,13 @@ static void ui_task(void *arg)
     (void)arg;
     int ticks = 0;
     while (1) {
+        /* The I2C read happens OUTSIDE the display lock (review of #150):
+         * holding the LVGL lock across a blocking bus transaction lets a
+         * wedged controller stall every redraw and every other task that
+         * needs the display. */
+        panel_touch_poll();
         if (bsp_display_lock(100)) {
-            panel_touch_poll();
+            panel_touch_render();
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
             bsp_display_unlock();

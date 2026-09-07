@@ -4,8 +4,6 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "driver/i2c_master.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 static const char *TAG = "touch";
 
@@ -17,6 +15,7 @@ static panel_touch_extremes_t s_ex = { .points = 0, .min_x = INT16_MAX,
                                        .max_y = INT16_MIN };
 static volatile panel_swipe_t s_swipe;
 static lv_point_t s_press_at;
+static lv_point_t s_last_touch;
 static bool s_pressing;
 
 /* A dot under the finger.
@@ -32,6 +31,7 @@ static bool s_pressing;
  * the mapping is broken -- which is what the first P1 reading suggested
  * (47 points, all inside x 1..3, y 7..9, from four different corners). */
 static lv_obj_t *s_dot;
+static volatile int32_t s_dot_x = -1, s_dot_y = -1;
 
 static void dot_to(int16_t x, int16_t y)
 {
@@ -106,7 +106,11 @@ static i2c_master_dev_handle_t s_dev;
 static esp_err_t rd(uint8_t reg, uint8_t *out, size_t n)
 {
     if (s_dev == NULL) return ESP_ERR_INVALID_STATE;
-    return i2c_master_transmit_receive(s_dev, &reg, 1, out, n, 200);
+    /* FINDING 2 (review of #150): 20 ms, not 200. This runs every UI tick,
+     * and a wedged controller with a 200 ms timeout would stall the UI for
+     * most of its life. 20 ms is far longer than a 6-byte read at 400 kHz
+     * needs and bounds the damage. */
+    return i2c_master_transmit_receive(s_dev, &reg, 1, out, n, 20);
 }
 
 /* Old, dead: kept only as a name so the history above is not abstract.
@@ -140,7 +144,8 @@ void panel_touch_poll(void)
 
     if (fingers > 0) {
         if (!s_pressing) { s_press_at.x = x; s_press_at.y = y; s_pressing = true; }
-        dot_to((int16_t)x, (int16_t)y);
+        s_last_touch.x = x; s_last_touch.y = y;   /* the last REAL position */
+        s_dot_x = x; s_dot_y = y;
         if (x != last_x || y != last_y) {
             note((int16_t)x, (int16_t)y);
             last_x = x; last_y = y;
@@ -148,13 +153,31 @@ void panel_touch_poll(void)
     } else if (s_pressing) {
         s_pressing = false;
         last_x = last_y = -1;
-        const int32_t dx = x - s_press_at.x;
+        /* FINDING 3 (review of #150): measure from the last position that had
+         * a FINGER on it, never from the release packet. touch_check only ever
+         * used a fingers==0 read to mark a LIFT; it never established that x/y
+         * mean anything in that packet. If they are stale it happens to work;
+         * if they are zeroed, every swipe becomes a false left-swipe. Not a
+         * coin worth flipping for a gesture that changes pages. */
+        const int32_t dx = s_last_touch.x - s_press_at.x;
         if (dx <= -PANEL_SWIPE_PX)      s_swipe = PANEL_SWIPE_LEFT;
         else if (dx >= PANEL_SWIPE_PX)  s_swipe = PANEL_SWIPE_RIGHT;
         /* The dot STAYS where the finger left it. Hiding it on release is what
          * makes a working panel look dead to someone who taps once and looks
          * up -- they see nothing, exactly as reported three times. */
     }
+}
+
+/* LVGL work, and ONLY LVGL work. Must hold the display lock.
+ *
+ * Split from panel_touch_poll because fixing review finding 2 -- do not do a
+ * blocking I2C read under the display lock -- immediately created the mirror
+ * bug: dot_to() calls LVGL, so moving the whole poll outside the lock would
+ * have raced the UI task against itself. The read and the render want
+ * different locks, so they are different functions. */
+void panel_touch_render(void)
+{
+    if (s_dot_x >= 0) dot_to((int16_t)s_dot_x, (int16_t)s_dot_y);
 }
 
 void panel_touch_init(void)
@@ -178,6 +201,28 @@ void panel_touch_init(void)
                      id == 0xB7 ? "(CST820 -- matches #104)" : "(UNEXPECTED)");
         else
             ESP_LOGE(TAG, "chip id read FAILED -- silence below proves nothing");
+
+        /* FINDING 1 (review of #150), and the most important of the three:
+         * bsp_display_start() has ALREADY registered
+         * esp_lcd_touch_new_i2c_cst816s on this same 0x15 device and driven it
+         * from an LVGL indev. Adding our own handle put TWO DRIVERS on ONE
+         * CONTROLLER.
+         *
+         * That is not merely untidy. The CST816 CLEARS its touch data on read,
+         * so two pollers steal each other's events and whichever asks second
+         * sees fingers == 0. It is a plausible root cause of this entire
+         * episode -- and it would certainly have broken this attempt, which is
+         * why the review catching it mattered more than the other two findings
+         * combined.
+         *
+         * We do not use LVGL for touch at all, so delete its indev. One
+         * reader, and it is ours. */
+        lv_indev_t *indev = bsp_display_get_input_dev();
+        if (indev != NULL) {
+            lv_indev_delete(indev);
+            ESP_LOGI(TAG, "deleted the BSP's LVGL touch indev -- two drivers "
+                          "on one controller steal each other's reads");
+        }
     }
 
     if (s_dev == NULL) {
