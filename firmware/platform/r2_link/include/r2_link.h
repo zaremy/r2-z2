@@ -75,6 +75,23 @@ const char     *r2_link_state_name(r2_link_state_t s);
  * assume an unconfirmed command took effect. */
 int r2_link_send(const uint8_t *frame, size_t len, void *ctx);
 
+/* Scan for him but never connect (#101 P4).
+ *
+ * His idle timeout is unmeasured, and it decides how long `released` sits in
+ * limbo (D-023). It cannot be measured while we are connected, because OUR
+ * KEEPALIVE IS HIS WAKE COMMAND -- CLAUDE.md is explicit that "no idle timeout
+ * in practice" is us suppressing his own, every three seconds.
+ *
+ * So this mode watches the advertisement and never opens a link. Note what it
+ * can and cannot conclude: the only sleep this project has ever OBSERVED was
+ * visual (he reverted to his resting alternation and faded out). Whether a
+ * sleeping droid stops advertising is UNKNOWN, so continued advertising is not
+ * evidence he is awake -- it is an absence of evidence either way. */
+void r2_link_set_scan_only(bool on);
+
+/* How many adverts we have seen from him, and when the last one arrived. */
+void r2_link_adverts(uint32_t *count, uint32_t *last_ms);
+
 /* Drop the link deliberately. Returns 0 if a disconnect was started.
  *
  * Two callers, present and future. Here it is how the telemetry rule gets
