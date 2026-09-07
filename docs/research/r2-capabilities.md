@@ -1234,6 +1234,102 @@ data.** Every other number in this section can. Fixed the same session — one
 log per run — but the evidence for the headline result is weaker than it
 should be, and saying so is cheaper than pretending otherwise.
 
+#### OBSERVED 2026-09-06 — the state coupling renders on hardware (S2b, six reactions)
+
+The first run where the beat R2 performs depended on *his own state* rather than
+on the trigger alone — D-018's stated axis for the difference between a creature
+and an appliance. Raw log committed at
+`mac-prototype/results/s2b-trial-2026-09-06.json`.
+
+Pre-registered before firing: *the rendering changes on the first reaction whose
+`intensity < 0.5`.* Scored off the logged intensity, never the operator's pet
+count, because the loop is blind for ~20 s after each reaction and their
+ordinals cannot match.
+
+| | trigger channel | intensity | beat | beat elapsed |
+|---|---|---|---|---|
+| r1 | `attitude.pitch` | 1.000 | `express_delight` | 10.99 s |
+| r2 | `attitude.pitch` | 0.658 | `express_delight` | 10.34 s |
+| r3 | `accelerometer.x` | 0.532 | `express_delight` | 13.49 s |
+| **r4** | `attitude.pitch` | **0.445** | **`express_delight:brief`** | **7.32 s** |
+| r5 | `gyroscope.x` | 0.405 | `express_delight:brief` | 7.49 s |
+| r6 | `accelerometer.z` | 0.322 | `express_delight:brief` | 7.20 s |
+
+**The prediction held.** Intensity fell monotonically and the beat switched to
+brief at exactly the first reaction under the threshold. The full beats ran
+10.3-13.5 s and the brief ones 7.2-7.5 s — a ~40% split, which is the axis a
+human could plausibly judge.
+
+**The operator identified r5 and r6 as desk-triggered, not hand-triggered**, and
+did so before seeing any of the above. The valid set is therefore **r1-r4**, and
+the crossing falls inside it, on genuine hand contact.
+
+#### The desk did it again — a known limit, reproduced, not a new defect
+
+The closing control fired on `gyroscope.y` with nobody touching him, and
+`r2_reactive.py` printed *"it is stuck on, and every reaction it produces would
+be void."*
+
+**That message overstates what the control can distinguish.** A fire with nobody
+touching him has two explanations and the control cannot separate them:
+
+1. the detector is genuinely stuck, or
+2. **the surface is still transmitting** — which this document already records
+   two sections above as OBSERVED: *"a rickety desk is indistinguishable from a
+   hand… on an unstable surface he will react to people walking past."*
+
+He was on a desk for this run. The earlier finding is why he was moved to the
+floor. So the honest reading is (2): a documented environmental limit reproduced,
+not a regression in the rubric. **The control's wording should name both
+branches** rather than asserting the alarming one.
+
+Note the asymmetry with the REFUTED entry above: on 2026-08-18 the operator's
+false-positive claim was wrong and re-scoring settled it. On 2026-09-06 the same
+claim was **right**. Neither is the default — which is the whole argument for
+being able to re-score, and see the next section for why we could not.
+
+#### DEFECT — no reaction and no control can be re-scored offline
+
+`CLAUDE.md` requires storing raw samples with every trial "so a rubric that turns
+out wrong can be re-scored offline instead of re-run on the operator's patience."
+The run log does this for the **baseline only**:
+
+| log section | what it stores |
+|---|---|
+| `calibration` | 120 samples, `series`, `limits`, `thresholds` — **re-scorable** |
+| each reaction | `trigger_channel` and timings — **no samples, no corroborating channels** |
+| `control` / `closing_control` | a verdict, a channel and a sentence — **no samples** |
+
+Consequence, and it bit immediately: the operator says r5 and r6 were the desk,
+and **that cannot be checked against the data.** The exclusion above rests on
+their account plus a single trigger channel per reaction, which is why the valid
+set is stated as their attribution rather than as a measurement.
+
+It also blocks the one cheap follow-up this run suggests — see below.
+
+#### HYPOTHESIS, not a finding — hand and desk may fire on different channels
+
+Every hand reaction fired on `attitude.pitch` (3 of 4) or `accelerometer.x`;
+both desk reactions and the stuck closing control fired on `gyroscope.*` or
+`accelerometer.z`.
+
+**This is n=4 against n=3, one channel each, and it is not evidence.** #67
+measured that a real pet lights **9 of 10 channels**, so the trigger channel is
+merely whichever crossed first — the discriminating question is which channels
+corroborate, and the log does not record that. Stated here because it is cheap
+to test once the defect above is fixed, and because an untested pattern left
+unwritten gets rediscovered rather than checked.
+
+#### Still open — whether a person can tell
+
+The operator reported unprompted that the reactions "varied", that one "was very
+short… like a fart", and that another "was a little longer due to laugh". So a
+difference was perceived. But their ordinals do not map to the loop's, for the
+reason above, so **which** reaction was smaller was not established.
+
+D-018 records perceptibility as untested. It remains untested. The mechanism is
+demonstrated; the perception is not.
+
 #### OBSERVED — deliberate touch drives the loop
 
 Settled 2026-08-18 by `monitor` first and a live run second, which is the order
