@@ -224,6 +224,11 @@ static void test_link_down_is_offline_via_r2(void)
     CHECK(st == PANEL_ST_OFFLINE, "link down gave %s", panel_state_name(st));
     CHECK(m == PANEL_OFF_R2,
           "link down blamed something other than the BLE link");
+    /* Through the mode, to the string the operator actually reads. Asserting
+     * the enum alone leaves the mapping from mode to reason untested on the
+     * live path. */
+    CHECK(strcmp(panel_state_since(st, m), "R2 LINK DOWN") == 0,
+          "the live offline path reads '%s'", panel_state_since(st, m));
 }
 
 static void test_link_up_is_idle_and_nothing_richer(void)
@@ -237,6 +242,10 @@ static void test_link_up_is_idle_and_nothing_richer(void)
      * place. */
     CHECK(mask == (1u << PANEL_ST_IDLE),
           "link up made a state other than idle a candidate");
+    /* The mode matters even when there is no fault: panel_ui treats it as part
+     * of the repaint identity, so a stale PANEL_OFF_R2 written here would
+     * decide whether a later transition repaints at all. */
+    CHECK(m == PANEL_OFF_COUNT, "link up left an offline view set");
 }
 
 static void test_transition_is_waking_and_stays_unranked(void)
@@ -248,6 +257,7 @@ static void test_transition_is_waking_and_stays_unranked(void)
     /* Chosen deliberately, never resolved to. If `waking` were in the mask it
      * would be competing, which AC2b forbids. */
     CHECK(mask == 0u, "waking was put into the severity contest");
+    CHECK(m == PANEL_OFF_COUNT, "a link transition left an offline view set");
     CHECK(!panel_state_is_ranked(st), "waking became ranked");
 }
 
@@ -269,6 +279,96 @@ static void test_null_outs_are_tolerated(void)
     CHECK(1, "null out-params did not crash");
 }
 
+/* ---- the cells, not just their shape ----------------------------------- */
+
+static void test_each_offline_view_blames_the_right_thing(void)
+{
+    /* Pairwise inequality was NOT enough, proven by mutation: swapping the R2
+     * and NET reasons survived all 193 checks, and the panel would have
+     * printed "NO INTERNET" for a dropped BLE link on a build with no network
+     * stack at all. The three views ARE the justification for one offline
+     * state, so their content is the property, not their distinctness. */
+    CHECK(strcmp(panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_R2),
+                 "R2 LINK DOWN") == 0,
+          "the R2 view says '%s'",
+          panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_R2));
+    CHECK(strcmp(panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_NET),
+                 "NO INTERNET") == 0,
+          "the NET view says '%s'",
+          panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_NET));
+    CHECK(strcmp(panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_LLM),
+                 "LLM DOWN") == 0,
+          "the LLM view says '%s'",
+          panel_state_since(PANEL_ST_OFFLINE, PANEL_OFF_LLM));
+}
+
+static void test_the_state_is_listen_and_the_word_is_listening(void)
+{
+    /* The one documented divergence between a state id and its rendering,
+     * called out in the header and the table -- and untested until a mutation
+     * shortened the word and nothing failed. Documented is not covered. */
+    CHECK(strcmp(panel_state_name(PANEL_ST_LISTEN), "listen") == 0,
+          "the state id drifted from `listen`");
+    CHECK(strcmp(panel_state_word(PANEL_ST_LISTEN), "LISTENING") == 0,
+          "the word on the glass drifted from LISTENING");
+}
+
+static void test_colour_partitions_by_meaning(void)
+{
+    /* By SEMANTIC CLASS, not by hex. Asserting values would pin the palette,
+     * which D-012 Amendment A explicitly leaves to the medium; asserting the
+     * partition pins what a colour MEANS, which is the half that must not
+     * fork. A state moving between meanings fails here -- `waiting` turning
+     * amber would promote a patient wait to needs-monitoring, and that
+     * mutation survived the suite before this test existed. */
+    const panel_state_t amber[] = { PANEL_ST_OFFLINE, PANEL_ST_ATTENTION,
+                                    PANEL_ST_MISHEARD };
+    const panel_state_t cyan[]  = { PANEL_ST_THINKING, PANEL_ST_LISTEN };
+    const panel_state_t blue[]  = { PANEL_ST_WAITING, PANEL_ST_WAKING,
+                                    PANEL_ST_UNPROVISIONED };
+    const panel_state_t rest[]  = { PANEL_ST_SLEEP, PANEL_ST_RELEASED };
+
+    struct { const char *what; const panel_state_t *set; unsigned n; uint32_t c; }
+    group[] = {
+        { "amber/needs-monitoring", amber, 3, PANEL_C_AMBER },
+        { "cyan/engaged",           cyan,  2, PANEL_C_CYAN  },
+        { "blue/neutral",           blue,  3, PANEL_C_BLUE  },
+        { "magenta/rest",           rest,  2, PANEL_C_MAGENTA },
+    };
+
+    unsigned claimed = 0;
+    for (unsigned g = 0; g < sizeof group / sizeof group[0]; g++) {
+        for (unsigned i = 0; i < group[g].n; i++) {
+            CHECK(panel_state_colour(group[g].set[i]) == group[g].c,
+                  "%s is not %s", panel_state_name(group[g].set[i]),
+                  group[g].what);
+            claimed++;
+        }
+    }
+    CHECK(panel_state_colour(PANEL_ST_DANGER) == PANEL_C_RED, "danger is not red");
+    CHECK(panel_state_colour(PANEL_ST_IDLE) == PANEL_C_GREEN, "idle is not green");
+    claimed += 2;
+
+    /* Every state is in exactly one class. Without this, a state added later
+     * simply would not be checked by any of the groups above. */
+    CHECK(claimed == (unsigned)PANEL_ST_COUNT,
+          "%u of %d states are in no colour class", claimed, (int)PANEL_ST_COUNT);
+}
+
+static void test_rest_is_not_the_no_claim_colour(void)
+{
+    /* D-012 Amendment A gives the panel a neutral grey for "we cannot say" and
+     * says in terms that it is "deliberately not a colour claim: it is the
+     * absence of one". `sleep` and `released` are positive claims about a
+     * deliberate act, so they must not be drawn in it -- they were, and it took
+     * a reviewer noticing the hex matched V5_LABEL byte for byte. */
+    const uint32_t no_claim = 0x7C8A8D;
+    for (int i = 0; i < (int)PANEL_ST_COUNT; i++)
+        CHECK(panel_state_colour((panel_state_t)i) != no_claim,
+              "%s renders in the panel's absence-of-a-claim colour",
+              panel_state_name((panel_state_t)i));
+}
+
 int main(void)
 {
     test_unranked_states_report_minus_one();
@@ -288,6 +388,10 @@ int main(void)
     test_transition_is_waking_and_stays_unranked();
     test_offline_beats_idle_if_both_were_ever_set();
     test_null_outs_are_tolerated();
+    test_each_offline_view_blames_the_right_thing();
+    test_the_state_is_listen_and_the_word_is_listening();
+    test_colour_partitions_by_meaning();
+    test_rest_is_not_the_no_claim_colour();
 
     printf("%s: %d checks, %d failures\n",
            failures ? "FAIL" : "PASS", checks, failures);

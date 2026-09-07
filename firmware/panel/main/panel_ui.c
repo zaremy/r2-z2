@@ -24,11 +24,11 @@
 #define V5_LABEL      0x7C8A8D   /* key labels, active dot */
 #define V5_TEXT       0xF2F6F7   /* values */
 #define V5_TEXT_HI    0xE8F2F3
-#define V5_CYAN       0x3FD8E8   /* listen, thinking */
-#define V5_AMBER      0xF2B23C   /* attention, misheard, offline */
-#define V5_GREEN      0x4ED18B   /* idle -- v5's resting colour */
-#define V5_RED        0xF0574A   /* danger */
-#define V5_BLUE       0x4A7BE8   /* waking, waiting */
+/* The STATE colours are not here. They live in `panel_state.c`, and a second
+ * copy of them in this file is precisely the drift this PR set out to remove:
+ * the face read one copy and the chain pips read the other, so changing amber
+ * in one place would have left a CH_DOWN pip on the old value. What remains
+ * below is chrome -- ground, rules, labels -- which no state owns. */
 
 
 /* Panel geometry, MEASURED not assumed (#104, board-revision.md):
@@ -488,7 +488,7 @@ static void build_status_face(lv_obj_t *pg)
     needle_pts[1].x = DIAL_R; needle_pts[1].y = DIAL_R;
     lv_line_set_points(s_dome_needle, needle_pts, 2);
     lv_obj_set_style_line_width(s_dome_needle, 3, 0);
-    lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(V5_CYAN), 0);
+    lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(PANEL_C_CYAN), 0);
     lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
 
     s_kv_val[1] = lv_label_create(pg);
@@ -599,9 +599,9 @@ static bool s_changed;      /* worth looking at: severity moved */
 static uint32_t chain_colour(chain_t c)
 {
     switch (c) {
-    case CH_OK:    return V5_GREEN;
-    case CH_DOWN:  return V5_AMBER;
-    case CH_FAULT: return V5_RED;
+    case CH_OK:    return PANEL_C_GREEN;
+    case CH_DOWN:  return PANEL_C_AMBER;
+    case CH_FAULT: return PANEL_C_RED;
     case CH_UNK:
     default:       return V5_SURFACE;   /* unknown is absence, not a claim */
     }
@@ -679,7 +679,7 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
          * the reading says is the bar count above it. */
         if (filled == 0) filled = 1;
     }
-    /* V5_LABEL, not V5_GREEN. Green is a VERDICT -- "this is healthy" -- and
+    /* V5_LABEL, not PANEL_C_GREEN. Green is a VERDICT -- "this is healthy" -- and
      * the mapping behind this bar is inferred from an unmeasured curve, so it
      * has no business rendering a verdict. A neutral instrument level is what
      * we can actually justify. */

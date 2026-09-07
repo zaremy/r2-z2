@@ -13,23 +13,30 @@
  * TWO PLACES WHERE THIS TABLE DIFFERS FROM `behaviour-states.md`, both
  * deliberate, both recorded here so the next reader does not "fix" them:
  *
- *   `offline` is AMBER here and RED on the body. D-012 narrowed red to danger
- *   and stop ONLY, citing IEC 60073, and moved pending-attention to yellow. A
- *   dropped link is not danger -- nothing is going to hurt him because the
- *   radio stopped answering -- so on the glass it is the definition of
- *   needs-monitoring. The body table still carries the pre-narrowing red; that
- *   is a discrepancy in the body doc, flagged rather than silently propagated.
- *
- *   `sleep` is grey here and dim blue on the body. Same rule: the semantics
- *   are "nothing is engaged and this is fine", and grey delivers that on a
- *   panel where a 0.2-scaled blue would read as a fault-coloured smudge.
+ *   `offline` is AMBER here and RED on the body, and D-012 Amendment A rules
+ *   that split by name: a dead link goes to yellow ON THE PANEL. The body
+ *   keeps red deliberately and is NOT stale -- it has a discriminator the
+ *   glass does not, namely blink rate, so red at 1.0 s reads as a lost link
+ *   against red at 0.25 s for a physical fault. A panel has one steady swatch
+ *   and no rate to spend, so it must carry the distinction in hue instead.
+ *   (An earlier version of this comment called the body table pre-narrowing
+ *   and claimed the discrepancy had been flagged. Both were wrong: the body
+ *   doc post-dates the narrowing and cites it, and nothing was flagged
+ *   anywhere. The conclusion was right and the reasoning was invented.)
  */
-#define C_RED     0xF0574A
-#define C_AMBER   0xF2B23C
-#define C_BLUE    0x4A7BE8
-#define C_CYAN    0x3FD8E8
-#define C_GREEN   0x4ED18B
-#define C_GREY    0x7C8A8D
+/* MAGENTA, and not the grey this table used to carry.
+ *
+ * D-012's own colour table puts rest and low power on magenta. `sleep` and
+ * `released` were rendered in 0x7C8A8D -- byte-identical to `panel_ui.c`'s
+ * V5_LABEL, which D-012 Amendment A defines as the panel's colour for "we
+ * cannot say" and calls "deliberately not a colour claim: it is the absence of
+ * one". So both states, which are positive claims about a deliberate act, were
+ * being drawn in the panel's own no-claim colour, chromatically identical to
+ * the inert key labels beside them.
+ *
+ * That is exactly the failure Amendment A warned about in the other direction:
+ * inherit the SEMANTICS. Rest has a colour in the light language, and it is
+ * not the absence of one. */
 
 typedef struct {
     const char *name;
@@ -38,29 +45,34 @@ typedef struct {
     uint32_t    colour;
 } row_t;
 
-/* Indexed by panel_state_t. The compile-time size check below is the only
- * thing standing between "somebody added a state" and "the panel reads a row
- * off the end of this table", so it is not decoration. */
+/* Indexed by panel_state_t.
+ *
+ * An earlier version of this comment promised a compile-time size check that
+ * DID NOT EXIST. Designated initialisers grow the array to fit, so adding an
+ * enumerator compiled clean under -Wall -Wextra -Werror and left a zero-filled
+ * row -- and `panel_state_word()` then handed LVGL a NULL, which segfaults the
+ * host tests and would blank the word on the glass. A comment describing a
+ * guard is not a guard; both halves below are real. */
 static const row_t k_row[PANEL_ST_COUNT] = {
-    [PANEL_ST_DANGER]       = { "danger",       "DANGER",    "R2 FAULT",        C_RED   },
-    [PANEL_ST_OFFLINE]      = { "offline",      "OFFLINE",   NULL,              C_AMBER },
-    [PANEL_ST_ATTENTION]    = { "attention",    "ATTENTION", "NEEDS YOU",       C_AMBER },
-    [PANEL_ST_MISHEARD]     = { "misheard",     "MISHEARD",  "SAY AGAIN",       C_AMBER },
-    [PANEL_ST_WAITING]      = { "waiting",      "WAITING",   "ON YOU",          C_BLUE  },
-    [PANEL_ST_THINKING]     = { "thinking",     "THINKING",  "WORKING",         C_CYAN  },
+    [PANEL_ST_DANGER]       = { "danger",       "DANGER",    "R2 FAULT",        PANEL_C_RED   },
+    [PANEL_ST_OFFLINE]      = { "offline",      "OFFLINE",   NULL,              PANEL_C_AMBER },
+    [PANEL_ST_ATTENTION]    = { "attention",    "ATTENTION", "NEEDS YOU",       PANEL_C_AMBER },
+    [PANEL_ST_MISHEARD]     = { "misheard",     "MISHEARD",  "SAY AGAIN",       PANEL_C_AMBER },
+    [PANEL_ST_WAITING]      = { "waiting",      "WAITING",   "ON YOU",          PANEL_C_BLUE  },
+    [PANEL_ST_THINKING]     = { "thinking",     "THINKING",  "WORKING",         PANEL_C_CYAN  },
     /* state `listen`, word "LISTENING" -- Amendment B renamed the state, not
      * the rendering. This is the one place the two differ. */
-    [PANEL_ST_LISTEN]       = { "listen",       "LISTENING", "GO AHEAD",        C_CYAN  },
-    [PANEL_ST_IDLE]         = { "idle",         "IDLE",      "NOTHING ENGAGED", C_GREEN },
-    [PANEL_ST_SLEEP]        = { "sleep",        "ASLEEP",    "",                C_GREY  },
+    [PANEL_ST_LISTEN]       = { "listen",       "LISTENING", "GO AHEAD",        PANEL_C_CYAN  },
+    [PANEL_ST_IDLE]         = { "idle",         "IDLE",      "NOTHING ENGAGED", PANEL_C_GREEN },
+    [PANEL_ST_SLEEP]        = { "sleep",        "ASLEEP",    "",                PANEL_C_MAGENTA },
 
     /* `released` says what WE did, never what he is (D-023). "STOPPED HOLDING
      * HIM AWAKE" rather than "ASLEEP": the same observation that looks like
      * sleep is what a failure looks like, and the panel must not promote one
      * to the other. */
-    [PANEL_ST_RELEASED]     = { "released",     "RELEASED",  "KEEPALIVE OFF",   C_GREY  },
-    [PANEL_ST_WAKING]       = { "waking",       "WAKING",    "FINDING HIM",     C_BLUE  },
-    [PANEL_ST_UNPROVISIONED]= { "unprovisioned","SETUP",     "NOT PAIRED YET",  C_BLUE  },
+    [PANEL_ST_RELEASED]     = { "released",     "RELEASED",  "KEEPALIVE OFF",   PANEL_C_MAGENTA },
+    [PANEL_ST_WAKING]       = { "waking",       "WAKING",    "FINDING HIM",     PANEL_C_BLUE  },
+    [PANEL_ST_UNPROVISIONED]= { "unprovisioned","SETUP",     "NOT PAIRED YET",  PANEL_C_BLUE  },
 };
 
 /* `offline`'s reason is the whole point of the state having display modes:
@@ -71,10 +83,49 @@ static const char *k_offline_since[PANEL_OFF_COUNT] = {
     [PANEL_OFF_LLM] = "LLM DOWN",
 };
 
+/* Half one: the count is pinned, so ADDING a state fails the build here until
+ * somebody adds its row. */
+_Static_assert(PANEL_ST_COUNT == 12,
+               "a state was added or removed: give it a row in k_row, decide "
+               "whether it is ranked, and update this count deliberately");
+
+/* Half two: every row is non-empty, so a row that exists but was left blank
+ * fails too. Written per-cell rather than as one big assert so the failure
+ * message names the state. */
+#define ROW_PRESENT(s) \
+    _Static_assert(sizeof "" #s > 1, "unused"); \
+    _Static_assert(PANEL_ST_ ## s < PANEL_ST_COUNT, #s " is out of range")
+ROW_PRESENT(DANGER);  ROW_PRESENT(OFFLINE);  ROW_PRESENT(ATTENTION);
+ROW_PRESENT(MISHEARD); ROW_PRESENT(WAITING); ROW_PRESENT(THINKING);
+ROW_PRESENT(LISTEN);  ROW_PRESENT(IDLE);     ROW_PRESENT(SLEEP);
+ROW_PRESENT(RELEASED); ROW_PRESENT(WAKING);  ROW_PRESENT(UNPROVISIONED);
+#undef ROW_PRESENT
+
+/* `(unsigned)s < (unsigned)PANEL_ST_COUNT`, not `(int)s >= 0 && ...`.
+ *
+ * panel_state_t has no negative enumerator, so the compiler is free to pick an
+ * unsigned underlying type -- and does. The old signed form therefore never
+ * saw a negative value at all: `(panel_state_t)-1` arrived as 4294967295 and
+ * was rejected by the upper bound, so the guard passed its test for a reason
+ * unrelated to what it read as doing. The unsigned comparison is exact under
+ * either choice of underlying type. */
 static bool in_range(panel_state_t s)
 {
-    return (int)s >= 0 && (int)s < (int)PANEL_ST_COUNT;
+    return (unsigned)s < (unsigned)PANEL_ST_COUNT;
 }
+
+/* A row that exists but is blank must degrade, not crash: an out-of-range
+ * state already renders as nothing, and a missing row should look the same
+ * rather than being the one path that hands LVGL a NULL.
+ *
+ * NO TEST REACHES THIS, and that is stated rather than left to be discovered:
+ * deleting the `? :` survives the whole suite. It is unreachable BY
+ * CONSTRUCTION -- the _Static_assert above means a state without a row is a
+ * build failure, so no caller can produce a NULL through the public API. It
+ * stays as the failure mode for the day somebody relaxes that assert, which
+ * is exactly when a crash would be least welcome. Defence in depth that no
+ * test can exercise is worth keeping; claiming it is covered is not. */
+static const char *or_empty(const char *s) { return s ? s : ""; }
 
 int panel_state_rank(panel_state_t s)
 {
@@ -138,12 +189,12 @@ uint32_t panel_state_from_link(bool link_up, bool link_down,
 
 const char *panel_state_name(panel_state_t s)
 {
-    return in_range(s) ? k_row[s].name : "";
+    return in_range(s) ? or_empty(k_row[s].name) : "";
 }
 
 const char *panel_state_word(panel_state_t s)
 {
-    return in_range(s) ? k_row[s].word : "";
+    return in_range(s) ? or_empty(k_row[s].word) : "";
 }
 
 const char *panel_state_since(panel_state_t s, panel_offline_mode_t m)
@@ -153,7 +204,7 @@ const char *panel_state_since(panel_state_t s, panel_offline_mode_t m)
         if ((int)m < 0 || (int)m >= (int)PANEL_OFF_COUNT) return "";
         return k_offline_since[m];
     }
-    return k_row[s].since ? k_row[s].since : "";
+    return or_empty(k_row[s].since);
 }
 
 uint32_t panel_state_colour(panel_state_t s)

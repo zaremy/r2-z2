@@ -1,6 +1,6 @@
 /* WHAT THE PANEL CAN SAY, and which thing wins when several are true.
  *
- * #101 child 5, AC2 / AC2b / AC2c. Pure logic, no LVGL: the rank is the part
+ * #101 child 5, AC2 and AC2b. Pure logic, no LVGL: the rank is the part
  * worth testing and a rank you can only exercise by drawing it is a rank
  * nobody tests. `panel_ui.c` renders what this decides.
  *
@@ -31,6 +31,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* THE PANEL'S SEMANTIC COLOURS, in ONE place.
+ *
+ * Exported because `panel_ui.c` needs them for the fault chain: a CH_DOWN pip
+ * and an `offline` word must be the same amber, and they were previously two
+ * hexes in two files that happened to match. The names are the MEANINGS in
+ * D-012's light language, not shades -- what luminance and hue deliver each
+ * meaning is the panel's business (D-012 Amendment A), which is why the values
+ * differ from the body's and the names do not. */
+#define PANEL_C_RED     0xF0574A   /* danger and stop, ONLY (IEC 60073) */
+#define PANEL_C_AMBER   0xF2B23C   /* needs monitoring */
+#define PANEL_C_BLUE    0x4A7BE8   /* neutral, on, waiting */
+#define PANEL_C_CYAN    0x3FD8E8   /* engaged */
+#define PANEL_C_GREEN   0x4ED18B   /* healthy, nothing engaged */
+#define PANEL_C_MAGENTA 0xC77DD1   /* rest, low power */
 
 /* THE NINE RANKED STATES, most severe first, then the three unranked.
  *
@@ -72,19 +87,19 @@ typedef enum {
     PANEL_OFF_COUNT,
 } panel_offline_mode_t;
 
-/* The BACKPACK DISPLAY axis (AC2c), which is not the R2 axis above.
+/* AC2c -- the backpack display axis (`resting` / `UI asleep` / `off`) -- is
+ * NOT in this file, and the enum that used to sit here has been deleted.
  *
- * D-023 named two axes and observed that the reason "power everything except
- * the backpack down" felt like one switch is that only one of them had ever
- * been named. Keeping them in one enum would rebuild that confusion in code:
- * `released` is a fact about R2, `resting` is a fact about this screen, and
- * they are independently true. */
-typedef enum {
-    PANEL_DISP_RESTING = 0,         /* lit, dimmed by the burn-in timer */
-    PANEL_DISP_UI_ASLEEP,           /* screen dark, board awake */
-    PANEL_DISP_OFF,                 /* board down */
-    PANEL_DISP_COUNT,
-} panel_display_state_t;
+ * It was three lines of type declaration with no name, word, colour, accessor,
+ * caller or test, labelled with an AC number. That is a criterion marked
+ * covered by a stub, which is worse than an uncovered criterion: the next
+ * reader has to discover the gap instead of being told about it.
+ *
+ * D-023's point stands and is why the axis is not folded in here when it
+ * arrives: `released` is a fact about R2 and `resting` is a fact about this
+ * screen, and they are independently true. The machinery for it already
+ * half-exists as the burn-in dimmer in `panel_ui.c`, which is where that work
+ * belongs. */
 
 /* Severity rank: 0 is most severe, and -1 means "outside the ordering".
  * -1 is not "least severe" -- an unranked state must never lose or win a
