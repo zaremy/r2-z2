@@ -31,6 +31,7 @@
 #include "nvs_flash.h"
 
 #include "panel_shot.h"
+#include "panel_touch.h"
 #include "panel_ui.h"
 #include "r2_gate.h"
 #include "r2_link.h"
@@ -120,6 +121,7 @@ static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent
 static void ui_task(void *arg)
 {
     (void)arg;
+    int ticks = 0;
     while (1) {
         if (bsp_display_lock(100)) {
             const bool changed = panel_ui_update(&s_tm, now_ms());
@@ -178,6 +180,7 @@ void app_main(void)
 
     if (bsp_display_lock(2000)) {
         panel_ui_create();
+        panel_touch_init();
         bsp_display_unlock();
     }
     ESP_LOGI(TAG, "STATUS frame drawn; ceiling is '%s'",
