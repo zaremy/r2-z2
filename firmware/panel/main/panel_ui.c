@@ -41,11 +41,8 @@
 #define HEADER_H       64
 #define ROW_H          87
 #define ROW_PAD        14
-#define N_ROWS          4
 
-enum { ROW_LINK = 0, ROW_R2, ROW_STORAGE, ROW_BRAIN };
 
-static const char *k_row_label[N_ROWS] = { "LINK", "R2", "STORAGE", "BRAIN" };
 
 static lv_obj_t *s_screen;
 static lv_obj_t *s_root;
@@ -97,7 +94,19 @@ static const face_t k_face_up = {
 static const face_t k_face_offline_r2 = {
     /* v5's offline_r2, including its [FIX]: with the link down R2's battery is
      * not knowable, "exactly like the dome heading beside it". Our telemetry
-     * layer already enforces that; this is the presentation catching up. */
+     * layer already enforces that; this is the presentation catching up.
+     *
+     * AMBER, NOT RED, and this is where D-012 Amendment A's one concrete code
+     * effect now lives. That ruling demoted a dead link from red to yellow: a
+     * dropped link is not danger -- nothing is going to hurt him because the
+     * radio stopped answering -- and D-012 reserves red for danger and stop
+     * only, citing IEC 60073. The panel had used red because the row FELT bad,
+     * which is exactly the reasoning D-012 rejected.
+     *
+     * The reasoning is repeated here because its previous home was the
+     * four-row LINK case, which the face replaced -- and a future reader
+     * restoring a red offline state would otherwise find no trace of why it
+     * must not be. v5 agrees independently: its offline colour is #F2B23C. */
     "OFFLINE", "R2 LINK DOWN", V5_AMBER, { CH_OK, CH_DOWN, CH_OK, CH_OK }, false, false
 };
 static const face_t k_face_waking = {
@@ -138,39 +147,6 @@ static const face_t *s_face_now;
  * RED IS DANGER AND STOP, ONLY. D-012 narrowed it deliberately, citing IEC
  * 60073, and moved pending-attention to yellow. That constrains this table
  * more than it looks: see the LINK row below. */
-static lv_color_t sev_colour(panel_sev_t s)
-{
-    switch (s) {
-    case PANEL_OK:      return lv_color_hex(V5_GREEN);
-    case PANEL_WARN:    return lv_color_hex(V5_AMBER);
-    /* NOTHING CURRENTLY RENDERS PANEL_BAD, and that is the point rather than
-     * an oversight. Red is danger and stop only (D-012), and no state the
-     * panel can reach today qualifies: a dead link is needs-monitoring, an
-     * unwired row is unknown. Kept because the ladder needs a rung above
-     * warn the day something genuinely alarming exists -- a fallen droid, a
-     * thermal fault. Declared here so its absence reads as deliberate. */
-    case PANEL_BAD:     return lv_color_hex(V5_RED);
-    case PANEL_UNKNOWN:
-    default:
-        /* Grey is NOT a colour claim -- it is the absence of one. D-012 has
-         * six colours for six meanings and none of them is "we cannot say".
-         * Adding a seventh would be a new decision about the BODY made for a
-         * screen's convenience, which D-012 Amendment A explicitly declines. */
-        return lv_color_hex(V5_DIM);
-    }
-}
-
-const char *panel_sev_name(panel_sev_t s)
-{
-    switch (s) {
-    case PANEL_OK:      return "ok";
-    case PANEL_WARN:    return "warn";
-    case PANEL_BAD:     return "bad";
-    case PANEL_UNKNOWN: return "unknown";
-    default:            return "?";
-    }
-}
-
 /* The page dots. The vault's description is "swipe or tap the dots", so they
  * are an affordance and not decoration -- but they are drawn here and made
  * tappable in child 4 proper. Drawn small and low-contrast: this is an
@@ -497,7 +473,6 @@ static void set_face(const face_t *f, const r2_telemetry_t *t, uint32_t now_ms)
 
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
-    char buf[48];
     s_changed = false;
 
     switch (t->link) {
