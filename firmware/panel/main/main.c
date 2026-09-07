@@ -128,13 +128,30 @@ static void ui_task(void *arg)
             panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
             bsp_display_unlock();
         }
+        /* P1 progress, once a minute (#101). Without this the panel records
+         * touch extremes and never says so, which makes the measurement
+         * INVISIBLE -- and an operator who has done the corners has no way to
+         * know whether it worked. It also distinguishes "nobody touched it"
+         * from "touch is not wired", which look identical from here.
+         *
+         * This block was lost once already: the edit that added it targeted an
+         * anchor a previous edit had changed, the replace silently did nothing,
+         * and only `int ticks = 0;` survived -- set, never read, and not loud
+         * enough to fail the build. */
+        if (++ticks % 240 == 0) {
+            panel_touch_extremes_t ex;
+            panel_touch_extremes(&ex);
+            if (ex.points == 0) {
+                ESP_LOGI(TAG, "P1: no touch points yet");
+            } else {
+                ESP_LOGI(TAG, "P1: %u points  x %d..%d  y %d..%d",
+                         (unsigned)ex.points, ex.min_x, ex.max_x,
+                         ex.min_y, ex.max_y);
+                ESP_LOGI(TAG, "    edge gaps: L%d R%d T%d B%d  (0 = bezel reached)",
+                         ex.min_x, 367 - ex.max_x, ex.min_y, 447 - ex.max_y);
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(250));
-
-        /* A screenshot every 15 s, so a visual check costs a serial capture
-         * instead of the operator walking to the droid with a phone. */
-        /* The snapshot itself needs the lock; the emit takes seconds and must
-         * NOT hold it, or the UI stalls for the whole dump. */
-
     }
 }
 
