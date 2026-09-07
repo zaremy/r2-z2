@@ -1,3 +1,17 @@
+#include "sdkconfig.h"
+
+/* r2_link is NimBLE glue, and it lives in the shared platform/ component
+ * directory that every firmware here adds via EXTRA_COMPONENT_DIRS --
+ * including display-only diagnostics with no radio. Compiling unconditionally
+ * broke touch_check outright ("fatal error: host/ble_gap.h") for an app that
+ * never asked for BLE.
+ *
+ * So the whole translation unit is empty without NimBLE. An app that actually
+ * CALLS r2_link then fails at link time naming the missing symbols, which
+ * points at the missing config, rather than failing to compile a component it
+ * does not use. */
+#if CONFIG_BT_NIMBLE_ENABLED
+
 /* NimBLE glue for the R2 link. See r2_link.h for why this slice exists.
  *
  * Adapted from firmware/coex_check/main/r2_central.c, which held R2 for three
@@ -281,3 +295,10 @@ void r2_link_stats(uint32_t *sent, uint32_t *dropped)
     if (sent)    *sent    = s_sent;
     if (dropped) *dropped = s_dropped;
 }
+
+#else  /* !CONFIG_BT_NIMBLE_ENABLED */
+
+/* ISO C forbids an empty translation unit. */
+typedef int r2_link_needs_nimble_t;
+
+#endif

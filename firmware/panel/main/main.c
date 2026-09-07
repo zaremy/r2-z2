@@ -110,6 +110,9 @@ static void link_task(void *arg)
     }
 }
 
+/* Injected into panel_ui so the UI file stays free of the BSP. */
+static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent); }
+
 /* Draws. Never touches the radio. The two never share anything but the
  * telemetry struct, which is written on the NimBLE host task and read here --
  * every field is word-sized or smaller and a torn read shows one stale value
@@ -119,7 +122,8 @@ static void ui_task(void *arg)
     (void)arg;
     while (1) {
         if (bsp_display_lock(100)) {
-            panel_ui_update(&s_tm, now_ms());
+            const bool changed = panel_ui_update(&s_tm, now_ms());
+            panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
             bsp_display_unlock();
         }
         vTaskDelay(pdMS_TO_TICKS(250));

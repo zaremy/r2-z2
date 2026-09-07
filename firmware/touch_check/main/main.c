@@ -136,6 +136,21 @@ static void heartbeat(void *arg)
             printf("[alive %lu] stage=%s  points=%d  range x %d..%d  y %d..%d\n",
                    (unsigned long)n, g_stage, g_points,
                    g_minx, g_maxx, g_miny, g_maxy);
+            /* P1 (#101): the extremes are the whole question. The original run
+             * reported x 1..362 on a 368-wide panel and its own note says x
+             * NEVER REACHED EITHER ENDPOINT, so a 1:1 map is unverified at the
+             * bezel -- which is exactly what any edge-adjacent hit target
+             * depends on.
+             *
+             * Printing the remaining GAP to each edge, rather than only the
+             * range, is what makes this drivable: an operator pressing a
+             * corner has no way to tell a corner that does not register from
+             * one they simply missed, and neither do I from a raw range that
+             * has not moved. */
+            printf("            edge gaps: left %d  right %d  top %d  bottom %d"
+                   "   (0 = the bezel is reachable)\n",
+                   g_minx, (PANEL_W - 1) - g_maxx,
+                   g_miny, (PANEL_H - 1) - g_maxy);
         } else {
             printf("[alive %lu] stage=%s  chip=0x%02X (%s)  no touch yet\n",
                    (unsigned long)n, g_stage, g_chipid & 0xFF, chip_name(g_chipid));

@@ -1,0 +1,61 @@
+Burn-in mitigation — #101 AC9, D-021
+=====================================
+2026-09-06. Measured on the real panel, by the panel.
+
+AC9 requires the evidence to record WHAT MOVES, BY HOW MUCH, AND ON WHAT
+PERIOD, and says explicitly that "it is dim" is not mitigation on its own.
+
+WHAT MOVES   the entire frame, as one unit. Every element lives in a root
+             container that is repositioned; drifting elements independently
+             would change the layout as it moved, which looks broken rather
+             than displaced.
+
+BY HOW MUCH  +/-4 px in x and y, walking a 4-position square:
+             (0,0) -> (4,0) -> (4,4) -> (0,4). So every glyph edge sees
+             background within one full cycle. 4 px because the rows are 87 px
+             and the type sits well inside them: it never clips, and it is
+             below the threshold at which a glanced-at instrument reads as
+             moving.
+
+ON WHAT      one step per 60 s, so a 240 s cycle. The step index is derived
+PERIOD       from the clock rather than counted, so it cannot accumulate error
+             and is correct after any missed tick.
+
+DIMMING      40% after 120 s with no state change, back to 80% the moment
+             anything changes -- so something worth looking at is never dimmed
+             the instant it appears. The prototype used 0.42 for sleep chrome.
+
+MEASURED, not asserted
+----------------------
+Two frames captured BY THE BOARD, 60 s apart, at drift steps 0 and 1:
+
+  burnin-drift-step0-2026-09-06.png   capture #1, t+15 s
+  burnin-drift-step1-2026-09-06.png   capture #2, t+75 s
+
+Aligning one onto the other over a 13x13 offset search:
+
+  identical at zero offset?              NO -- the frame moved
+  mismatching sampled pixels at (0,0):   1333
+  best alignment:  B == A shifted by dx=4 dy=0, with ZERO mismatches
+
+Zero mismatches at (4,0) is the part that matters: the content is not merely
+different, it is IDENTICAL AND PURELY TRANSLATED by exactly the designed step.
+
+STILL UNKNOWN
+-------------
+This panel's actual luminance-decay characteristics. The numbers above are a
+mitigation designed against the risk, not one calibrated against it -- 4 px and
+40% are judgements, not measurements. What is measured is that the mitigation
+does what it says.
+
+Also not covered: a full idle period. The proof above spans 60 s, which shows
+the mechanism works; it does not show behaviour over the hours D-021 actually
+cares about.
+
+WHY THIS IS HERE AT ALL
+-----------------------
+Child 3 shipped in #134 with no mitigation whatever -- a static frame on an
+always-on OLED. The epic says mitigation must be in the render "from child 3
+onward, not retrofitted after 9-12 days of UI work", because a static frame
+shipped for weeks is not reversible by a later patch. This was caught by
+reading child 4's dependencies, not by anything failing.
