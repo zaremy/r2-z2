@@ -1296,6 +1296,79 @@ conditional, and right about which way to hedge. The failure it caught was an
 UNKNOWN graduating to a premise; the fix was not to guess better but to file
 #93 so the condition had somewhere to be resolved. It took one register read.
 
+### Amendment B — 2026-09-06: the body table is normative; the panel renders views of it
+
+**Status:** accepted · **Operator ruling** · resolves prerequisite **P3** of #101,
+which gates that epic's child 5 wholesale.
+
+#### The problem
+
+Two normative documents had drifted, and #101 could not be built against the
+disagreement:
+
+| Panel spec / #101 | `behaviour-states.md:49` |
+|---|---|
+| `listening` | **`listen`** |
+| `offline_net`, `offline_r2`, `offline_llm` | a single **`offline`** |
+| — | **`wake`**, omitted by the panel list entirely |
+
+Meanwhile the severity rank above is a **closed nine-state set with one
+`offline`**, and D-023 added `released`, `waking` and `unprovisioned` outside it
+by design. So "all states render per the severity rank" was unimplementable as
+written: the rank does not cover the states the panel names.
+
+#### The ruling
+
+**`docs/behaviour-states.md` is the single source of truth for what states
+exist. The panel renders VIEWS of those states and may not invent one.**
+
+It follows that:
+
+1. **The three `offline_*` are display modes of one canonical `offline`.** Not
+   states. The droid is offline; the panel says *which thing* is unreachable.
+   This is exactly the split `CLAUDE.md` already draws — the LED is glanceable
+   and says *that* something is up, the screen is the detail view and says
+   *what* — so "no route to R2" versus "no Wi-Fi" versus "no reasoning service"
+   belongs on the screen precisely because it is detail. Three states would
+   have put that distinction in the body, where nothing can render it.
+2. **`wake` stays a behaviour state and is not a panel state.** The collision
+   with D-023's `waking` is most of why this looked contradictory: `wake` is
+   what he does, `waking` is what the panel shows while the link comes up. Two
+   different things that were one word apart.
+3. **`listen` is the name.** `listening` was the panel spec's own coinage.
+4. **The severity rank is unchanged — still nine states, still one `offline`.**
+   That matters: the rank stays a constant over a closed set, which is what
+   keeps this on the enlargement side of the line drawn above. Ranking eleven
+   states, three of them views, would have made it a computation over a
+   membership that changes with the UI, and that is the *face* this ADR
+   rejected.
+
+#### Why this direction
+
+The body model describes what the droid IS; the panel is a view of it. A view
+that invents states is how the two drifted in the first place, and reversing
+the dependency — expanding the rank to match a screen — would make the
+character model answer to a rendering. The cheaper fix is also the one that
+stops it recurring.
+
+The rejected alternative worth naming: keeping both normative with an explicit
+mapping table. It is more honest about the two layers genuinely differing, but
+it is a third document to keep in sync, and this repo already has the scar —
+D-012 and `r2-capabilities.md` were each individually honest and jointly
+misleading, which cost a design built on an LED fade the fixtures cannot render.
+
+#### Consequences
+
+- #101's child 5 is unblocked and its AC3 can stop being conditional. It must
+  render the states `behaviour-states.md` defines, with `offline` free to
+  present in three ways.
+- `behaviour-states.md` gains a short section recording that the panel may
+  split a state into several views, so the next reader does not re-derive this.
+- **This is a documentation ruling with no code behind it yet.** Nothing
+  currently renders any of these states on the panel — child 5 is unstarted.
+  The reconciliation is real; the implementation is not, and the two should not
+  be confused when this is cited.
+
 ---
 
 ## D-018 — He always answers. What changes is how, never whether

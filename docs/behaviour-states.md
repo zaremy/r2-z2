@@ -135,6 +135,31 @@ lost link (1.0 s). Only one of those means go and pick him up.
 > `research/board-capabilities.md` records none — so it is currently
 > unsignalled, and that is a gap rather than a decision.
 
+## This table is normative; the panel renders views of it
+
+**Ruled 2026-09-06 (D-017 Amendment B, resolving #101's prerequisite P3).**
+This file defines what states exist. The backpack panel is a *view* of them and
+may not invent one.
+
+The concrete case that forced the ruling: the panel spec listed
+`offline_net`, `offline_r2` and `offline_llm` where this table has a single
+**`offline`**. Those three are **display modes, not states**. The droid is
+offline; the panel says which thing is unreachable. That is the split
+`CLAUDE.md` already draws — the LED is glanceable and says *that* something is
+up, the screen is the detail view and says *what* — so the distinction belongs
+on the screen precisely because it is detail. As three states it would live in
+the body, where nothing can render it.
+
+Two naming corrections fell out of the same ruling:
+
+- **`wake` is a state here; `waking` is a panel view** (D-023). One word apart,
+  and most of why the two documents looked contradictory.
+- **`listen`, not `listening`.** The latter was the panel spec's own coinage.
+
+So a panel may split one row of this table into several screens, and must not
+add a row. If a state genuinely needs to exist that this file does not have,
+it is added *here* first.
+
 ## On waking: assert, never inherit
 
 **MEASURED 2026-08-18.** A colour we set survives a link drop and a fresh
