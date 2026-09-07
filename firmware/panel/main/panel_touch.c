@@ -279,6 +279,18 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
     if (out) *out = s_ex;
 }
 
+/* NOTHING CALLS THIS YET.
+ *
+ * Said in those words because CLAUDE.md requires it: a PR that adds no call
+ * site must declare the inertness, or it gets discovered several PRs later --
+ * which is how four LED PRs shipped dead and how #97 sat broken with 588 tests
+ * passing.
+ *
+ * The swipe threshold is AC5 and is implemented and correct; there is simply
+ * nowhere to swipe TO. The three lateral pages are STATUS, SERVICE and
+ * NETWORK (vault Prototypes/README.md:18), and only STATUS is built. Wiring
+ * this to page navigation is the rest of child 4, and inventing the other two
+ * pages' contents is what D-017 Amendment B just ruled against. */
 panel_swipe_t panel_touch_take_swipe(void)
 {
     const panel_swipe_t s = s_swipe;
