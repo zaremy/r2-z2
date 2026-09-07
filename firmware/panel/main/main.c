@@ -93,6 +93,16 @@ static void link_task(void *arg)
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_battery(next_seq(), r2_link_send, NULL);
         }
+        /* The dome, every 30 s. The face has a DOME field and had no source
+         * for it, so it read "---" on a healthy link -- which is the honest
+         * rendering of a value nobody asked for, and a field nobody asks for
+         * is a field that should not be on the screen. Asking is the cheaper
+         * fix. READ ONLY: this asks where he is looking, it does not turn him,
+         * and the gate ceiling stays at 'read'. */
+        if (tick % 10 == 3) {
+            r2_telemetry_note_request(&s_tm);
+            r2_ops_request_head(next_seq(), r2_link_send, NULL);
+        }
         /* The ratio, logged as well as shown. The first run on glass read
          * "35/55 answered" where link_check -- the same stack with no display
          * -- ran 138/138. Either the display is costing us responses or the
