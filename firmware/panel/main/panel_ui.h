@@ -20,6 +20,9 @@
 #ifndef PANEL_UI_H
 #define PANEL_UI_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "r2_telemetry.h"
 
 #ifdef __cplusplus
@@ -39,8 +42,25 @@ typedef enum {
 void panel_ui_create(void);
 
 /* Redraw from telemetry. Safe to call often; only touches what changed.
- * Must hold the LVGL lock. */
-void panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms);
+ * Must hold the LVGL lock. Returns true if anything on the frame actually
+ * changed -- which is what resets the burn-in dim timer, so that something
+ * worth looking at is never dimmed the instant it appears. */
+bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms);
+
+/* Burn-in mitigation (#101 AC9). Call every UI tick.
+ *
+ * `state_changed` resets the dim timer -- something the operator would want to
+ * see must not be dimmed the instant it appears. The brightness setter is
+ * injected rather than called directly so this file stays free of the BSP and
+ * the behaviour is inspectable without a panel. */
+typedef void (*panel_brightness_fn)(int percent);
+void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
+                      panel_brightness_fn set_brightness);
+
+/* For evidence and tests: which of the 4 drift positions is current, and
+ * whether the panel is currently dimmed. */
+int  panel_ui_drift_step(void);
+bool panel_ui_is_dimmed(void);
 
 const char *panel_sev_name(panel_sev_t s);
 
