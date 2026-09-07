@@ -361,7 +361,6 @@ void panel_ui_create(void)
  * So: a SEVERITY change is something worth looking at and resets the timer. A
  * value's last digit wobbling is not, and merely repaints. */
 static bool s_changed;      /* worth looking at: severity moved */
-static bool s_repainted;    /* a value differs; not a reason to wake the panel */
 
 static void set_row(int i, panel_sev_t sev, const char *text)
 {
@@ -370,17 +369,21 @@ static void set_row(int i, panel_sev_t sev, const char *text)
         s_changed = true;
         lv_obj_set_style_bg_color(s_row_dot[i], sev_colour(sev), 0);
     }
+    /* A value differing repaints and NOTHING ELSE -- deliberately no flag.
+     * An earlier version recorded it in `s_repainted`, which nothing ever
+     * read: write-only state, the same shape as the `int ticks = 0;` that
+     * survived a failed edit in this file and left the P1 readout missing. If
+     * a caller ever needs to distinguish a redraw from a state change, add the
+     * accessor then. */
     const char *cur = lv_label_get_text(s_row_value[i]);
-    if (cur == NULL || strcmp(cur, text) != 0) {
-        s_repainted = true;
+    if (cur == NULL || strcmp(cur, text) != 0)
         lv_label_set_text(s_row_value[i], text);
-    }
 }
 
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
     char buf[48];
-    s_changed = s_repainted = false;
+    s_changed = false;
 
     /* ---- LINK ---------------------------------------------------------- */
     switch (t->link) {
@@ -457,10 +460,8 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
     else
         snprintf(buf, sizeof buf, "%s", r2_telemetry_link_name(t->link));
     const char *cur = lv_label_get_text(s_header_val);
-    if (cur == NULL || strcmp(cur, buf) != 0) {
-        s_repainted = true;
+    if (cur == NULL || strcmp(cur, buf) != 0)
         lv_label_set_text(s_header_val, buf);
-    }
     /* Only the severity kind. The dim timer must not be resettable by noise,
      * or it never expires and the panel never rests. */
     return s_changed;
