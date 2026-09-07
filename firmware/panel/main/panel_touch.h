@@ -30,6 +30,15 @@ typedef enum { PANEL_SWIPE_NONE = 0, PANEL_SWIPE_LEFT, PANEL_SWIPE_RIGHT } panel
 
 void panel_touch_init(void);
 
+/* Read the controller. Call every UI tick, and NOT under the display lock:
+ * it does a blocking I2C transaction, and holding the LVGL lock across that
+ * lets a wedged controller stall every redraw. Touches no LVGL state. */
+void panel_touch_poll(void);
+
+/* Draw the touch feedback. Must hold the display lock. Separate from poll()
+ * precisely because the two need different locks. */
+void panel_touch_render(void);
+
 /* Every observed press extreme, for P1. `points` is how many presses have been
  * seen at all -- zero means the operator has not touched it, which must not be
  * confused with a touch that reported (0,0). */
