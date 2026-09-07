@@ -1,0 +1,36 @@
+P1 — corner-to-corner touch calibration: PARTIAL
+================================================
+2026-09-07. Operator touching the panel; coordinates read by direct CST816
+register access (the path #104 proved), after two LVGL paths that never saw a
+finger.
+
+TOUCH WORKS. That was in doubt for three of the operator's trips and it was my
+wiring, not the hardware, every time.
+
+Best extremes observed, across two runs (a reflash resets the accumulator, so
+these are not one continuous session):
+
+  run A   12 points   x 130..314   y  88..322    gaps L130 R53  T88  B125
+  run B    3 points   x 128..242   y 279..438    gaps L128 R125 T279 B9
+
+WHAT THIS DOES AND DOES NOT ESTABLISH
+
+  Establishes: the controller reports varying coordinates across a wide span of
+  the panel, so the mapping tracks the finger. Combined with #104's 174 points
+  this is no longer in question.
+
+  Does NOT establish the EDGES, which is the whole point of P1. The best
+  approach to any bezel is BOTTOM at 9 px (y=438 of 447). Left never got closer
+  than 128, right than 53, top than 88. Those are middle-of-panel touches.
+
+  So the open question stands exactly as #104 left it: a 1:1 map onto 0..367 is
+  "reasonable and unverified" at the edges, and every edge-adjacent hit target
+  in child 4 still depends on an unmeasured assumption.
+
+WHAT IS STILL NEEDED: the four corners specifically, pressed hard INTO the
+corner against the bezel, and a drag along each edge. A middle-of-panel touch
+cannot answer it however many points it produces.
+
+NOTE FOR THE NEXT ATTEMPT: the accumulator does not survive a reflash, and I
+reflashed repeatedly while the operator was touching -- losing run A's data and
+resetting to zero twice. Do not flash while a calibration is in progress.

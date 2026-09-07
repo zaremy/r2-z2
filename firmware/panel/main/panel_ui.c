@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_log.h"
 #include "lvgl.h"
 
 /* Panel geometry, MEASURED not assumed (#104, board-revision.md):
@@ -349,7 +350,18 @@ void panel_ui_create(void)
     panel_ui_show_page(PAGE_STATUS);
 }
 
-static bool s_changed;
+/* TWO KINDS OF CHANGE, and conflating them killed the dimmer.
+ *
+ * `s_changed` used to mean "any label text differs", and it fed the burn-in
+ * dim timer. R2's battery alternates between 4.42 V and 4.43 V -- both values
+ * appear throughout the A1 logs -- so a reading every 15 s reset a 120 s timer
+ * forever. AC9'S DIMMING HALF HAS NEVER ONCE EXECUTED, on any build. The drift
+ * worked and was measured; the dimming looked alive and was dead.
+ *
+ * So: a SEVERITY change is something worth looking at and resets the timer. A
+ * value's last digit wobbling is not, and merely repaints. */
+static bool s_changed;      /* worth looking at: severity moved */
+static bool s_repainted;    /* a value differs; not a reason to wake the panel */
 
 static void set_row(int i, panel_sev_t sev, const char *text)
 {
@@ -360,7 +372,7 @@ static void set_row(int i, panel_sev_t sev, const char *text)
     }
     const char *cur = lv_label_get_text(s_row_value[i]);
     if (cur == NULL || strcmp(cur, text) != 0) {
-        s_changed = true;
+        s_repainted = true;
         lv_label_set_text(s_row_value[i], text);
     }
 }
@@ -368,7 +380,7 @@ static void set_row(int i, panel_sev_t sev, const char *text)
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
     char buf[48];
-    s_changed = false;
+    s_changed = s_repainted = false;
 
     /* ---- LINK ---------------------------------------------------------- */
     switch (t->link) {
@@ -446,9 +458,11 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
         snprintf(buf, sizeof buf, "%s", r2_telemetry_link_name(t->link));
     const char *cur = lv_label_get_text(s_header_val);
     if (cur == NULL || strcmp(cur, buf) != 0) {
-        s_changed = true;
+        s_repainted = true;
         lv_label_set_text(s_header_val, buf);
     }
+    /* Only the severity kind. The dim timer must not be resettable by noise,
+     * or it never expires and the panel never rests. */
     return s_changed;
 }
 
@@ -486,8 +500,25 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 #define BURN_DRIFT_PX      4
 #define BURN_DRIFT_MS  60000u    /* per step; 4 steps = a 240 s cycle */
 #define BURN_DIM_AFTER_MS 120000u
-#define BURN_DIM_PERCENT   40
-#define BURN_FULL_PERCENT  80
+/* 65, not 40. The operator reported the panel as "off" at 40%.
+ *
+ * 40 is a real 40% (the BSP maps percent to 0-255, so 102), which would be
+ * unremarkable on a bright UI. This one is near-black BY DESIGN -- 0x000000
+ * ground, 0x101014 rows, grey labels -- so dimming it 60% leaves a dark screen
+ * with dim grey text, and on an AMOLED whose blacks are true black that reads
+ * as POWERED OFF rather than as resting.
+ *
+ * The number came from D-021's prototype "dims sleep chrome to 0.42", and that
+ * was the mistake: sleep chrome is a different surface from a resting
+ * instrument someone is meant to be able to READ at a glance. A dim value
+ * borrowed from one does not transfer to the other.
+ *
+ * The burn-in argument survives the change. Drift is the mitigation that does
+ * the work -- every glyph edge sees background within 240 s -- and this design
+ * lights very few pixels to begin with. Dimming is a secondary measure and is
+ * not worth making the panel unreadable for. */
+#define BURN_DIM_PERCENT   65
+#define BURN_FULL_PERCENT  90
 
 static uint32_t s_last_change_ms;
 static int      s_drift_step = -1;
@@ -515,8 +546,19 @@ void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
     if (want_dim != s_dimmed) {
         s_dimmed = want_dim;
         set_brightness(want_dim ? BURN_DIM_PERCENT : BURN_FULL_PERCENT);
+        /* Logged, because "the screen is off" and "the screen is dim" are the
+         * same observation from arm's length and the log is the only place
+         * they differ. */
+        ESP_LOGI("panel", "brightness -> %d%% (%s)",
+                 want_dim ? BURN_DIM_PERCENT : BURN_FULL_PERCENT,
+                 want_dim ? "resting" : "active");
     }
 }
 
 int panel_ui_drift_step(void) { return s_drift_step; }
+
+/* The active brightness, so boot and the burn-in module cannot disagree.
+ * main.c used to hardcode 80 while this file's active level was 90 -- two
+ * numbers for one concept, and the kind that drift apart silently. */
+int panel_ui_full_brightness(void) { return BURN_FULL_PERCENT; }
 bool panel_ui_is_dimmed(void) { return s_dimmed; }

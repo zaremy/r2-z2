@@ -60,6 +60,10 @@ void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
 /* For evidence and tests: which of the 4 drift positions is current, and
  * whether the panel is currently dimmed. */
 int  panel_ui_drift_step(void);
+
+/* The active (undimmed) brightness percent, so nothing hardcodes a second
+ * copy of it. */
+int  panel_ui_full_brightness(void);
 bool panel_ui_is_dimmed(void);
 
 /* The three lateral pages (vault Prototypes/README.md:18). */

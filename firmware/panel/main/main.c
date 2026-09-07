@@ -353,7 +353,7 @@ void app_main(void)
      * REFLASH, so a previous app's low slider leaves a healthy app looking
      * like dead hardware. The display's version of "assert the status on
      * connect, never inherit it". */
-    ESP_ERROR_CHECK(bsp_display_brightness_set(80));
+    ESP_ERROR_CHECK(bsp_display_brightness_set(panel_ui_full_brightness()));
 
     if (bsp_display_lock(2000)) {
         panel_ui_create();
