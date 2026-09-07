@@ -83,23 +83,23 @@ static const char *k_offline_since[PANEL_OFF_COUNT] = {
     [PANEL_OFF_LLM] = "LLM DOWN",
 };
 
-/* Half one: the count is pinned, so ADDING a state fails the build here until
- * somebody adds its row. */
+/* The count is pinned, so ADDING a state fails the build here until somebody
+ * adds its row and decides whether it is ranked.
+ *
+ * That is ALL a static assert can do for this table, and the previous version
+ * of this block pretended otherwise. It carried a `ROW_PRESENT` macro under a
+ * comment claiming every row was checked non-empty; both of its assertions
+ * (`sizeof "" #s > 1`, `PANEL_ST_##s < PANEL_ST_COUNT`) are true for any
+ * non-empty macro argument and neither reads `k_row` at all. Blanking a row to
+ * `{ 0 }` compiled clean. It was a false guard shipped in the commit written
+ * to remove a false guard, which is the whole reason it is described here
+ * instead of quietly deleted.
+ *
+ * A blank row is caught at test time instead, by `test_every_state_renders`,
+ * and survived at runtime by `or_empty()` below. */
 _Static_assert(PANEL_ST_COUNT == 12,
                "a state was added or removed: give it a row in k_row, decide "
                "whether it is ranked, and update this count deliberately");
-
-/* Half two: every row is non-empty, so a row that exists but was left blank
- * fails too. Written per-cell rather than as one big assert so the failure
- * message names the state. */
-#define ROW_PRESENT(s) \
-    _Static_assert(sizeof "" #s > 1, "unused"); \
-    _Static_assert(PANEL_ST_ ## s < PANEL_ST_COUNT, #s " is out of range")
-ROW_PRESENT(DANGER);  ROW_PRESENT(OFFLINE);  ROW_PRESENT(ATTENTION);
-ROW_PRESENT(MISHEARD); ROW_PRESENT(WAITING); ROW_PRESENT(THINKING);
-ROW_PRESENT(LISTEN);  ROW_PRESENT(IDLE);     ROW_PRESENT(SLEEP);
-ROW_PRESENT(RELEASED); ROW_PRESENT(WAKING);  ROW_PRESENT(UNPROVISIONED);
-#undef ROW_PRESENT
 
 /* `(unsigned)s < (unsigned)PANEL_ST_COUNT`, not `(int)s >= 0 && ...`.
  *

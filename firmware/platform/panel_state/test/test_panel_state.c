@@ -58,6 +58,36 @@ static void test_out_of_range_is_refused(void)
           "an out-of-range state produced a reason");
 }
 
+static void test_the_rank_is_d017s_order_by_name(void)
+{
+    /* THE ONE TEST THAT IS NOT ALLOWED TO CONSULT THE ENUM.
+     *
+     * Every other rank check derives its expectation from enum order, so all
+     * of them are tautologies with respect to the ordering itself: a reviewer
+     * reordered the nine states so that `thinking` outranked `offline` and all
+     * 226 checks passed. The severity rank is this module's central claim and
+     * it was pinned by nothing.
+     *
+     * D-017's rank, transcribed from the ADR and NOT from the header:
+     *   danger > offline > attention > misheard > waiting > thinking >
+     *   listen > idle > sleep
+     * Written as names, because a list of enum constants would just be the
+     * enum again in a different order of appearance. */
+    static const char *const d017[] = {
+        "danger", "offline", "attention", "misheard", "waiting",
+        "thinking", "listen", "idle", "sleep",
+    };
+    const int n = (int)(sizeof d017 / sizeof d017[0]);
+    CHECK(n == (int)PANEL_ST_RANKED_COUNT,
+          "D-017 ranks %d states, the enum ranks %d",
+          n, (int)PANEL_ST_RANKED_COUNT);
+
+    for (int i = 0; i < n && i < (int)PANEL_ST_RANKED_COUNT; i++)
+        CHECK(strcmp(panel_state_name((panel_state_t)i), d017[i]) == 0,
+              "rank %d is %s, D-017 says %s",
+              i, panel_state_name((panel_state_t)i), d017[i]);
+}
+
 static void test_the_nine_are_ranked_in_enum_order(void)
 {
     CHECK((int)PANEL_ST_RANKED_COUNT == 9,
@@ -336,23 +366,27 @@ static void test_colour_partitions_by_meaning(void)
         { "magenta/rest",           rest,  2, PANEL_C_MAGENTA },
     };
 
-    unsigned claimed = 0;
+    /* A BITMASK, not a count. Counting entries only proves "at least one
+     * class": a state listed in two groups while another is listed in none
+     * sums to the right total and passes, which is how a state could end up
+     * unchecked while the completeness check reported success. */
+    uint32_t seen = 0;
     for (unsigned g = 0; g < sizeof group / sizeof group[0]; g++) {
         for (unsigned i = 0; i < group[g].n; i++) {
-            CHECK(panel_state_colour(group[g].set[i]) == group[g].c,
-                  "%s is not %s", panel_state_name(group[g].set[i]),
-                  group[g].what);
-            claimed++;
+            const panel_state_t s = group[g].set[i];
+            CHECK(panel_state_colour(s) == group[g].c,
+                  "%s is not %s", panel_state_name(s), group[g].what);
+            CHECK((seen & (1u << s)) == 0,
+                  "%s is in two colour classes", panel_state_name(s));
+            seen |= 1u << s;
         }
     }
     CHECK(panel_state_colour(PANEL_ST_DANGER) == PANEL_C_RED, "danger is not red");
     CHECK(panel_state_colour(PANEL_ST_IDLE) == PANEL_C_GREEN, "idle is not green");
-    claimed += 2;
+    seen |= (1u << PANEL_ST_DANGER) | (1u << PANEL_ST_IDLE);
 
-    /* Every state is in exactly one class. Without this, a state added later
-     * simply would not be checked by any of the groups above. */
-    CHECK(claimed == (unsigned)PANEL_ST_COUNT,
-          "%u of %d states are in no colour class", claimed, (int)PANEL_ST_COUNT);
+    const uint32_t all = (1u << PANEL_ST_COUNT) - 1u;
+    CHECK(seen == all, "states in no colour class: mask 0x%X", (all & ~seen));
 }
 
 static void test_rest_is_not_the_no_claim_colour(void)
@@ -373,6 +407,7 @@ int main(void)
 {
     test_unranked_states_report_minus_one();
     test_out_of_range_is_refused();
+    test_the_rank_is_d017s_order_by_name();
     test_the_nine_are_ranked_in_enum_order();
     test_unranked_cannot_beat_ranked();
     test_empty_mask_has_no_default();
