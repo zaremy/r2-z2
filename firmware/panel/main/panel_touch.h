@@ -30,6 +30,10 @@ typedef enum { PANEL_SWIPE_NONE = 0, PANEL_SWIPE_LEFT, PANEL_SWIPE_RIGHT } panel
 
 void panel_touch_init(void);
 
+/* Call every UI tick. Polls the input device directly rather than relying on
+ * LVGL events, which a full-screen container silently swallows. */
+void panel_touch_poll(void);
+
 /* Every observed press extreme, for P1. `points` is how many presses have been
  * seen at all -- zero means the operator has not touched it, which must not be
  * confused with a touch that reported (0,0). */

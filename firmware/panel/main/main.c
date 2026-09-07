@@ -124,6 +124,7 @@ static void ui_task(void *arg)
     int ticks = 0;
     while (1) {
         if (bsp_display_lock(100)) {
+            panel_touch_poll();
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(), changed, set_brightness_pct);
             bsp_display_unlock();
@@ -138,7 +139,7 @@ static void ui_task(void *arg)
          * anchor a previous edit had changed, the replace silently did nothing,
          * and only `int ticks = 0;` survived -- set, never read, and not loud
          * enough to fail the build. */
-        if (++ticks % 240 == 0) {
+        if (++ticks % 1500 == 0) {
             panel_touch_extremes_t ex;
             panel_touch_extremes(&ex);
             if (ex.points == 0) {
@@ -151,7 +152,7 @@ static void ui_task(void *arg)
                          ex.min_x, 367 - ex.max_x, ex.min_y, 447 - ex.max_y);
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(40));
     }
 }
 
