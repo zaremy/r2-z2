@@ -66,6 +66,14 @@ static void dot_to(int16_t x, int16_t y)
 #define DOT_LINGER_MS 4000
 static uint32_t s_dot_shown_at;
 
+/* Set by any touch, cleared when read. The burn-in dimmer needs to know a
+ * HUMAN did something, and its only other input is whether the DATA changed --
+ * so without this, someone who picks up the droid and taps the panel is
+ * looking at a 40% screen because R2's battery happened to read the same
+ * voltage as a minute ago. Deliberate interaction is the strongest evidence
+ * anyone is looking, and it was the one signal the dimmer ignored. */
+static volatile bool s_activity;
+
 static void dot_hide(void)
 {
     if (s_dot != NULL) lv_obj_add_flag(s_dot, LV_OBJ_FLAG_HIDDEN);
@@ -150,6 +158,7 @@ void panel_touch_poll(void)
     if (fingers > 0) {
         if (!s_pressing) { s_press_at.x = x; s_press_at.y = y; s_pressing = true; }
         s_last_touch.x = x; s_last_touch.y = y;   /* the last REAL position */
+        s_activity = true;
         s_dot_x = x; s_dot_y = y;
         if (x != last_x || y != last_y) {
             note((int16_t)x, (int16_t)y);
@@ -291,6 +300,13 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
  * NETWORK (vault Prototypes/README.md:18), and only STATUS is built. Wiring
  * this to page navigation is the rest of child 4, and inventing the other two
  * pages' contents is what D-017 Amendment B just ruled against. */
+bool panel_touch_take_activity(void)
+{
+    const bool a = s_activity;
+    s_activity = false;
+    return a;
+}
+
 panel_swipe_t panel_touch_take_swipe(void)
 {
     const panel_swipe_t s = s_swipe;
