@@ -24,11 +24,11 @@
 #define V5_LABEL      0x7C8A8D   /* key labels, active dot */
 #define V5_TEXT       0xF2F6F7   /* values */
 #define V5_TEXT_HI    0xE8F2F3
-/* The STATE colours are not here. They live in `panel_state.c`, and a second
- * copy of them in this file is precisely the drift this PR set out to remove:
- * the face read one copy and the chain pips read the other, so changing amber
- * in one place would have left a CH_DOWN pip on the old value. What remains
- * below is chrome -- ground, rules, labels -- which no state owns. */
+/* The STATE colours are not here. They live in `panel_state.h` as PANEL_C_*,
+ * and this file reads those rather than keeping its own copy: the face and the
+ * chain pips must agree on amber, and once the state table moved to another
+ * file a duplicate set of hexes here is how they would stop agreeing. What
+ * remains below is chrome -- ground, rules, labels -- which no state owns. */
 
 
 /* Panel geometry, MEASURED not assumed (#104, board-revision.md):

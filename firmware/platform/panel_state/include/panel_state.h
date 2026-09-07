@@ -35,8 +35,12 @@ extern "C" {
 /* THE PANEL'S SEMANTIC COLOURS, in ONE place.
  *
  * Exported because `panel_ui.c` needs them for the fault chain: a CH_DOWN pip
- * and an `offline` word must be the same amber, and they were previously two
- * hexes in two files that happened to match. The names are the MEANINGS in
+ * and an `offline` word must be the same amber, and with the state table in
+ * one file and the chain in another that is only guaranteed if both read the
+ * same macro. (Before this branch there was no drift to fix -- every hex was
+ * defined once, in `panel_ui.c`. Splitting the table out is what created the
+ * opportunity for a second copy, and this closes it rather than repairing
+ * something that had already gone wrong.) The names are the MEANINGS in
  * D-012's light language, not shades -- what luminance and hue deliver each
  * meaning is the panel's business (D-012 Amendment A), which is why the values
  * differ from the body's and the names do not. */

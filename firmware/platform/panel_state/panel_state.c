@@ -51,8 +51,14 @@ typedef struct {
  * DID NOT EXIST. Designated initialisers grow the array to fit, so adding an
  * enumerator compiled clean under -Wall -Wextra -Werror and left a zero-filled
  * row -- and `panel_state_word()` then handed LVGL a NULL, which segfaults the
- * host tests and would blank the word on the glass. A comment describing a
- * guard is not a guard; both halves below are real. */
+ * host tests and would blank the word on the glass.
+ *
+ * What replaced it is ONE static assert, on the count, and the block below
+ * says exactly what that can and cannot catch. (An intermediate version of
+ * this comment promised "both halves below are real" and shipped a second
+ * assert that was a tautology -- the same defect again, one commit later. The
+ * sentence is left here as the reason to check that a comment about a guard
+ * and the guard agree.) */
 static const row_t k_row[PANEL_ST_COUNT] = {
     [PANEL_ST_DANGER]       = { "danger",       "DANGER",    "R2 FAULT",        PANEL_C_RED   },
     [PANEL_ST_OFFLINE]      = { "offline",      "OFFLINE",   NULL,              PANEL_C_AMBER },
@@ -118,13 +124,17 @@ static bool in_range(panel_state_t s)
  * state already renders as nothing, and a missing row should look the same
  * rather than being the one path that hands LVGL a NULL.
  *
- * NO TEST REACHES THIS, and that is stated rather than left to be discovered:
- * deleting the `? :` survives the whole suite. It is unreachable BY
- * CONSTRUCTION -- the _Static_assert above means a state without a row is a
- * build failure, so no caller can produce a NULL through the public API. It
- * stays as the failure mode for the day somebody relaxes that assert, which
- * is exactly when a crash would be least welcome. Defence in depth that no
- * test can exercise is worth keeping; claiming it is covered is not. */
+ * THIS GUARD IS LOAD-BEARING, and an earlier version of this comment said the
+ * opposite -- that it was "unreachable by construction" because the static
+ * assert made a missing row a build failure. It does not: the assert pins the
+ * COUNT, so a row blanked to `{ 0 }` compiles clean, and with the `? :`
+ * removed the suite segfaults through the public API. On the panel that is a
+ * NULL handed to lv_label_set_text.
+ *
+ * What IS true is narrower: no test reaches it, because deleting the `? :`
+ * alone passes all 246 checks while every row is populated. So it is an
+ * untested guard rather than an unreachable one, and the distinction matters
+ * -- "unreachable" is an invitation to delete it. */
 static const char *or_empty(const char *s) { return s ? s : ""; }
 
 int panel_state_rank(panel_state_t s)
