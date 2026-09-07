@@ -1212,6 +1212,14 @@ the rubric — and it is why he was moved to the floor.
 
 #### REFUTED — "those were false positives"
 
+> [!important]
+> **Read with the 2026-09-06 entry below.** On this date the operator's
+> false-positive claim was wrong. On 2026-09-06 the *same* claim was **right**
+> and the desk really was firing the detector. Neither outcome is the default,
+> and taking this section alone would teach exactly the wrong lesson — that the
+> instinct can be discounted. It cannot. What settles it is re-scoring, which is
+> why the inability to re-score a reaction is filed as a defect (#149).
+
 Asserted mid-session and wrong. Re-scoring 120 rest samples offline — deriving
 thresholds from one half and sliding over the other — gives **0/55 firing
 windows at a 1.5 s window, 0/49 at 3.0 s, 0/41 at 5.0 s.** The detector is
@@ -1220,7 +1228,11 @@ explanation (a structural multiple-comparisons flaw) was the more sophisticated
 one and fitted every fact available at the time.
 
 The figures above are floor run 1's, which are re-derivable from
-`.bridge/s2b-reactive-floor-run1.json`. The original analysis ran on the desk
+`mac-prototype/results/s2b-floor-run1-2026-08-18.json`. That log lived only in
+`.bridge/`, which is **gitignored** — so this citation pointed at a path that
+does not survive a fresh clone, and the evidence for a REFUTED claim would have
+been unverifiable by anyone but the machine that produced it. Committed here on
+2026-09-06 when the same trap was avoided for the newer run. The original analysis ran on the desk
 run and returned the identical counts — the window totals depend only on the
 sample count, and both runs captured 120 samples.
 
