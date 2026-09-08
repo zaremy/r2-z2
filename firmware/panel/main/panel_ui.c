@@ -405,13 +405,31 @@ const char *panel_ui_page_name(int page)
 /* A READING IS A BIG NUMBER AND A SMALL, DIMMER UNIT, right-aligned to the
  * same edge as the one above it.
  *
- * v5 renders "78" at 18 px in the value colour and "%" at 11 px in the label
- * colour, as a separate span. Both readings were one flat string here
+ * v5 renders the number at 34 px in the value colour and the unit at 20 px in
+ * the label colour, as a separate span.
+ *
+ * An earlier version of this comment said 18 px and 11 px, and the panel
+ * shipped 28/14 on the strength of it. THE MEASUREMENT WAS WRONG IN A
+ * SPECIFIC, REUSABLE WAY: the prototype is laid out at 368 px and displayed
+ * through a CSS `transform: scale()`, so getBoundingClientRect returns SCALED
+ * geometry while getComputedStyle returns the UNSCALED font-size. Dividing
+ * both by the same factor is correct for positions and wrong for type -- and
+ * 18 is exactly 34/1.9. Every position in this file survives that error;
+ * every font size taken the same way did not.
+ *
+ * THE NUMBER'S SIZE IS PER-READING, and that IS a deviation. The reference
+ * shows a 2-character percentage; we show a 4-character voltage, because the
+ * percentage rests on an unmeasured discharge curve and the volts do not. At
+ * 34 px "4.43" plus its unit is about 99 px and the gap between the meter and
+ * the right margin is 88, so the reading ran into the bars -- verified on the
+ * glass. DOME is three digits and fits, so it gets the reference's size and
+ * PWR gets 28. Matching a type scale by letting two elements collide would be
+ * matching the spec's numbers while breaking the thing they were chosen for. Both readings were one flat string here
  * ("4.43 V"), which made the unit compete with the digits and let the two
  * rows' right edges disagree by however wide their text happened to be. The
  * flex row does the alignment, so a value that grows a digit still ends at
  * 342 like everything else. */
-static void make_value(lv_obj_t *pg, int i, int y)
+static void make_value(lv_obj_t *pg, int i, int y, const lv_font_t *num_font)
 {
     lv_obj_t *row = lv_obj_create(pg);
     lv_obj_set_size(row, 150, 41);
@@ -419,6 +437,10 @@ static void make_value(lv_obj_t *pg, int i, int y)
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_pad_all(row, 0, 0);
+    /* pad_all does NOT cover pad_column, which is the flex gap, and the
+     * default theme's `card` style sets it to ~8 px. Without this the unit
+     * sits 11 px off the number where the reference has 3. */
+    lv_obj_set_style_pad_column(row, 0, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END,
@@ -426,12 +448,12 @@ static void make_value(lv_obj_t *pg, int i, int y)
 
     s_kv_val[i] = lv_label_create(row);
     lv_label_set_text(s_kv_val[i], "----");
-    lv_obj_set_style_text_font(s_kv_val[i], &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(s_kv_val[i], num_font, 0);
     lv_obj_set_style_text_color(s_kv_val[i], lv_color_hex(V5_TEXT), 0);
 
     s_kv_unit[i] = lv_label_create(row);
     lv_label_set_text(s_kv_unit[i], "");
-    lv_obj_set_style_text_font(s_kv_unit[i], &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_kv_unit[i], &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_kv_unit[i], lv_color_hex(V5_LABEL), 0);
     lv_obj_set_style_pad_left(s_kv_unit[i], 3, 0);
 }
@@ -443,6 +465,10 @@ static void set_value(int i, const char *num, const char *unit)
 {
     if (strcmp(lv_label_get_text(s_kv_val[i]), num) != 0)
         lv_label_set_text(s_kv_val[i], num);
+    /* The reference dims a placeholder to V5_DIM. A "----" set as brightly as
+     * a real reading competes with the ones that mean something. */
+    lv_obj_set_style_text_color(s_kv_val[i],
+        lv_color_hex(unit[0] == '\0' ? V5_DIM : V5_TEXT), 0);
     if (strcmp(lv_label_get_text(s_kv_unit[i]), unit) != 0)
         lv_label_set_text(s_kv_unit[i], unit);
 }
@@ -558,13 +584,13 @@ static void build_status_face(lv_obj_t *pg)
     /* The bars stand on a rule. Without it they float, which is most of why
      * the graph read as decoration. */
     lv_obj_t *pwr_base = lv_obj_create(pg);
-    lv_obj_set_size(pwr_base, PWR_BARS * PWR_PITCH - (PWR_PITCH - PWR_BAR_W)
-                              + 1, 2);
+    lv_obj_set_size(pwr_base, PWR_BARS * PWR_PITCH - (PWR_PITCH - PWR_BAR_W),
+                    2);
     lv_obj_set_pos(pwr_base, PWR_X, PWR_BASE_Y);
     lv_obj_set_style_bg_color(pwr_base, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_style_border_width(pwr_base, 0, 0);
 
-    make_value(pg, 0, PWR_VAL_Y);
+    make_value(pg, 0, PWR_VAL_Y, &lv_font_montserrat_28);   /* 4 chars */
 
     /* ---- DOME: label, dial, value -------------------------------------
      * v5 draws the dial with NO NEEDLE when the heading is unknown rather
@@ -578,6 +604,15 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_text_color(dk, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(dk, V5_PAD, 282);
 
+    /* NO INNER TICK MARKS, and that is faithful rather than an omission.
+     *
+     * The reference's SVG builds twelve of them and renders none: its element
+     * helper lower-cases camelCase attributes, so `viewBox` is emitted as
+     * `view-box` and ignored, and the tick array is appended as one node and
+     * stringifies to "[object SVGLineElement],...". A later pass measuring
+     * this dial should know both -- the second is why the ticks are absent,
+     * and the FIRST is why the diameter is 108: with the viewBox applied
+     * everything would scale by 0.97 and this would be ~105. */
     lv_obj_t *dial = lv_obj_create(pg);
     lv_obj_set_size(dial, DIAL_D, DIAL_D);
     lv_obj_set_pos(dial, DIAL_X, DIAL_Y);
@@ -651,7 +686,7 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(PANEL_C_CYAN), 0);
     lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
 
-    make_value(pg, 1, DOME_VAL_Y);
+    make_value(pg, 1, DOME_VAL_Y, &lv_font_montserrat_34);  /* 3 chars */
 
     /* ---- FAULT CHAIN: only when something is actually wrong -----------
      * I had this permanently on the resting face. v5 defines `chain` for
@@ -841,13 +876,23 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
      * that green is a verdict and the volts-to-percent mapping is inferred
      * from an unmeasured curve. The reasoning is sound about the NUMBER and
      * wrong about the BAR: the operator ruled the panel matches the v5
-     * reference, and the reference fills this gauge green. The caveat belongs
-     * where it already is -- on the mapping, in the comment above -- not
-     * spent on desaturating an instrument until it stops reading as one.
-     * Recorded rather than silently reversed, because it IS a reversal. */
+     * reference, and the reference fills this gauge green when the battery is
+     * healthy. The caveat belongs where it already is -- on the mapping, in
+     * the comment above -- not spent on desaturating an instrument until it
+     * stops reading as one. Recorded rather than silently reversed, because
+     * it IS a reversal.
+     *
+     * The fill is CONDITIONAL in the reference, which the first version of
+     * this missed: it goes amber for the low-battery state. The threshold
+     * below is INFERRED, like the voltage mapping it reads -- the reference
+     * shows amber at 14% and green at 78% and nothing in between, so 20% is
+     * a choice, not a measurement. It must not graduate to OBSERVED. Amber
+     * rather than red because D-012 reserves red for danger and stop. */
+    const uint32_t fill = (pwr_ok && filled * 100 / PWR_BARS <= 20)
+                          ? PANEL_C_AMBER : PANEL_C_GREEN;
     for (int i = 0; i < PWR_BARS; i++)
         lv_obj_set_style_bg_color(s_pwr_bar[i],
-            lv_color_hex(i < filled ? PANEL_C_GREEN : V5_SURFACE), 0);
+            lv_color_hex(i < filled ? fill : V5_SURFACE), 0);
 
     /* ---- DOME --------------------------------------------------------- */
     /* isfinite() because dome_degrees is a float written straight off a BLE
@@ -896,6 +941,12 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_dome_wedge, LV_OBJ_FLAG_HIDDEN);
     }
+    /* The HUB is a claim as well, and it was left permanently cyan -- a live
+     * centre dot beside a "----" reading, which is the same confident lie the
+     * hidden needle exists to avoid. The reference draws it in V5_SURFACE
+     * when the heading is unknown. */
+    lv_obj_set_style_bg_color(s_dome_hub,
+        lv_color_hex(dome_ok ? PANEL_C_CYAN : V5_SURFACE), 0);
 }
 
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
