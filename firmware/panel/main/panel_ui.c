@@ -239,9 +239,11 @@ static void make_pips(lv_obj_t *parent)
         lv_obj_t *d = lv_obj_create(parent);
         /* Sized and positioned by set_page: v5 draws the ACTIVE one as a 20x6
          * pill and the rest as 6 px dots, so the geometry is state, not
-         * construction. Slots are a fixed 22 px pitch and the dot is centred
-         * inside its own slot, which keeps the row centred whichever one is
-         * wide. */
+         * construction. See pip_x() for the spacing -- it is a gap, not a
+         * pitch. (This comment described the fixed 22 px pitch pip_x
+         * replaced, and sat 25 lines under the block arguing against it: a
+         * comment falsified by an edit rather than wrong when written, which
+         * is the harder kind to notice.) */
         lv_obj_set_size(d, PIP_DOT, PIP_H);
         lv_obj_set_pos(d, pip_x(i, PAGE_STATUS), PIP_Y);
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
@@ -438,7 +440,9 @@ const char *panel_ui_page_name(int page)
  * I had estimated rather than measured ("about 99 px... the gap is 88"), and
  * it was wrong by roughly ten pixels in a way that made the deviation look
  * far more forced than it is. The conclusion survived; the evidence for it
- * did not exist. Both numbers above come from counting pixels. Both readings were one flat string here
+ * did not exist. Both numbers above come from counting pixels.
+ *
+ * Both readings were one flat string here
  * ("4.43 V"), which made the unit compete with the digits and let the two
  * rows' right edges disagree by however wide their text happened to be. The
  * flex row does the alignment, so a value that grows a digit still ends at
@@ -552,8 +556,11 @@ static void build_status_face(lv_obj_t *pg)
      * "IDLE" is 103 px for four characters, and stock Montserrat sets the same
      * word about 20 px narrower. Tracking closes most of that gap for the cost
      * of one style call, and the numbers below are chosen to match the
-     * reference's MEASURED widths (IDLE 103, R2 PWR 99, DOME 73), not picked
-     * because they looked better.
+     * reference's MEASURED widths, not picked because they looked better. It
+     * lands exactly on one of the three and near the others: the reference
+     * sets IDLE 103 / R2 PWR 99 / DOME 73, and these give 97 / 99 / 71.
+     * Montserrat is not Michroma, so tracking can hit a target width or keep
+     * the glyphs evenly spaced, and past a point not both.
      *
      * This does not retire the font question. It makes the panel wrong in one
      * way (a humanist face where a squarish one belongs) instead of two (that,
