@@ -44,6 +44,7 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 # left was a 4.46 MB shell that pins lvgl 9.2.* (forcing esp_lvgl_port back to
 # 2.6.0), ships no 368x448 stylesheet, and whose straight-to-boot path is
 # undemonstrated -- which is precisely the path we need.
+CONFIG_LV_FONT_MONTSERRAT_20=y   # the unit beside a reading (#101)
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_34=y
 CONFIG_LV_USE_SNAPSHOT=y
