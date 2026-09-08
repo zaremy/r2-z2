@@ -419,12 +419,19 @@ const char *panel_ui_page_name(int page)
  *
  * THE NUMBER'S SIZE IS PER-READING, and that IS a deviation. The reference
  * shows a 2-character percentage; we show a 4-character voltage, because the
- * percentage rests on an unmeasured discharge curve and the volts do not. At
- * 34 px "4.43" plus its unit is about 99 px and the gap between the meter and
- * the right margin is 88, so the reading ran into the bars -- verified on the
- * glass. DOME is three digits and fits, so it gets the reference's size and
- * PWR gets 28. Matching a type scale by letting two elements collide would be
- * matching the spec's numbers while breaking the thing they were chosen for. Both readings were one flat string here
+ * percentage rests on an unmeasured discharge curve and the volts do not.
+ *
+ * MEASURED off the glass, by decoding the screenshot and finding the meter's
+ * last pixel and the value's first: at 34 px the reading's ink begins 1 px
+ * after the meter ends, and at 28 px there are 13 px between them. The
+ * reference's own gap is 12. So PWR takes 28 and DOME, at three digits, takes
+ * the reference's 34.
+ *
+ * The first version of this comment justified the same choice with a figure
+ * I had estimated rather than measured ("about 99 px... the gap is 88"), and
+ * it was wrong by roughly ten pixels in a way that made the deviation look
+ * far more forced than it is. The conclusion survived; the evidence for it
+ * did not exist. Both numbers above come from counting pixels. Both readings were one flat string here
  * ("4.43 V"), which made the unit compete with the digits and let the two
  * rows' right edges disagree by however wide their text happened to be. The
  * flex row does the alignment, so a value that grows a digit still ends at
@@ -560,9 +567,12 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_t *pk = lv_label_create(pg);
     lv_label_set_text(pk, "R2 PWR");
     lv_obj_set_style_text_font(pk, &lv_font_montserrat_18, 0);
-    /* 3, not 5: at 5 the label ran to x=130 and the bars start at 132, so the
-     * two touched. The reference leaves 7 px there. */
-    lv_obj_set_style_text_letter_space(pk, 3, 0);
+    /* 5, and it was briefly 3 on the strength of a claim I made by eye -- that
+     * at 5 the label ran into the bars. It does not: measured off the
+     * screenshot, ls=5 puts the label's last pixel 8 px clear of the first
+     * bar, against the reference's 7, while ls=3 leaves 18 and sets the label
+     * 10 px narrower than the reference it is here to match. */
+    lv_obj_set_style_text_letter_space(pk, 5, 0);
     lv_obj_set_style_text_color(pk, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(pk, V5_PAD, 173);
 
