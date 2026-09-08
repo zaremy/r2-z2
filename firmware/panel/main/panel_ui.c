@@ -410,12 +410,19 @@ const char *panel_ui_page_name(int page)
  *
  * An earlier version of this comment said 18 px and 11 px, and the panel
  * shipped 28/14 on the strength of it. THE MEASUREMENT WAS WRONG IN A
- * SPECIFIC, REUSABLE WAY: the prototype is laid out at 368 px and displayed
- * through a CSS `transform: scale()`, so getBoundingClientRect returns SCALED
- * geometry while getComputedStyle returns the UNSCALED font-size. Dividing
- * both by the same factor is correct for positions and wrong for type -- and
- * 18 is exactly 34/1.9. Every position in this file survives that error;
- * every font size taken the same way did not.
+ * SPECIFIC, REUSABLE WAY: the prototype rendered about 1.9x its 368 px design
+ * width in the browser, so every figure was divided by 368/renderedWidth to
+ * get panel pixels. That is right for `getBoundingClientRect`, which returns
+ * rendered geometry, and wrong for `getComputedStyle().fontSize`, which
+ * returns the authored CSS value -- 18 is exactly 34/1.9. Every position in
+ * this file survives the error; every font size taken the same way did not.
+ *
+ * WHAT MADE IT RENDER AT 1.9x IS NOT ISOLATED. A review looked for a
+ * `transform: scale()` and found the file sets only 1 and 0.298, so the
+ * obvious explanation is not the true one. The rule -- never divide an
+ * authored CSS length by a rendering scale -- holds regardless, and is
+ * written here without a cause attached rather than with a plausible one
+ * invented to finish the sentence.
  *
  * THE NUMBER'S SIZE IS PER-READING, and that IS a deviation. The reference
  * shows a 2-character percentage; we show a 4-character voltage, because the
@@ -444,9 +451,14 @@ static void make_value(lv_obj_t *pg, int i, int y, const lv_font_t *num_font)
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_pad_all(row, 0, 0);
-    /* pad_all does NOT cover pad_column, which is the flex gap, and the
-     * default theme's `card` style sets it to ~8 px. Without this the unit
-     * sits 11 px off the number where the reference has 3. */
+    /* pad_all does NOT cover pad_column, which is the flex gap.
+     *
+     * The default theme's `card` style sets it to PAD_SMALL, and at this
+     * panel's size that resolves through DISP_MEDIUM (max(368,448) picks the
+     * branch) and LV_DPX_CALC(130, 12) to 10 px -- so without this the unit
+     * would sit 13 px off its number where the reference has 3. An earlier
+     * version of this comment said 8 and 11, which are the DISP_SMALL
+     * numbers: right shape, wrong branch. */
     lv_obj_set_style_pad_column(row, 0, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -568,10 +580,18 @@ static void build_status_face(lv_obj_t *pg)
     lv_label_set_text(pk, "R2 PWR");
     lv_obj_set_style_text_font(pk, &lv_font_montserrat_18, 0);
     /* 5, and it was briefly 3 on the strength of a claim I made by eye -- that
-     * at 5 the label ran into the bars. It does not: measured off the
-     * screenshot, ls=5 puts the label's last pixel 8 px clear of the first
-     * bar, against the reference's 7, while ls=3 leaves 18 and sets the label
-     * 10 px narrower than the reference it is here to match. */
+     * at 5 the label ran into the bars. It does not.
+     *
+     * At ls=5 LVGL sets "R2 PWR" 99 px wide, which is exactly the reference's
+     * measured width, so the label ends at x=124 and leaves the same 7 empty
+     * columns before the bars at 132 that the reference does. Not a near
+     * miss: the same number. At ls=3 it is 89 px -- 10 px narrower than the
+     * thing this tracking exists to match -- and leaves 17.
+     *
+     * (Counted as EMPTY COLUMNS throughout. An earlier version quoted 8
+     * against the reference's 7, which was an index difference next to a
+     * column count and read as a 1 px deviation that does not exist. Two
+     * conventions in one sentence is its own kind of wrong number.) */
     lv_obj_set_style_text_letter_space(pk, 5, 0);
     lv_obj_set_style_text_color(pk, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(pk, V5_PAD, 173);
