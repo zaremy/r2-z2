@@ -187,6 +187,7 @@ static lv_obj_t *s_chain_row;
 static lv_obj_t *s_kv_val[2];                 /* PWR, DOME -- the number */
 static lv_obj_t *s_kv_unit[2];                /* and its unit, smaller */
 static lv_obj_t *s_chain_pip[4];
+static lv_obj_t *s_chain_lbl[4];
 static panel_state_t        s_state_now = PANEL_ST_COUNT;
 static panel_offline_mode_t s_mode_now  = PANEL_OFF_COUNT;
 
@@ -730,33 +731,39 @@ static void build_status_face(lv_obj_t *pg)
      * exactly four states -- the three offline modes and danger -- so a
      * healthy panel does not carry it. A fault indicator that is always
      * visible is one nobody reads. */
+    /* Geometry measured off the reference: labels at y=358, pips 16x16 at
+     * y=384, the connector from x=56 to x=312 at y=389, and the four columns
+     * at x=43 / 128 / 214 / 307. The row was at y=336 with its own invented
+     * spacing. */
     s_chain_row = lv_obj_create(pg);
-    lv_obj_set_size(s_chain_row, PANEL_W, 58);
-    lv_obj_set_pos(s_chain_row, 0, 336);
+    lv_obj_set_size(s_chain_row, PANEL_W, 74);
+    lv_obj_set_pos(s_chain_row, 0, 352);
     lv_obj_set_style_bg_opa(s_chain_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_chain_row, 0, 0);
     lv_obj_set_style_pad_all(s_chain_row, 0, 0);
     lv_obj_clear_flag(s_chain_row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *line = lv_obj_create(s_chain_row);
-    lv_obj_set_size(line, PANEL_W - 60, 2);
-    lv_obj_set_pos(line, 30, 40);
+    lv_obj_set_size(line, 256, 2);
+    lv_obj_set_pos(line, 56, 37);
     lv_obj_set_style_bg_color(line, lv_color_hex(V5_RULE), 0);
     lv_obj_set_style_border_width(line, 0, 0);
 
+    static const int k_pip_x[4] = { 43, 128, 214, 307 };
+    static const int k_lbl_x[4] = { 32, 122, 202, 295 };
     for (int i = 0; i < 4; i++) {
-        const int cx = 40 + i * ((PANEL_W - 80) / 3);
         lv_obj_t *lbl = lv_label_create(s_chain_row);
         lv_label_set_text(lbl, k_chain_label[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_letter_space(lbl, 1, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(V5_MID), 0);
-        lv_obj_set_pos(lbl, cx - 14, 8);
+        lv_obj_set_pos(lbl, k_lbl_x[i], 6);
+        s_chain_lbl[i] = lbl;
 
         lv_obj_t *pip = lv_obj_create(s_chain_row);
         lv_obj_set_size(pip, 16, 16);
-        lv_obj_set_pos(pip, cx - 8, 33);
-        lv_obj_set_style_radius(pip, 2, 0);
-        lv_obj_set_style_border_width(pip, 0, 0);
+        lv_obj_set_pos(pip, k_pip_x[i], 32);
+        lv_obj_set_style_radius(pip, 0, 0);
         s_chain_pip[i] = pip;
     }
     lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
@@ -854,9 +861,18 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         s_mode_now  = mode;
         s_changed = true;                       /* worth looking at */
 
+        /* THE WORD IS WHITE. Measured: the reference sets the resting face's
+         * state word in V5_TEXT for every state and puts the colour in the
+         * swatch alone -- IDLE and OFFLINE both come back rgb(242,246,247).
+         * Colouring the word too was mine, and it doubles the signal at the
+         * cost of the type: amber 30 px text on black is markedly harder to
+         * read than white, and the swatch beside it already said amber.
+         *
+         * The WAKE frame is the exception and does colour the word, which is
+         * part of how it reads as an interruption rather than a screen. */
         const uint32_t colour = panel_state_colour(st);
         lv_label_set_text(s_face_word, panel_state_word(st));
-        lv_obj_set_style_text_color(s_face_word, lv_color_hex(colour), 0);
+        lv_obj_set_style_text_color(s_face_word, lv_color_hex(V5_TEXT), 0);
         lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(colour), 0);
         lv_label_set_text(s_face_since, panel_state_since(st, mode));
 
@@ -864,9 +880,26 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
             chain_t chain[4];
             face_chain(st, mode, chain);
             lv_obj_remove_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 4; i++) {
+                /* THE BROKEN LINK IS HOLLOW, not filled.
+                 *
+                 * The reference draws a down or faulted node as a 3 px ring
+                 * in the fault colour around the ground, and lights its LABEL
+                 * to match, while every healthy node is a solid block with a
+                 * grey label. It is the same idea as the swatch: the eye
+                 * finds the odd one out by SHAPE first and colour second,
+                 * which survives being glanced at and being colour-blind. A
+                 * filled amber square among filled green ones relies on hue
+                 * alone. */
+                const bool broken = (chain[i] == CH_DOWN || chain[i] == CH_FAULT);
+                const uint32_t c = chain_colour(chain[i]);
                 lv_obj_set_style_bg_color(s_chain_pip[i],
-                                          lv_color_hex(chain_colour(chain[i])), 0);
+                    lv_color_hex(broken ? V5_GROUND : c), 0);
+                lv_obj_set_style_border_width(s_chain_pip[i], broken ? 3 : 0, 0);
+                lv_obj_set_style_border_color(s_chain_pip[i], lv_color_hex(c), 0);
+                lv_obj_set_style_text_color(s_chain_lbl[i],
+                    lv_color_hex(broken ? c : V5_MID), 0);
+            }
         } else {
             lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
         }
