@@ -992,9 +992,12 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
                  (int)((lroundf(t->dome_degrees) % 360 + 360) % 360));
     else
         snprintf(buf, sizeof buf, "----");
-    /* The degree sign is U+00B0. LVGL's stock Montserrat carries ASCII plus a
-     * handful of symbols, so whether this renders at all is a property of the
-     * built font -- checked on the glass, not assumed. */
+    /* The degree sign is U+00B0, and the unit is set in techmono_20, whose
+     * range is `0x20-0x5F,0xB0` -- the 0xB0 is there for exactly this glyph
+     * and for nothing else. Regenerate the fonts without it and this renders
+     * as nothing. (This comment used to reason about LVGL's stock Montserrat,
+     * which stopped being the unit's font in the same branch that wrote the
+     * sentence sweeping up comments the font swap had falsified.) */
     set_value(1, buf, dome_ok ? "\xC2\xB0" : "");
 
     /* No needle when the heading is unknown. A needle parked at zero is a
