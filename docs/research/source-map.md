@@ -165,3 +165,22 @@ array, the same SOP/EOP/escape constants, and DID/CID triples for init, off,
 rotate, animation, carriage (leg action), move, accelerometer. It is the
 provenance root for the constants that both newer repos inherited — which is
 exactly why we re-derived them from spherov2 rather than copying.
+
+### lv_font_conv 1.5.3 — the panel's typefaces
+
+`firmware/panel/main/fonts/*.c` are generated, not written, and the generator's
+version is the one thing the artifacts do not record: each file's `Opts` line
+carries the face, size, bpp, range and format, so everything else is
+recoverable from the committed source alone. Pinned here instead.
+
+| input | source | licence |
+|---|---|---|
+| `Michroma-Regular.ttf` | `google/fonts` `ofl/michroma/` | OFL 1.1, no Reserved Font Name |
+| `ShareTechMono-Regular.ttf` | `google/fonts` `ofl/sharetechmono/` | OFL 1.1, RFN **"Share"** |
+
+Regenerate with `npx lv_font_conv@1.5.3 --font <ttf> -r 0x20-0x5F,0xB0 --size
+<n> --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -o <out>.c`.
+
+The Reserved Font Name matters if the Share Tech Mono conversion is ever
+re-derived under a different name: OFL clause 5 forbids using "Share" in a
+Modified Version's name, which is why the symbols are `techmono_*`.

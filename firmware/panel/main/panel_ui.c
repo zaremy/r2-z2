@@ -428,21 +428,12 @@ const char *panel_ui_page_name(int page)
  * written here without a cause attached rather than with a plausible one
  * invented to finish the sentence.
  *
- * THE NUMBER'S SIZE IS PER-READING, and that IS a deviation. The reference
- * shows a 2-character percentage; we show a 4-character voltage, because the
- * percentage rests on an unmeasured discharge curve and the volts do not.
- *
- * MEASURED off the glass, by decoding the screenshot and finding the meter's
- * last pixel and the value's first: at 34 px the reading's ink begins 1 px
- * after the meter ends, and at 28 px there are 13 px between them. The
- * reference's own gap is 12. So PWR takes 28 and DOME, at three digits, takes
- * the reference's 34.
- *
- * The first version of this comment justified the same choice with a figure
- * I had estimated rather than measured ("about 99 px... the gap is 88"), and
- * it was wrong by roughly ten pixels in a way that made the deviation look
- * far more forced than it is. The conclusion survived; the evidence for it
- * did not exist. Both numbers above come from counting pixels.
+ * (The number's size used to be PER-READING -- PWR at 28 and DOME at 34 --
+ * because a 34 px Montserrat "4.43" ran into the meter. Share Tech Mono is
+ * narrower and both are 34 now; the measured clearances are recorded at the
+ * call sites. That deviation is retired, and this paragraph replaced the one
+ * still arguing for it, which had become the second of two adjacent comments
+ * giving opposite accounts of the same shipped behaviour.)
  *
  * Both readings were one flat string here
  * ("4.43 V"), which made the unit compete with the digits and let the two
@@ -748,8 +739,8 @@ static void build_status_face(lv_obj_t *pg)
          * The reference centres each label over its node, and the left edges
          * it reports are what Michroma 13 happens to produce from that. Copy
          * the edge and a narrower face drifts left of its pip -- worst for
-         * "R2", the shortest string. Centring is metric-independent, so it
-         * stays right when the real font finally lands. */
+         * "R2", the shortest string. Centring is metric-independent, which
+         * is why it survived the real font landing on the next line. */
         lv_obj_t *lbl = lv_label_create(s_chain_row);
         lv_label_set_text(lbl, k_chain_label[i]);
         lv_obj_set_style_text_font(lbl, &michroma_13, 0);

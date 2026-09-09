@@ -45,7 +45,6 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 # 2.6.0), ships no 368x448 stylesheet, and whose straight-to-boot path is
 # undemonstrated -- which is precisely the path we need.
 CONFIG_LV_FONT_MONTSERRAT_28=y
-CONFIG_LV_FONT_MONTSERRAT_34=y
 CONFIG_LV_USE_SNAPSHOT=y
 
 # LVGL allocates from the ESP heap, not its own 64 KB pool.
