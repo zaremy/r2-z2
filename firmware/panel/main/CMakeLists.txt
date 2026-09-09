@@ -1,5 +1,9 @@
 idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
-                       INCLUDE_DIRS "."
+                            "fonts/michroma_12.c" "fonts/michroma_13.c"
+                            "fonts/michroma_16.c" "fonts/michroma_30.c"
+                            "fonts/techmono_20.c" "fonts/techmono_24.c"
+                            "fonts/techmono_34.c"
+                       INCLUDE_DIRS "." "fonts"
                        REQUIRES esp_timer bt nvs_flash
                                 r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state
                                 # esp_lcd_touch and esp_lvgl_port are needed for
