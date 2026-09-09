@@ -750,14 +750,21 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_border_width(line, 0, 0);
 
     static const int k_pip_x[4] = { 43, 128, 214, 307 };
-    static const int k_lbl_x[4] = { 32, 122, 202, 295 };
     for (int i = 0; i < 4; i++) {
+        /* CENTRED ON THE PIP, not placed at the reference's left edge.
+         *
+         * The reference centres each label over its node, and the left edges
+         * it reports are what Michroma 13 happens to produce from that. Copy
+         * the edge and a narrower face drifts left of its pip -- worst for
+         * "R2", the shortest string. Centring is metric-independent, so it
+         * stays right when the real font finally lands. */
         lv_obj_t *lbl = lv_label_create(s_chain_row);
         lv_label_set_text(lbl, k_chain_label[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_letter_space(lbl, 1, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(V5_MID), 0);
-        lv_obj_set_pos(lbl, k_lbl_x[i], 6);
+        lv_obj_set_width(lbl, 64);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(lbl, k_pip_x[i] + 8 - 32, 6);
         s_chain_lbl[i] = lbl;
 
         lv_obj_t *pip = lv_obj_create(s_chain_row);
@@ -862,8 +869,13 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         s_changed = true;                       /* worth looking at */
 
         /* THE WORD IS WHITE. Measured: the reference sets the resting face's
-         * state word in V5_TEXT for every state and puts the colour in the
-         * swatch alone -- IDLE and OFFLINE both come back rgb(242,246,247).
+         * state word in V5_TEXT for every state THAT HAS ONE -- all ten of
+         * them, danger included -- and puts the colour in the swatch alone.
+         * (`asleep` and `off` are the scope of that caveat: the reference
+         * draws no resting face for either, so it is not evidence about the
+         * face this firmware does draw for PANEL_ST_SLEEP. An earlier version
+         * of this comment said "every state", which claimed twelve states'
+         * worth of evidence from ten.)
          * Colouring the word too was mine, and it doubles the signal at the
          * cost of the type: amber 30 px text on black is markedly harder to
          * read than white, and the swatch beside it already said amber.
@@ -890,15 +902,29 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
                  * finds the odd one out by SHAPE first and colour second,
                  * which survives being glanced at and being colour-blind. A
                  * filled amber square among filled green ones relies on hue
-                 * alone. */
+                 * alone.
+                 *
+                 * THE LABEL HAS THREE STATES, not two. The reference gives a
+                 * healthy node's label V5_LABEL, an UNKNOWN node's V5_DIM,
+                 * and the broken one the fault colour. Painting both
+                 * non-broken cases the same grey was mine, and it contradicts
+                 * this file's own rule one function up: chain_colour() dims an
+                 * unknown pip to V5_SURFACE because unknown is absence rather
+                 * than a claim, so a caption at healthy brightness beside it
+                 * says the opposite. It matters here more than in the
+                 * reference: this build has a source for R2 only, so three of
+                 * the four nodes are UNKNOWN in every chain it can draw. */
                 const bool broken = (chain[i] == CH_DOWN || chain[i] == CH_FAULT);
                 const uint32_t c = chain_colour(chain[i]);
                 lv_obj_set_style_bg_color(s_chain_pip[i],
                     lv_color_hex(broken ? V5_GROUND : c), 0);
                 lv_obj_set_style_border_width(s_chain_pip[i], broken ? 3 : 0, 0);
                 lv_obj_set_style_border_color(s_chain_pip[i], lv_color_hex(c), 0);
-                lv_obj_set_style_text_color(s_chain_lbl[i],
-                    lv_color_hex(broken ? c : V5_MID), 0);
+
+                uint32_t lc = V5_DIM;                    /* CH_UNK */
+                if (broken)                  lc = c;
+                else if (chain[i] == CH_OK)  lc = V5_LABEL;
+                lv_obj_set_style_text_color(s_chain_lbl[i], lv_color_hex(lc), 0);
             }
         } else {
             lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
