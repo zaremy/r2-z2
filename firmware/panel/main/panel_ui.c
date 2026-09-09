@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "panel_state.h"
+#include "panel_fonts.h"
 
 /* THE v5 PALETTE. Taken from the reference prototype the vault calls "the
  * reference the LVGL firmware should match", not invented.
@@ -427,21 +428,12 @@ const char *panel_ui_page_name(int page)
  * written here without a cause attached rather than with a plausible one
  * invented to finish the sentence.
  *
- * THE NUMBER'S SIZE IS PER-READING, and that IS a deviation. The reference
- * shows a 2-character percentage; we show a 4-character voltage, because the
- * percentage rests on an unmeasured discharge curve and the volts do not.
- *
- * MEASURED off the glass, by decoding the screenshot and finding the meter's
- * last pixel and the value's first: at 34 px the reading's ink begins 1 px
- * after the meter ends, and at 28 px there are 13 px between them. The
- * reference's own gap is 12. So PWR takes 28 and DOME, at three digits, takes
- * the reference's 34.
- *
- * The first version of this comment justified the same choice with a figure
- * I had estimated rather than measured ("about 99 px... the gap is 88"), and
- * it was wrong by roughly ten pixels in a way that made the deviation look
- * far more forced than it is. The conclusion survived; the evidence for it
- * did not exist. Both numbers above come from counting pixels.
+ * (The number's size used to be PER-READING -- PWR at 28 and DOME at 34 --
+ * because a 34 px Montserrat "4.43" ran into the meter. Share Tech Mono is
+ * narrower and both are 34 now; the measured clearances are recorded at the
+ * call sites. That deviation is retired, and this paragraph replaced the one
+ * still arguing for it, which had become the second of two adjacent comments
+ * giving opposite accounts of the same shipped behaviour.)
  *
  * Both readings were one flat string here
  * ("4.43 V"), which made the unit compete with the digits and let the two
@@ -477,7 +469,7 @@ static void make_value(lv_obj_t *pg, int i, int y, const lv_font_t *num_font)
 
     s_kv_unit[i] = lv_label_create(row);
     lv_label_set_text(s_kv_unit[i], "");
-    lv_obj_set_style_text_font(s_kv_unit[i], &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_kv_unit[i], &techmono_20, 0);
     lv_obj_set_style_text_color(s_kv_unit[i], lv_color_hex(V5_LABEL), 0);
     lv_obj_set_style_pad_left(s_kv_unit[i], 3, 0);
 }
@@ -529,15 +521,15 @@ static void build_status_face(lv_obj_t *pg)
 
     s_chrome_llm = lv_label_create(pg);
     lv_label_set_text(s_chrome_llm, "LLM");
-    lv_obj_set_style_text_font(s_chrome_llm, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_letter_space(s_chrome_llm, 2, 0);
+    lv_obj_set_style_text_font(s_chrome_llm, &michroma_12, 0);
+    lv_obj_set_style_text_letter_space(s_chrome_llm, 1, 0);
     lv_obj_set_style_text_color(s_chrome_llm, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_pos(s_chrome_llm, 160, 18);
 
     s_chrome_batt = lv_label_create(pg);
     lv_label_set_text(s_chrome_batt, "PWR");
-    lv_obj_set_style_text_font(s_chrome_batt, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_letter_space(s_chrome_batt, 2, 0);
+    lv_obj_set_style_text_font(s_chrome_batt, &michroma_12, 0);
+    lv_obj_set_style_text_letter_space(s_chrome_batt, 1, 0);
     lv_obj_set_style_text_color(s_chrome_batt, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_pos(s_chrome_batt, 217, 18);
 
@@ -548,32 +540,36 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_radius(s_face_swatch, 2, 0);
     lv_obj_set_style_border_width(s_face_swatch, 0, 0);
 
-    /* LETTER-SPACING, standing in for Michroma.
+    /* THE REFERENCE'S OWN TYPEFACES, at the reference's own sizes.
      *
-     * The reference sets the display face in Michroma and the values in Share
-     * Tech Mono; neither ships with LVGL and neither has been converted, which
-     * is a stated deviation rather than an oversight. But most of what makes
-     * Michroma read as Michroma at this size is its width -- the reference's
-     * "IDLE" is 103 px for four characters, and stock Montserrat sets the same
-     * word about 20 px narrower. Tracking closes most of that gap for the cost
-     * of one style call, and the numbers below are chosen to match the
-     * reference's MEASURED widths, not picked because they looked better. It
-     * lands exactly on one of the three and near the others: the reference
-     * sets IDLE 103 / R2 PWR 99 / DOME 73, and these give 97 / 99 / 71.
-     * Montserrat is not Michroma, so tracking can hit a target width or keep
-     * the glyphs evenly spaced, and past a point not both.
+     * Michroma for the display face, Share Tech Mono for the values. Both are
+     * converted in `fonts/` and this file no longer approximates either. The
+     * letter-spacing that remains is the reference's (3 px on the word, 1 px
+     * on the labels), not the compensation it used to be -- the previous
+     * values existed to stretch Montserrat toward Michroma's width and are
+     * gone with the substitution that needed them.
      *
-     * This does not retire the font question. It makes the panel wrong in one
-     * way (a humanist face where a squarish one belongs) instead of two (that,
-     * plus proportions that are visibly off). */
+     * The sizes changed with the faces, and that is the point: the panel had
+     * been carrying sizes chosen to make a SUBSTITUTE fit. The word was
+     * montserrat_34 to approximate a 30 px Michroma; the PWR reading was
+     * montserrat_28 because a 34 px Montserrat "4.43" collided with the
+     * meter. Share Tech Mono is narrower, so both readings go to the
+     * reference's 34 and the per-reading deviation is retired.
+     *
+     * MEASURED off the glass after the swap, because a collision is exactly
+     * what a font change moves: "4.43" now clears the meter by 5 px and stops
+     * 3 px inside the right margin. The reference's own gap is 12, and the
+     * difference is not a layout fault -- it shows a 2-character percentage
+     * where this shows a 4-character voltage, for the reason recorded above
+     * the gauge. */
     s_face_word = lv_label_create(pg);
-    lv_obj_set_style_text_font(s_face_word, &lv_font_montserrat_34, 0);
-    lv_obj_set_style_text_letter_space(s_face_word, 5, 0);
+    lv_obj_set_style_text_font(s_face_word, &michroma_30, 0);
+    lv_obj_set_style_text_letter_space(s_face_word, 3, 0);
     lv_obj_set_pos(s_face_word, 58, 50);
 
     s_face_since = lv_label_create(pg);
-    lv_obj_set_style_text_font(s_face_since, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_letter_space(s_face_since, 2, 0);
+    lv_obj_set_style_text_font(s_face_since, &techmono_24, 0);
+    lv_obj_set_style_text_letter_space(s_face_since, 1, 0);
     lv_obj_set_style_text_color(s_face_since, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(s_face_since, 58, 88);
 
@@ -586,21 +582,8 @@ static void build_status_face(lv_obj_t *pg)
     /* ---- R2 PWR: label, bar graph, value ------------------------------ */
     lv_obj_t *pk = lv_label_create(pg);
     lv_label_set_text(pk, "R2 PWR");
-    lv_obj_set_style_text_font(pk, &lv_font_montserrat_18, 0);
-    /* 5, and it was briefly 3 on the strength of a claim I made by eye -- that
-     * at 5 the label ran into the bars. It does not.
-     *
-     * At ls=5 LVGL sets "R2 PWR" 99 px wide, which is exactly the reference's
-     * measured width, so the label ends at x=124 and leaves the same 7 empty
-     * columns before the bars at 132 that the reference does. Not a near
-     * miss: the same number. At ls=3 it is 89 px -- 10 px narrower than the
-     * thing this tracking exists to match -- and leaves 17.
-     *
-     * (Counted as EMPTY COLUMNS throughout. An earlier version quoted 8
-     * against the reference's 7, which was an index difference next to a
-     * column count and read as a 1 px deviation that does not exist. Two
-     * conventions in one sentence is its own kind of wrong number.) */
-    lv_obj_set_style_text_letter_space(pk, 5, 0);
+    lv_obj_set_style_text_font(pk, &michroma_16, 0);
+    lv_obj_set_style_text_letter_space(pk, 1, 0);
     lv_obj_set_style_text_color(pk, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(pk, V5_PAD, 173);
 
@@ -628,7 +611,7 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_bg_color(pwr_base, lv_color_hex(V5_SURFACE), 0);
     lv_obj_set_style_border_width(pwr_base, 0, 0);
 
-    make_value(pg, 0, PWR_VAL_Y, &lv_font_montserrat_28);   /* 4 chars */
+    make_value(pg, 0, PWR_VAL_Y, &techmono_34);
 
     /* ---- DOME: label, dial, value -------------------------------------
      * v5 draws the dial with NO NEEDLE when the heading is unknown rather
@@ -637,8 +620,8 @@ static void build_status_face(lv_obj_t *pg)
      * empty dial is the truth. */
     lv_obj_t *dk = lv_label_create(pg);
     lv_label_set_text(dk, "DOME");
-    lv_obj_set_style_text_font(dk, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_letter_space(dk, 4, 0);
+    lv_obj_set_style_text_font(dk, &michroma_16, 0);
+    lv_obj_set_style_text_letter_space(dk, 1, 0);
     lv_obj_set_style_text_color(dk, lv_color_hex(V5_LABEL), 0);
     lv_obj_set_pos(dk, V5_PAD, 282);
 
@@ -724,7 +707,7 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_line_color(s_dome_needle, lv_color_hex(PANEL_C_CYAN), 0);
     lv_obj_add_flag(s_dome_needle, LV_OBJ_FLAG_HIDDEN);
 
-    make_value(pg, 1, DOME_VAL_Y, &lv_font_montserrat_34);  /* 3 chars */
+    make_value(pg, 1, DOME_VAL_Y, &techmono_34);
 
     /* ---- FAULT CHAIN: only when something is actually wrong -----------
      * I had this permanently on the resting face. v5 defines `chain` for
@@ -756,11 +739,11 @@ static void build_status_face(lv_obj_t *pg)
          * The reference centres each label over its node, and the left edges
          * it reports are what Michroma 13 happens to produce from that. Copy
          * the edge and a narrower face drifts left of its pip -- worst for
-         * "R2", the shortest string. Centring is metric-independent, so it
-         * stays right when the real font finally lands. */
+         * "R2", the shortest string. Centring is metric-independent, which
+         * is why it survived the real font landing on the next line. */
         lv_obj_t *lbl = lv_label_create(s_chain_row);
         lv_label_set_text(lbl, k_chain_label[i]);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(lbl, &michroma_13, 0);
         lv_obj_set_style_text_letter_space(lbl, 1, 0);
         lv_obj_set_width(lbl, 64);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -1009,9 +992,12 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
                  (int)((lroundf(t->dome_degrees) % 360 + 360) % 360));
     else
         snprintf(buf, sizeof buf, "----");
-    /* The degree sign is U+00B0. LVGL's stock Montserrat carries ASCII plus a
-     * handful of symbols, so whether this renders at all is a property of the
-     * built font -- checked on the glass, not assumed. */
+    /* The degree sign is U+00B0, and the unit is set in techmono_20, whose
+     * range is `0x20-0x5F,0xB0` -- the 0xB0 is there for exactly this glyph
+     * and for nothing else. Regenerate the fonts without it and this renders
+     * as nothing. (This comment used to reason about LVGL's stock Montserrat,
+     * which stopped being the unit's font in the same branch that wrote the
+     * sentence sweeping up comments the font swap had falsified.) */
     set_value(1, buf, dome_ok ? "\xC2\xB0" : "");
 
     /* No needle when the heading is unknown. A needle parked at zero is a
