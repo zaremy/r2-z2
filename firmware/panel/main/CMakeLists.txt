@@ -4,10 +4,13 @@ idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                             "fonts/michroma_32.c"
                             "fonts/techmono_20.c" "fonts/techmono_24.c"
                             "fonts/techmono_22.c" "fonts/techmono_28.c"
+                            "fonts/techmono_14.c" "fonts/techmono_18.c"
+                            "fonts/techmono_26.c"
                             "fonts/techmono_34.c" "fonts/techmono_72.c"
                        INCLUDE_DIRS "." "fonts"
                        REQUIRES esp_timer bt nvs_flash
                                 r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state
+                                panel_service esp_psram spi_flash esp_app_format
                                 # esp_lcd_touch and esp_lvgl_port are needed for
                                 # lvgl_port_remove_touch(). Without esp_lcd_touch
                                 # on the include path, esp_lvgl_port_touch.h

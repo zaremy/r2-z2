@@ -74,7 +74,11 @@ static uint32_t s_dot_shown_at;
  * anyone is looking, and it was the one signal the dimmer ignored. */
 static volatile bool s_activity;
 static volatile bool s_press_began;   /* a finger landed since last taken */
-static volatile bool s_gesture_void;  /* this press must not become a swipe */
+static volatile bool s_gesture_void;  /* this press must become neither swipe nor tap */
+static volatile bool s_tap;           /* a press that barely moved, released */
+static volatile int16_t s_tap_x, s_tap_y;
+static int32_t s_press_max;           /* furthest this press strayed */
+static uint8_t s_chip_id;             /* 0 = the controller did not answer */
 
 static void dot_hide(void)
 {
@@ -164,6 +168,13 @@ void panel_touch_poll(void)
             s_press_at.x = x; s_press_at.y = y; s_pressing = true;
             s_press_began = true;
             s_gesture_void = false;
+            s_press_max = 0;
+        }
+        {
+            const int32_t ax = x > s_press_at.x ? x - s_press_at.x : s_press_at.x - x;
+            const int32_t ay = y > s_press_at.y ? y - s_press_at.y : s_press_at.y - y;
+            if (ax > s_press_max) s_press_max = ax;
+            if (ay > s_press_max) s_press_max = ay;
         }
         s_last_touch.x = x; s_last_touch.y = y;   /* the last REAL position */
         s_activity = true;
@@ -182,9 +193,29 @@ void panel_touch_poll(void)
          * if they are zeroed, every swipe becomes a false left-swipe. Not a
          * coin worth flipping for a gesture that changes pages. */
         const int32_t dx = s_last_touch.x - s_press_at.x;
-        if (s_gesture_void)             s_gesture_void = false;
-        else if (dx <= -PANEL_SWIPE_PX) s_swipe = PANEL_SWIPE_LEFT;
-        else if (dx >= PANEL_SWIPE_PX)  s_swipe = PANEL_SWIPE_RIGHT;
+        const int32_t dy = s_last_touch.y - s_press_at.y;
+        const int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+        /* A SWIPE IS HORIZONTAL: at least twice as far across as down. Scrolling
+         * the SERVICE list is now the commonest gesture on the panel, and a
+         * scroll with 60 px of sideways drift used to change the page. */
+        const bool across = adx > 2 * ady;
+        if (s_gesture_void)                         s_gesture_void = false;
+        else if (across && dx <= -PANEL_SWIPE_PX)   s_swipe = PANEL_SWIPE_LEFT;
+        else if (across && dx >= PANEL_SWIPE_PX)    s_swipe = PANEL_SWIPE_RIGHT;
+        /* A TAP is a release that barely moved in EITHER axis. Staying inside the
+         * radius in y is what keeps scrolling the SERVICE list from opening whatever row the
+         * finger started on; the gap between PANEL_TAP_PX and PANEL_SWIPE_PX
+         * is deliberately dead, so an uncertain gesture does nothing. The tap
+         * lands where the finger went DOWN, which is the row it was aimed
+         * at. */
+        /* ...and it must never have LEFT that radius: a drag out past the
+         * scroll limit and back scrolled the list, and ending near where it
+         * started does not make it a tap. */
+        else if (s_press_max < PANEL_TAP_PX) {
+            s_tap_x = (int16_t)s_press_at.x;
+            s_tap_y = (int16_t)s_press_at.y;
+            s_tap = true;
+        }
         /* The dot STAYS where the finger left it. Hiding it on release is what
          * makes a working panel look dead to someone who taps once and looks
          * up -- they see nothing, exactly as reported three times. */
@@ -236,7 +267,9 @@ void panel_touch_init(void)
          * touch_check reads 0xB7 = CST820 here; if we cannot, "no touch" is an
          * instrument failure and not a fact about anyone's finger. */
         uint8_t id = 0;
-        if (rd(0xA7, &id, 1) == ESP_OK)
+        const bool id_ok = rd(0xA7, &id, 1) == ESP_OK;
+        if (id_ok) s_chip_id = id;
+        if (id_ok)
             ESP_LOGI(TAG, "CST816 chip id 0x%02X %s", id,
                      id == 0xB7 ? "(CST820 -- matches #104)" : "(UNEXPECTED)");
         else
@@ -277,13 +310,20 @@ void panel_touch_init(void)
         }
 
         /* ...and give LVGL one back, fed from OUR reads. Without this LVGL has
-         * no input device at all, and the SERVICE page's scrollable list is
-         * decorative: the three interiors below the fold cannot be reached by
-         * any gesture. Found in review of #153. */
+         * no input device at all, and the SERVICE list cannot scroll: the rows
+         * below the fold could not be reached by any gesture. Found in review
+         * of #153. Taps and swipes do NOT go through it -- they are read here
+         * and routed by panel_ui -- so LVGL's only job is scrolling. */
         s_lv_indev = lv_indev_create();
         if (s_lv_indev != NULL) {
             lv_indev_set_type(s_lv_indev, LV_INDEV_TYPE_POINTER);
             lv_indev_set_read_cb(s_lv_indev, indev_read);
+            /* LVGL starts scrolling after 10 px by default, and a tap is
+             * anything under PANEL_TAP_PX. Between the two a finger both
+             * scrolled the list AND tapped it, and the tap then landed on
+             * whichever row had moved under the press point. Matching the
+             * limits makes them exclusive. */
+            lv_indev_set_scroll_limit(s_lv_indev, PANEL_TAP_PX);
             ESP_LOGI(TAG, "LVGL indev re-created, fed from our register reads "
                           "-- one hardware reader, and LVGL can scroll again");
         } else {
@@ -312,18 +352,6 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
     if (out) *out = s_ex;
 }
 
-/* NOTHING CALLS THIS YET.
- *
- * Said in those words because CLAUDE.md requires it: a PR that adds no call
- * site must declare the inertness, or it gets discovered several PRs later --
- * which is how four LED PRs shipped dead and how #97 sat broken with 588 tests
- * passing.
- *
- * The swipe threshold is AC5 and is implemented and correct; there is simply
- * nowhere to swipe TO. The three lateral pages are STATUS, SERVICE and
- * NETWORK (vault Prototypes/README.md:18), and only STATUS is built. Wiring
- * this to page navigation is the rest of child 4, and inventing the other two
- * pages' contents is what D-017 Amendment B just ruled against. */
 /* LVGL's input device, fed from OUR register reads.
  *
  * #150 deleted the BSP's indev because two drivers polling one CST816 steal
@@ -332,8 +360,9 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
  * in the UI needed touch.
  *
  * The SERVICE page needs it: a scrollable list that LVGL cannot receive a
- * finger for is decorative, and the three interiors below the fold were
- * unreachable. Child 6's tappable rows need it for the same reason.
+ * finger for is decorative, and the rows below the fold were unreachable.
+ * Scrolling is ALL it is for -- taps and swipes are decided in
+ * panel_touch_poll and routed by panel_ui, never by LVGL events.
  *
  * So LVGL gets an indev back, but NOT another driver: this callback serves
  * the state panel_touch_poll() already read. One reader of the hardware,
@@ -370,7 +399,19 @@ void panel_touch_void_gesture(void)
 {
     s_gesture_void = s_pressing;   /* only a press still in progress */
     s_swipe = PANEL_SWIPE_NONE;
+    s_tap = false;
 }
+
+bool panel_touch_take_tap(int16_t *x, int16_t *y)
+{
+    if (!s_tap) return false;
+    s_tap = false;
+    if (x) *x = s_tap_x;
+    if (y) *y = s_tap_y;
+    return true;
+}
+
+uint8_t panel_touch_chip_id(void) { return s_chip_id; }
 
 panel_swipe_t panel_touch_take_swipe(void)
 {
