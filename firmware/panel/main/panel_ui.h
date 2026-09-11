@@ -90,6 +90,9 @@ void        panel_ui_wake_dismiss(void);
  * back in there. A tap is in panel pixels, where the finger went down. */
 void        panel_ui_swipe(int dir);
 void        panel_ui_tap(int x, int y);
+/* Call on every finger LANDING, before the tap it may become is routed:
+ * it records whether the list was moving at that moment. */
+void        panel_ui_note_press(void);
 
 /* The link task's period, which IS the keepalive: one number, so the
  * R2 LINK interior cannot describe a period the link does not use. */

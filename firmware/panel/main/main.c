@@ -150,6 +150,7 @@ static void ui_task(void *arg)
             const panel_swipe_t swiped = panel_touch_take_swipe();
             const bool touched = panel_touch_take_activity();
             const bool pressed = panel_touch_take_press();
+            if (pressed) panel_ui_note_press();
             int16_t tap_x = 0, tap_y = 0;
             bool tapped = panel_touch_take_tap(&tap_x, &tap_y);
 

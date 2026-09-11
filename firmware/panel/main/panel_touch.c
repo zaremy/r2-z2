@@ -77,6 +77,7 @@ static volatile bool s_press_began;   /* a finger landed since last taken */
 static volatile bool s_gesture_void;  /* this press must become neither swipe nor tap */
 static volatile bool s_tap;           /* a press that barely moved, released */
 static volatile int16_t s_tap_x, s_tap_y;
+static int32_t s_press_max;           /* furthest this press strayed */
 static uint8_t s_chip_id;             /* 0 = the controller did not answer */
 
 static void dot_hide(void)
@@ -167,6 +168,13 @@ void panel_touch_poll(void)
             s_press_at.x = x; s_press_at.y = y; s_pressing = true;
             s_press_began = true;
             s_gesture_void = false;
+            s_press_max = 0;
+        }
+        {
+            const int32_t ax = x > s_press_at.x ? x - s_press_at.x : s_press_at.x - x;
+            const int32_t ay = y > s_press_at.y ? y - s_press_at.y : s_press_at.y - y;
+            if (ax > s_press_max) s_press_max = ax;
+            if (ay > s_press_max) s_press_max = ay;
         }
         s_last_touch.x = x; s_last_touch.y = y;   /* the last REAL position */
         s_activity = true;
@@ -200,8 +208,10 @@ void panel_touch_poll(void)
          * is deliberately dead, so an uncertain gesture does nothing. The tap
          * lands where the finger went DOWN, which is the row it was aimed
          * at. */
-        else if (dx > -PANEL_TAP_PX && dx < PANEL_TAP_PX &&
-                 dy > -PANEL_TAP_PX && dy < PANEL_TAP_PX) {
+        /* ...and it must never have LEFT that radius: a drag out past the
+         * scroll limit and back scrolled the list, and ending near where it
+         * started does not make it a tap. */
+        else if (s_press_max < PANEL_TAP_PX) {
             s_tap_x = (int16_t)s_press_at.x;
             s_tap_y = (int16_t)s_press_at.y;
             s_tap = true;
@@ -257,10 +267,9 @@ void panel_touch_init(void)
          * touch_check reads 0xB7 = CST820 here; if we cannot, "no touch" is an
          * instrument failure and not a fact about anyone's finger. */
         uint8_t id = 0;
-        if (rd(0xA7, &id, 1) == ESP_OK) {
-            s_chip_id = id;
-        }
-        if (s_chip_id != 0)
+        const bool id_ok = rd(0xA7, &id, 1) == ESP_OK;
+        if (id_ok) s_chip_id = id;
+        if (id_ok)
             ESP_LOGI(TAG, "CST816 chip id 0x%02X %s", id,
                      id == 0xB7 ? "(CST820 -- matches #104)" : "(UNEXPECTED)");
         else

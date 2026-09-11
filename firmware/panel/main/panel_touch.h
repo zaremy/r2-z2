@@ -24,8 +24,9 @@ extern "C" {
 #define PANEL_SWIPE_PX 60
 
 /* A tap moves less than this in both axes. Well under the swipe threshold
- * so the two can never both be true, and also LVGL's scroll limit (set in
- * panel_touch_init) so a tap and a scroll cannot both be true. Chosen, not
+ * so the two can never both be true. It is also LVGL's scroll limit (set in
+ * panel_touch_init), and a tap is a press that never strayed this far, so
+ * a gesture that scrolled the list is never also a tap. Chosen, not
  * measured: this controller's jitter has never been recorded. */
 #define PANEL_TAP_PX 24
 

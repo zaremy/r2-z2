@@ -519,6 +519,7 @@ static void svc_facts(const r2_telemetry_t *t, uint32_t now_ms, panel_svc_facts_
  * updates is filled from the same data as the tick after it. */
 static const r2_telemetry_t *s_last_tm;
 static int32_t s_svc_scroll_at;
+static bool    s_press_on_moving_list;
 static uint32_t s_last_now;
 
 static void fill_list(bool build)
@@ -563,6 +564,11 @@ static void fill_list(bool build)
             const int room = SVC_W - lv_obj_get_width(key) - 16;
             s_int_val[i] = text_r(row, &techmono_28, 0, V5_TEXT, SVC_W, room, 11, "");
             lv_label_set_long_mode(s_int_val[i], LV_LABEL_LONG_MODE_DOTS);
+            /* A FIXED HEIGHT, one line. DOTS only fires when the text is
+             * taller than its box, and a content-sized label grows to fit
+             * the wrap -- so without this an overlong value wrapped into
+             * the row below instead of ending in dots. */
+            lv_obj_set_height(s_int_val[i], 29);
             s_int_key[i] = kv[i].key;
         }
         if (strcmp(lv_label_get_text(s_int_val[i]), kv[i].val) != 0)
@@ -671,11 +677,12 @@ void panel_ui_tap(int x, int y)
         return;
     }
 
-    /* NOT WHILE THE LIST IS MOVING. A tap meant to stop a flick would
-     * otherwise open whatever row the momentum had carried under the finger.
-     * The scroll position is sampled every tick in svc_refresh; if it moved
-     * since, the list is still in motion. */
-    if (lv_obj_get_scroll_y(s_svc_list) != s_svc_scroll_at) return;
+    /* NOT IF THE LIST WAS MOVING WHEN THE FINGER LANDED. A tap meant to
+     * stop a flick would otherwise open whatever row the momentum had carried
+     * under it. Judged at the PRESS, not here: LVGL stops the flick the
+     * moment a finger lands, so by release the list is still and a check
+     * made now passes every tap. */
+    if (s_press_on_moving_list) return;
 
     /* Inside the list's visible box first: a row scrolled under the rule or
      * the pager still has coordinates, and must not be tappable through them. */
@@ -690,6 +697,14 @@ void panel_ui_tap(int x, int y)
         ESP_LOGI("panel", "tap -> %s", panel_service_title((panel_svc_t)i));
         return;
     }
+}
+
+void panel_ui_note_press(void)
+{
+    /* Compared with the previous tick's sample: if the list moved between
+     * that tick and this press, it was moving when the finger landed. */
+    s_press_on_moving_list = s_svc_list != NULL &&
+        lv_obj_get_scroll_y(s_svc_list) != s_svc_scroll_at;
 }
 
 void panel_ui_swipe(int dir)
@@ -714,7 +729,7 @@ void panel_ui_swipe(int dir)
 }
 
 /* Every tick: the R2 LINK square, and an open list's values. The values move
- * -- HEARD ages, R2 LINK goes to "----" the tick the link drops -- and an
+ * -- LAST READ ages, R2 LINK goes to "----" the tick the link drops -- and an
  * interior that only painted on open would be the panel vouching for a
  * reading after its link had gone, which is AC7 exactly. */
 static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
@@ -726,7 +741,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         lv_obj_set_style_bg_color(s_svc_link_sq,
             lv_color_hex(tone_colour(panel_service_link_tone(t))), 0);
     if (s_int_open != PANEL_SVC_COUNT &&
-        panel_service_kind(s_int_open) == PANEL_SVC_LIST && s_int_rows > 0)
+        panel_service_kind(s_int_open) == PANEL_SVC_LIST)
         fill_list(false);
 }
 
