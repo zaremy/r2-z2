@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "panel_state.h"
+#include "panel_wake.h"
 #include "panel_fonts.h"
 
 /* THE v5 PALETTE. Taken from the reference prototype the vault calls "the
@@ -185,11 +186,29 @@ static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
 #define DOME_VAL_Y 274
 static lv_obj_t *s_pwr_bar[PWR_BARS];
 static lv_obj_t *s_dome_needle, *s_dome_hub, *s_dome_wedge;
-static lv_obj_t *s_chain_row;
 static lv_obj_t *s_kv_val[2];                 /* PWR, DOME -- the number */
 static lv_obj_t *s_kv_unit[2];                /* and its unit, smaller */
-static lv_obj_t *s_chain_pip[4];
-static lv_obj_t *s_chain_lbl[4];
+
+/* ONE FAULT CHAIN, TWO PLACES. The resting face and the wake frame draw the
+ * same four nodes 24 px apart, so the chain is built and painted by one pair
+ * of functions rather than copied -- two copies of the broken-link rules
+ * below is how the wake frame would come to disagree with the face about
+ * which link is down. */
+typedef struct {
+    lv_obj_t *row;
+    lv_obj_t *pip[4];
+    lv_obj_t *lbl[4];
+} chain_ui_t;
+static chain_ui_t s_face_chain, s_wake_chain;
+static void paint_chain(const chain_ui_t *ui, panel_state_t st,
+                        panel_offline_mode_t mode);
+
+/* The wake frame (#101 AC3). See build_wake(). */
+static lv_obj_t *s_wake, *s_wake_swatch, *s_wake_word, *s_wake_reason;
+static lv_obj_t *s_wake_row, *s_wake_box, *s_wake_subject;
+static lv_obj_t *s_wake_what, *s_wake_down, *s_wake_sweep;
+static panel_wake_t s_wake_trk;
+static bool s_wake_up;
 static panel_state_t        s_state_now = PANEL_ST_COUNT;
 static panel_offline_mode_t s_mode_now  = PANEL_OFF_COUNT;
 
@@ -490,6 +509,60 @@ static void set_value(int i, const char *num, const char *unit)
         lv_label_set_text(s_kv_unit[i], unit);
 }
 
+/* Geometry measured off the reference: label boxes at row+6, pips 16x16 at
+ * row+32, the connector from x=56 to x=312 at row+37, and the four columns at
+ * x=43 / 128 / 214 / 307. The face's row is at y=352 and the wake frame's at
+ * 376 -- v5 draws the same chain 24 px lower there. */
+static void make_chain(lv_obj_t *parent, int y, chain_ui_t *c)
+{
+    c->row = lv_obj_create(parent);
+    lv_obj_set_size(c->row, PANEL_W, 74);
+    lv_obj_set_pos(c->row, 0, y);
+    lv_obj_set_style_bg_opa(c->row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(c->row, 0, 0);
+    lv_obj_set_style_pad_all(c->row, 0, 0);
+    lv_obj_clear_flag(c->row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *line = lv_obj_create(c->row);
+    lv_obj_set_size(line, 256, 2);
+    lv_obj_set_pos(line, 56, 37);
+    lv_obj_set_style_bg_color(line, lv_color_hex(V5_RULE), 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+
+    static const int k_pip_x[4] = { 43, 128, 214, 307 };
+    for (int i = 0; i < 4; i++) {
+        /* CENTRED ON THE PIP, not placed at the reference's left edge.
+         *
+         * The reference centres each label over its node, and the left edges
+         * it reports are what Michroma 13 happens to produce from that. Copy
+         * the edge and a narrower face drifts left of its pip -- worst for
+         * "R2", the shortest string. Centring is metric-independent, which
+         * is why it survived the real font landing on the next line.
+         *
+         * AND ON THE BASELINE, not the box top. The reference's label box
+         * starts 6 px into the row with its baseline 15 px below that;
+         * michroma_13's LVGL line is 14 px with a 2 px base line, so the
+         * label goes at 6 + 15 - 12 = 9. It sat at 6 -- three pixels high --
+         * and nobody saw, because until #161 no state that draws the chain
+         * could be reached on hardware. */
+        lv_obj_t *lbl = lv_label_create(c->row);
+        lv_label_set_text(lbl, k_chain_label[i]);
+        lv_obj_set_style_text_font(lbl, &michroma_13, 0);
+        lv_obj_set_style_text_letter_space(lbl, 1, 0);
+        lv_obj_set_width(lbl, 64);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(lbl, k_pip_x[i] + 8 - 32, 9);
+        c->lbl[i] = lbl;
+
+        lv_obj_t *pip = lv_obj_create(c->row);
+        lv_obj_set_size(pip, 16, 16);
+        lv_obj_set_pos(pip, k_pip_x[i], 32);
+        lv_obj_set_style_radius(pip, 0, 0);
+        c->pip[i] = pip;
+    }
+    lv_obj_add_flag(c->row, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void build_status_face(lv_obj_t *pg)
 {
     lv_obj_set_style_bg_color(pg, lv_color_hex(V5_GROUND), 0);
@@ -535,6 +608,13 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_pos(s_chrome_batt, 217, 18);
 
     /* ---- SWATCH + WORD + SINCE ---------------------------------------- */
+    /* STEADY, on this face and on the wake frame, and deliberately so. The
+     * v5 reference blinks the swatch for offline and danger; D-012 gives
+     * blink to escalation (slow attention, fast danger), and the operator
+     * ruled D-012 governs (D-012, the 2026-09-07 Amendment A,
+     * "Blink"). Do not re-add the
+     * reference's blink -- it is the one place "match the reference" was
+     * ruled not to reach. */
     s_face_swatch = lv_obj_create(pg);
     lv_obj_set_size(s_face_swatch, 18, 18);
     lv_obj_set_pos(s_face_swatch, V5_PAD, 56);
@@ -732,50 +812,208 @@ static void build_status_face(lv_obj_t *pg)
      * exactly four states -- the three offline modes and danger -- so a
      * healthy panel does not carry it. A fault indicator that is always
      * visible is one nobody reads. */
-    /* Geometry measured off the reference: labels at y=358, pips 16x16 at
-     * y=384, the connector from x=56 to x=312 at y=389, and the four columns
-     * at x=43 / 128 / 214 / 307. The row was at y=336 with its own invented
-     * spacing. */
-    s_chain_row = lv_obj_create(pg);
-    lv_obj_set_size(s_chain_row, PANEL_W, 74);
-    lv_obj_set_pos(s_chain_row, 0, 352);
-    lv_obj_set_style_bg_opa(s_chain_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_chain_row, 0, 0);
-    lv_obj_set_style_pad_all(s_chain_row, 0, 0);
-    lv_obj_clear_flag(s_chain_row, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *line = lv_obj_create(s_chain_row);
-    lv_obj_set_size(line, 256, 2);
-    lv_obj_set_pos(line, 56, 37);
-    lv_obj_set_style_bg_color(line, lv_color_hex(V5_RULE), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-
-    static const int k_pip_x[4] = { 43, 128, 214, 307 };
-    for (int i = 0; i < 4; i++) {
-        /* CENTRED ON THE PIP, not placed at the reference's left edge.
-         *
-         * The reference centres each label over its node, and the left edges
-         * it reports are what Michroma 13 happens to produce from that. Copy
-         * the edge and a narrower face drifts left of its pip -- worst for
-         * "R2", the shortest string. Centring is metric-independent, which
-         * is why it survived the real font landing on the next line. */
-        lv_obj_t *lbl = lv_label_create(s_chain_row);
-        lv_label_set_text(lbl, k_chain_label[i]);
-        lv_obj_set_style_text_font(lbl, &michroma_13, 0);
-        lv_obj_set_style_text_letter_space(lbl, 1, 0);
-        lv_obj_set_width(lbl, 64);
-        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_pos(lbl, k_pip_x[i] + 8 - 32, 6);
-        s_chain_lbl[i] = lbl;
-
-        lv_obj_t *pip = lv_obj_create(s_chain_row);
-        lv_obj_set_size(pip, 16, 16);
-        lv_obj_set_pos(pip, k_pip_x[i], 32);
-        lv_obj_set_style_radius(pip, 0, 0);
-        s_chain_pip[i] = pip;
-    }
-    lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
+    make_chain(pg, 352, &s_face_chain);
 }
+
+/* ---- THE WAKE FRAME (#101 AC3) --------------------------------------------
+ *
+ * The first thing on the glass when something worth interrupting for begins:
+ * the swatch, the word IN ITS COLOUR, the reason, a boxed subject, the chain,
+ * and a sweep down the screen as it lands. Nothing tappable -- D-017: "a
+ * glance that lands a thumb on a row is a glance that can arm something which
+ * moves him". A press that LANDS while it is up dismisses it and does
+ * nothing else, and no touch reaches the pages beneath it (main.c).
+ *
+ * WHEN is decided in `panel_wake` and host-tested there; this only draws.
+ *
+ * Every position is the reference's, measured with getBoundingClientRect on
+ * the rendered prototype, and set on the BASELINE rather than the box top:
+ * CSS centres a font's full ascent+descent in its line box, LVGL puts a
+ * label's baseline at line_height - base_line, and the two disagree by up to
+ * 5 px at these sizes. Worked through for each label below. */
+#define WAKE_X        26
+#define WAKE_CHAIN_Y 376                 /* the face's chain row + 24 */
+
+static void wake_container(lv_obj_t *o)
+{
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_set_style_radius(o, 0, 0);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+static void build_wake(lv_obj_t *parent)
+{
+    /* A child of the root, created after the pages AND the pips, so it covers
+     * both and drifts with everything else for burn-in. */
+    s_wake = lv_obj_create(parent);
+    lv_obj_set_size(s_wake, PANEL_W, PANEL_H);
+    lv_obj_set_pos(s_wake, 0, 0);
+    lv_obj_set_style_bg_color(s_wake, lv_color_hex(V5_GROUND), 0);
+    lv_obj_set_style_bg_opa(s_wake, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_wake, 0, 0);
+    lv_obj_set_style_radius(s_wake, 0, 0);
+    lv_obj_set_style_pad_all(s_wake, 0, 0);
+    lv_obj_clear_flag(s_wake, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_wake_swatch = lv_obj_create(s_wake);            /* 26x26 at (26,48) */
+    lv_obj_set_size(s_wake_swatch, 26, 26);
+    lv_obj_set_pos(s_wake_swatch, WAKE_X, 48);
+    lv_obj_set_style_radius(s_wake_swatch, 0, 0);
+    lv_obj_set_style_border_width(s_wake_swatch, 0, 0);
+
+    /* Michroma 32, 0.07em. Baseline at 131; line 32, base line 4 -> y 103. */
+    s_wake_word = lv_label_create(s_wake);
+    lv_obj_set_style_text_font(s_wake_word, &michroma_32, 0);
+    lv_obj_set_style_text_letter_space(s_wake_word, 2, 0);
+    lv_obj_set_pos(s_wake_word, WAKE_X, 103);
+
+    /* Share Tech Mono 28, 0.05em, label grey. Baseline 173.4; line 29, base
+     * line 5 -> y 149. */
+    s_wake_reason = lv_label_create(s_wake);
+    lv_obj_set_style_text_font(s_wake_reason, &techmono_28, 0);
+    lv_obj_set_style_text_letter_space(s_wake_reason, 1, 0);
+    lv_obj_set_style_text_color(s_wake_reason, lv_color_hex(V5_LABEL), 0);
+    lv_obj_set_pos(s_wake_reason, WAKE_X, 149);
+
+    /* THE BOX ROW: the box, 16 px, then two grey lines centred beside it.
+     * A flex row, because the box is as wide as its subject -- "R2" measures
+     * 124 px and "NET" would not -- and the lines must follow it. */
+    s_wake_row = lv_obj_create(s_wake);
+    wake_container(s_wake_row);
+    lv_obj_set_size(s_wake_row, LV_SIZE_CONTENT, 101);
+    lv_obj_set_pos(s_wake_row, WAKE_X, 206);
+    lv_obj_set_flex_flow(s_wake_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_wake_row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(s_wake_row, 16, 0);
+
+    /* 3 px border, 14 px radius, padding 6/20: 101 tall, as measured. LVGL
+     * counts the border inside the padding space, as CSS border-box does. */
+    s_wake_box = lv_obj_create(s_wake_row);
+    lv_obj_set_size(s_wake_box, LV_SIZE_CONTENT, 101);
+    lv_obj_set_style_bg_opa(s_wake_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_wake_box, 3, 0);
+    lv_obj_set_style_radius(s_wake_box, 14, 0);
+    lv_obj_set_style_pad_hor(s_wake_box, 20, 0);
+    lv_obj_set_style_pad_ver(s_wake_box, 6, 0);
+    lv_obj_clear_flag(s_wake_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Share Tech Mono 72. Baseline 279.4; line 55, base line 5 -> 229.4,
+     * which is 14 below the box's content edge at 206 + 3 + 6. */
+    s_wake_subject = lv_label_create(s_wake_box);
+    lv_obj_set_style_text_font(s_wake_subject, &techmono_72, 0);
+    lv_obj_set_pos(s_wake_subject, 0, 14);
+
+    /* Two lines of Share Tech Mono 22 at line-height 1.4 (30.8 px): each
+     * label is 22 tall, so 9 px between them keeps the pitch, and the pair
+     * (53 px) centred in 101 puts the first baseline at 248 -- the
+     * reference's 248.5. */
+    lv_obj_t *lines = lv_obj_create(s_wake_row);
+    wake_container(lines);
+    lv_obj_set_size(lines, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(lines, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(lines, 9, 0);
+    s_wake_what = lv_label_create(lines);
+    s_wake_down = lv_label_create(lines);
+    lv_obj_t *const two[2] = { s_wake_what, s_wake_down };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_set_style_text_font(two[i], &techmono_22, 0);
+        lv_obj_set_style_text_color(two[i], lv_color_hex(V5_LABEL), 0);
+        lv_label_set_text(two[i], "");
+    }
+
+    make_chain(s_wake, WAKE_CHAIN_Y, &s_wake_chain);
+
+    /* THE SWEEP: 3 px of the state colour with a 12 px glow, run once from
+     * above the top edge to below the bottom as the frame lands. v5's own
+     * [FIX] note is why it is the state colour and not white -- it was the
+     * one element in the frame not carrying it. */
+    s_wake_sweep = lv_obj_create(s_wake);
+    lv_obj_set_size(s_wake_sweep, PANEL_W, 3);
+    lv_obj_set_pos(s_wake_sweep, 0, -4);
+    lv_obj_set_style_border_width(s_wake_sweep, 0, 0);
+    lv_obj_set_style_radius(s_wake_sweep, 0, 0);
+    lv_obj_set_style_shadow_width(s_wake_sweep, 12, 0);
+    lv_obj_set_style_shadow_opa(s_wake_sweep, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_wake_sweep, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_add_flag(s_wake, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Repaint the frame for a state that has just fired it. Called on entry
+ * only: the one thing that changes while it is up is the DOWN count. */
+static void wake_paint(panel_state_t st, panel_offline_mode_t mode)
+{
+    /* THE WORD CARRIES THE COLOUR HERE, unlike the resting face -- it is
+     * part of how the frame reads as an interruption rather than a screen. */
+    const lv_color_t c = lv_color_hex(panel_state_colour(st));
+    lv_obj_set_style_bg_color(s_wake_swatch, c, 0);
+    lv_label_set_text(s_wake_word, panel_state_word(st));
+    lv_obj_set_style_text_color(s_wake_word, c, 0);
+    lv_label_set_text(s_wake_reason, panel_state_since(st, mode));
+
+    const char *subject, *what;
+    if (panel_wake_box(st, mode, &subject, &what)) {
+        lv_label_set_text(s_wake_subject, subject);
+        lv_obj_set_style_text_color(s_wake_subject, c, 0);
+        lv_obj_set_style_border_color(s_wake_box, c, 0);
+        lv_label_set_text(s_wake_what, what);
+        lv_label_set_text(s_wake_down, "");     /* set each tick, R2 only */
+        lv_obj_remove_flag(s_wake_row, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_wake_row, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    paint_chain(&s_wake_chain, st, mode);
+
+    lv_obj_set_style_bg_color(s_wake_sweep, c, 0);
+    lv_obj_set_style_shadow_color(s_wake_sweep, c, 0);
+}
+
+static void wake_sweep_y(void *obj, int32_t v) { lv_obj_set_y((lv_obj_t *)obj, v); }
+static void wake_sweep_done(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_add_flag(s_wake_sweep, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* One pass, 450 ms, linear: the reference's 0.5 s keyframes move it for the
+ * first 90% and fade it below the bottom edge for the rest, where it cannot
+ * be seen -- so the fade is not modelled. A one-shot, never a loop. */
+static void wake_sweep_start(void)
+{
+    lv_anim_delete(s_wake_sweep, NULL);
+    lv_obj_set_y(s_wake_sweep, -4);
+    lv_obj_remove_flag(s_wake_sweep, LV_OBJ_FLAG_HIDDEN);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_wake_sweep);
+    lv_anim_set_exec_cb(&a, wake_sweep_y);
+    lv_anim_set_values(&a, -4, PANEL_H);
+    lv_anim_set_duration(&a, 450);
+    lv_anim_set_path_cb(&a, lv_anim_path_linear);
+    lv_anim_set_completed_cb(&a, wake_sweep_done);
+    lv_anim_start(&a);
+}
+
+static void wake_show(bool up)
+{
+    if (up == s_wake_up) return;
+    s_wake_up = up;
+    if (up) lv_obj_remove_flag(s_wake, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(s_wake, LV_OBJ_FLAG_HIDDEN);
+}
+
+void panel_ui_wake_dismiss(void)
+{
+    panel_wake_dismiss(&s_wake_trk);
+    wake_show(false);
+}
+
+bool panel_ui_wake_showing(void) { return s_wake_up; }
 
 void panel_ui_create(void)
 {
@@ -825,6 +1063,8 @@ void panel_ui_create(void)
     }
 
     make_pips(s_root);
+    build_wake(s_root);                 /* last: it covers the pips too */
+    panel_wake_init(&s_wake_trk);
     panel_ui_show_page(PAGE_STATUS);
 }
 
@@ -848,6 +1088,50 @@ static uint32_t chain_colour(chain_t c)
     case CH_FAULT: return PANEL_C_RED;
     case CH_UNK:
     default:       return V5_SURFACE;   /* unknown is absence, not a claim */
+    }
+}
+
+static void paint_chain(const chain_ui_t *ui, panel_state_t st,
+                        panel_offline_mode_t mode)
+{
+    if (!face_has_chain(st)) {
+        lv_obj_add_flag(ui->row, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    chain_t chain[4];
+    face_chain(st, mode, chain);
+    lv_obj_remove_flag(ui->row, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 4; i++) {
+        /* THE BROKEN LINK IS HOLLOW, not filled.
+         *
+         * The reference draws a down or faulted node as a 3 px ring in the
+         * fault colour around the ground, and lights its LABEL to match,
+         * while every healthy node is a solid block with a grey label. It is
+         * the same idea as the swatch: the eye finds the odd one out by
+         * SHAPE first and colour second, which survives being glanced at and
+         * being colour-blind. A filled amber square among filled green ones
+         * relies on hue alone.
+         *
+         * THE LABEL HAS THREE STATES, not two. The reference gives a healthy
+         * node's label V5_LABEL, an UNKNOWN node's V5_DIM, and the broken one
+         * the fault colour. Painting both non-broken cases the same grey was
+         * mine, and it contradicts this file's own rule one function up:
+         * chain_colour() dims an unknown pip to V5_SURFACE because unknown is
+         * absence rather than a claim, so a caption at healthy brightness
+         * beside it says the opposite. It matters here more than in the
+         * reference: this build has a source for R2 only, so three of the
+         * four nodes are UNKNOWN in every chain it can draw. */
+        const bool broken = (chain[i] == CH_DOWN || chain[i] == CH_FAULT);
+        const uint32_t c = chain_colour(chain[i]);
+        lv_obj_set_style_bg_color(ui->pip[i],
+            lv_color_hex(broken ? V5_GROUND : c), 0);
+        lv_obj_set_style_border_width(ui->pip[i], broken ? 3 : 0, 0);
+        lv_obj_set_style_border_color(ui->pip[i], lv_color_hex(c), 0);
+
+        uint32_t lc = V5_DIM;                    /* CH_UNK */
+        if (broken)                  lc = c;
+        else if (chain[i] == CH_OK)  lc = V5_LABEL;
+        lv_obj_set_style_text_color(ui->lbl[i], lv_color_hex(lc), 0);
     }
 }
 
@@ -889,47 +1173,7 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(colour), 0);
         lv_label_set_text(s_face_since, panel_state_since(st, mode));
 
-        if (face_has_chain(st)) {
-            chain_t chain[4];
-            face_chain(st, mode, chain);
-            lv_obj_remove_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
-            for (int i = 0; i < 4; i++) {
-                /* THE BROKEN LINK IS HOLLOW, not filled.
-                 *
-                 * The reference draws a down or faulted node as a 3 px ring
-                 * in the fault colour around the ground, and lights its LABEL
-                 * to match, while every healthy node is a solid block with a
-                 * grey label. It is the same idea as the swatch: the eye
-                 * finds the odd one out by SHAPE first and colour second,
-                 * which survives being glanced at and being colour-blind. A
-                 * filled amber square among filled green ones relies on hue
-                 * alone.
-                 *
-                 * THE LABEL HAS THREE STATES, not two. The reference gives a
-                 * healthy node's label V5_LABEL, an UNKNOWN node's V5_DIM,
-                 * and the broken one the fault colour. Painting both
-                 * non-broken cases the same grey was mine, and it contradicts
-                 * this file's own rule one function up: chain_colour() dims an
-                 * unknown pip to V5_SURFACE because unknown is absence rather
-                 * than a claim, so a caption at healthy brightness beside it
-                 * says the opposite. It matters here more than in the
-                 * reference: this build has a source for R2 only, so three of
-                 * the four nodes are UNKNOWN in every chain it can draw. */
-                const bool broken = (chain[i] == CH_DOWN || chain[i] == CH_FAULT);
-                const uint32_t c = chain_colour(chain[i]);
-                lv_obj_set_style_bg_color(s_chain_pip[i],
-                    lv_color_hex(broken ? V5_GROUND : c), 0);
-                lv_obj_set_style_border_width(s_chain_pip[i], broken ? 3 : 0, 0);
-                lv_obj_set_style_border_color(s_chain_pip[i], lv_color_hex(c), 0);
-
-                uint32_t lc = V5_DIM;                    /* CH_UNK */
-                if (broken)                  lc = c;
-                else if (chain[i] == CH_OK)  lc = V5_LABEL;
-                lv_obj_set_style_text_color(s_chain_lbl[i], lv_color_hex(lc), 0);
-            }
-        } else {
-            lv_obj_add_flag(s_chain_row, LV_OBJ_FLAG_HIDDEN);
-        }
+        paint_chain(&s_face_chain, st, mode);
     }
 
     /* ---- R2 PWR ------------------------------------------------------- */
@@ -1093,6 +1337,38 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
         lv_obj_remove_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* ---- THE WAKE FRAME (#101 AC3) -----------------------------------
+     * `panel_wake` decides; this draws. It fires on ENTERING danger, offline
+     * or attention, and paints on the tracker's own rising edge -- which
+     * includes an escalation while it is already up, the one moment it must
+     * be repainted. Never on a second change detector: two that agree only by
+     * coincidence are how a frame rises that was never drawn. Firing also
+     * brings the STATUS page forward, the reference's behaviour: when the
+     * frame decays, the face underneath is the detail for what it said. */
+    const bool up = panel_wake_step(&s_wake_trk, st, mode, now_ms);
+    if (panel_wake_take_fired(&s_wake_trk) && up) {
+        wake_paint(st, mode);
+        wake_sweep_start();
+        panel_ui_show_page(PAGE_STATUS);
+    }
+    wake_show(up);
+
+    /* How long he has been gone, counting while the frame is up. Only for
+     * the R2 view: it is the one link this board times, and a NET or LLM
+     * count borrowed from R2's clock would be a number about the wrong
+     * thing. And only if we SAW him go: an attempt that began at boot is as
+     * old as our looking, not his absence, so a panel that restarted while
+     * he was off for hours says NOT SEEN rather than "DOWN 4S". */
+    if (up && st == PANEL_ST_OFFLINE && mode == PANEL_OFF_R2) {
+        char down[16];
+        if (t->attempt_from_up)
+            panel_wake_format_down(away, down, sizeof down);
+        else
+            snprintf(down, sizeof down, "NOT SEEN");
+        if (strcmp(lv_label_get_text(s_wake_down), down) != 0)
+            lv_label_set_text(s_wake_down, down);
     }
 
     /* The four rows LINK / R2 / STORAGE / BRAIN are GONE from this page.

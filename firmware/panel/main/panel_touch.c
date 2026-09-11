@@ -73,6 +73,8 @@ static uint32_t s_dot_shown_at;
  * voltage as a minute ago. Deliberate interaction is the strongest evidence
  * anyone is looking, and it was the one signal the dimmer ignored. */
 static volatile bool s_activity;
+static volatile bool s_press_began;   /* a finger landed since last taken */
+static volatile bool s_gesture_void;  /* this press must not become a swipe */
 
 static void dot_hide(void)
 {
@@ -158,7 +160,11 @@ void panel_touch_poll(void)
     const int y = ((buf[4] & 0x0F) << 8) | buf[5];
 
     if (fingers > 0) {
-        if (!s_pressing) { s_press_at.x = x; s_press_at.y = y; s_pressing = true; }
+        if (!s_pressing) {
+            s_press_at.x = x; s_press_at.y = y; s_pressing = true;
+            s_press_began = true;
+            s_gesture_void = false;
+        }
         s_last_touch.x = x; s_last_touch.y = y;   /* the last REAL position */
         s_activity = true;
         s_dot_x = x; s_dot_y = y;
@@ -176,7 +182,8 @@ void panel_touch_poll(void)
          * if they are zeroed, every swipe becomes a false left-swipe. Not a
          * coin worth flipping for a gesture that changes pages. */
         const int32_t dx = s_last_touch.x - s_press_at.x;
-        if (dx <= -PANEL_SWIPE_PX)      s_swipe = PANEL_SWIPE_LEFT;
+        if (s_gesture_void)             s_gesture_void = false;
+        else if (dx <= -PANEL_SWIPE_PX) s_swipe = PANEL_SWIPE_LEFT;
         else if (dx >= PANEL_SWIPE_PX)  s_swipe = PANEL_SWIPE_RIGHT;
         /* The dot STAYS where the finger left it. Hiding it on release is what
          * makes a working panel look dead to someone who taps once and looks
@@ -350,6 +357,19 @@ bool panel_touch_take_activity(void)
     const bool a = s_activity;
     s_activity = false;
     return a;
+}
+
+bool panel_touch_take_press(void)
+{
+    const bool p = s_press_began;
+    s_press_began = false;
+    return p;
+}
+
+void panel_touch_void_gesture(void)
+{
+    s_gesture_void = s_pressing;   /* only a press still in progress */
+    s_swipe = PANEL_SWIPE_NONE;
 }
 
 panel_swipe_t panel_touch_take_swipe(void)

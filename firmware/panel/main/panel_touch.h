@@ -57,6 +57,17 @@ panel_swipe_t panel_touch_take_swipe(void);
  * someone is looking at it. */
 bool panel_touch_take_activity(void);
 
+/* True once per finger LANDING -- not while it stays down. Activity says
+ * a finger is on the glass; this says a new touch began, which is what
+ * separates "I tapped the frame" from "my finger was already there when
+ * it appeared". */
+bool panel_touch_take_press(void);
+
+/* The press in progress will not become a swipe on release, and any swipe
+ * not yet taken is dropped. For a touch that has been consumed by
+ * something else -- the wake frame's dismissal. */
+void panel_touch_void_gesture(void);
+
 #ifdef __cplusplus
 }
 #endif

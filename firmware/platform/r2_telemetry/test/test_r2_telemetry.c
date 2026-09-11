@@ -269,6 +269,29 @@ static void test_having_him_back_closes_the_attempt(void)
           r2_telemetry_unreachable_ms(&t, 90500));
 }
 
+/* How long he has been GONE is only knowable if we saw him go. A boot's
+ * attempt measures how long we have been looking; a drop's measures his
+ * absence. The panel must be able to tell them apart. */
+static void test_an_attempt_knows_whether_it_lost_him(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 900);
+    CHECK(!t.attempt_from_up, "a boot attempt claimed to have lost a live link");
+    r2_telemetry_link(&t, R2_TM_UP, 3000);
+    r2_telemetry_link(&t, R2_TM_DOWN, 9000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 9000);
+    CHECK(t.attempt_from_up, "a drop from a live link was not recorded as one");
+    /* A dropped handshake mid-attempt does not rewrite how it began. */
+    r2_telemetry_link(&t, R2_TM_CONNECTING, 9500);
+    r2_telemetry_link(&t, R2_TM_DOWN, 9800);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 9800);
+    CHECK(t.attempt_from_up, "a mid-attempt DOWN rewrote how the attempt began");
+    /* And a reset forgets it: the next boot has not lost anyone. */
+    r2_telemetry_reset(&t);
+    CHECK(!t.attempt_from_up, "a reset kept the previous attempt's origin");
+}
+
 /* A reconnect can leave UP for SCANNING without ever visiting DOWN; the
  * attempt starts there all the same. */
 static void test_leaving_up_by_any_route_starts_the_clock(void)
@@ -388,6 +411,7 @@ int main(void)
     test_a_failed_connect_does_not_restart_the_clock();
     test_a_dropped_handshake_does_not_restart_the_clock();
     test_having_him_back_closes_the_attempt();
+    test_an_attempt_knows_whether_it_lost_him();
     test_leaving_up_by_any_route_starts_the_clock();
     test_a_live_link_is_not_unreachable();
     test_boot_is_timed_from_the_first_scan();

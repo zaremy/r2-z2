@@ -164,8 +164,8 @@ uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
  * So the bound absorbs TWO missed windows from the slower common base --
  * 2650 + 2 x 500 = 3650 ms worst case -- plus ~450 ms of margin. The epic's
  * "~3.5 s" would have tripped on the first double miss, and an overrun here
- * is not a slow bar -- it is OFFLINE in amber and, once the wake frame
- * exists, a six-second interruption for a fault that is not there. The cost
+ * is not a slow bar -- it is OFFLINE in amber and, since the wake frame
+ * fires on it, a six-second interruption for a fault that is not there. The cost
  * the other way is 0.6 s more before a real absence is called, which nobody
  * standing in front of the panel can tell apart. */
 #define PANEL_WAKING_BOUND_MS 4100u

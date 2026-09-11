@@ -1,8 +1,10 @@
 idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                             "fonts/michroma_12.c" "fonts/michroma_13.c"
                             "fonts/michroma_16.c" "fonts/michroma_30.c"
+                            "fonts/michroma_32.c"
                             "fonts/techmono_20.c" "fonts/techmono_24.c"
-                            "fonts/techmono_34.c"
+                            "fonts/techmono_22.c" "fonts/techmono_28.c"
+                            "fonts/techmono_34.c" "fonts/techmono_72.c"
                        INCLUDE_DIRS "." "fonts"
                        REQUIRES esp_timer bt nvs_flash
                                 r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state
@@ -24,6 +26,16 @@ option(PANEL_P2_RECONNECT "Time the panel's own BLE reconnect (P2)" OFF)
 if(PANEL_P2_RECONNECT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_P2_RECONNECT=1)
     message(STATUS "panel: P2 reconnect timing ENABLED")
+endif()
+
+# Screenshot the wake frame the moment it lands (#101 AC3). OFF by default --
+# it replaces the periodic 60 s capture, so a panel built with it stops
+# recording the resting face. For verifying the frame on glass, nothing else.
+#   idf.py -DPANEL_SHOT_WAKE=ON build
+option(PANEL_SHOT_WAKE "Capture the wake frame instead of the periodic shot" OFF)
+if(PANEL_SHOT_WAKE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SHOT_WAKE=1)
+    message(STATUS "panel: screenshot ON WAKE FRAME (periodic shots off)")
 endif()
 
 # P4: watch his advertisement without ever connecting (#101). OFF by default --

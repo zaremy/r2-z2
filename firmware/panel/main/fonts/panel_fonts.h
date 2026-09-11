@@ -14,7 +14,10 @@
  * panels always have.
  *
  * Generated with lv_font_conv 1.5.3, 4 bpp, range 0x20-0x5F plus 0xB0:
- * uppercase, digits, punctuation and the degree sign. NO LOWERCASE -- every
+ * uppercase, digits, punctuation and the degree sign. techmono_72 is the
+ * one exception: space, hyphen, digits and uppercase only, because it sets
+ * nothing but the wake frame's boxed subject and each glyph at 72 px is
+ * large enough that unused punctuation is not free. NO LOWERCASE -- every
  * string on the status face is uppercase, and dropping it roughly halves the
  * flash. Anything that needs lowercase (the NETWORK page's "no Wi-Fi in this
  * build") stays on Montserrat, which is still built.
@@ -35,10 +38,14 @@ LV_FONT_DECLARE(michroma_12)    /* chrome: LLM, PWR */
 LV_FONT_DECLARE(michroma_13)    /* chain node labels */
 LV_FONT_DECLARE(michroma_16)    /* R2 PWR, DOME */
 LV_FONT_DECLARE(michroma_30)    /* the state word */
+LV_FONT_DECLARE(michroma_32)    /* the wake frame's word */
 
 /* Share Tech Mono -- values, and the reason line under the word. */
 LV_FONT_DECLARE(techmono_20)    /* a reading's unit */
+LV_FONT_DECLARE(techmono_22)    /* the wake frame's box lines */
 LV_FONT_DECLARE(techmono_24)    /* the reason line */
+LV_FONT_DECLARE(techmono_28)    /* the wake frame's reason */
 LV_FONT_DECLARE(techmono_34)    /* a reading's number */
+LV_FONT_DECLARE(techmono_72)    /* the wake frame's boxed subject */
 
 #endif /* PANEL_FONTS_H */

@@ -59,6 +59,11 @@ typedef struct {
      * r2_telemetry_unreachable_ms. */
     uint32_t      unreachable_since_ms;
     bool          attempt_open;    /* an attempt is running; closed only by UP */
+    /* Did the current attempt begin by LOSING a live link? False when it
+     * began at boot: then its age is how long WE have been looking, not how
+     * long he has been gone, and a panel that rebooted while he was off for
+     * hours must not report that as "down 4 s". */
+    bool          attempt_from_up;
 
     r2_tm_stamp_t battery;
     uint16_t      battery_centivolts;
