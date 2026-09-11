@@ -276,11 +276,12 @@ static void test_waking_is_bounded(void)
     CHECK(st == PANEL_ST_OFFLINE, "gone for 49 days read %s",
           panel_state_name(st));
 
-    /* Pinned as a range rather than a value. Below ~3600 ms a reconnect that
-     * misses two ~500 ms scan windows (2600 + 2 x 500) calls a false OFFLINE,
-     * which P2's own write-up warns 8 trials could not see; far above it, a
-     * real absence goes unannounced for longer than the evidence justifies. */
-    CHECK(PANEL_WAKING_BOUND_MS > 3600u && PANEL_WAKING_BOUND_MS <= 5000u,
+    /* Pinned as a range rather than a value. Below 3650 ms a reconnect that
+     * misses two ~500 ms scan windows from the 2650 ms base (six of P2's eight
+     * samples sit at 2600-2650) calls a false OFFLINE, which P2's own write-up
+     * warns 8 trials could not see; far above it, a real absence goes
+     * unannounced for longer than the evidence justifies. */
+    CHECK(PANEL_WAKING_BOUND_MS >= 3650u && PANEL_WAKING_BOUND_MS <= 5000u,
           "the waking bound is %u ms, outside P2's evidence",
           (unsigned)PANEL_WAKING_BOUND_MS);
 }

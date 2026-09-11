@@ -1077,13 +1077,16 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
      * gone. Not counted as a change for the dimmer -- it is time passing,
      * the same as a value's last digit wobbling. */
     if (st == PANEL_ST_WAKING) {
-        /* EMPTY UNTIL SOMETHING IS SCANNING. Before the BLE host syncs the
+        /* EMPTY UNTIL AN ATTEMPT HAS OPENED. Before the BLE host syncs the
          * count runs from reset, and the first scan restarts it at ~1.1 s --
          * so a bar drawn from it would fill to a quarter and snap back to
-         * empty on every boot. There is nothing to show progress OF until a
-         * scan exists; DOWN is only ever held before one does. */
-        const unsigned pm = (t->link == R2_TM_DOWN)
-                            ? 0u : panel_state_waking_permille(away);
+         * empty on every boot. Keyed on the attempt and not on DOWN: DOWN is
+         * also passed through mid-attempt (a dropped handshake) and held
+         * after a rescan fails to start, and emptying the bar there would
+         * make an attempt that is still running look like one starting over.
+         * No host test reaches this line; panel_ui.c is device-only. */
+        const unsigned pm = t->attempt_open
+                            ? panel_state_waking_permille(away) : 0u;
         const int w = (PANEL_W - 2 * V5_PAD) * (int)pm / 1000;
         if (lv_obj_get_width(s_waking_fill) != w)
             lv_obj_set_width(s_waking_fill, w);
