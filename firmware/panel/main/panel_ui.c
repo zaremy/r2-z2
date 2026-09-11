@@ -608,6 +608,12 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_pos(s_chrome_batt, 217, 18);
 
     /* ---- SWATCH + WORD + SINCE ---------------------------------------- */
+    /* STEADY, on this face and on the wake frame, and deliberately so. The
+     * v5 reference blinks the swatch for offline and danger; D-012 gives
+     * blink to escalation (slow attention, fast danger), and the operator
+     * ruled D-012 governs (D-012 Amendment A, "Blink"). Do not re-add the
+     * reference's blink -- it is the one place "match the reference" was
+     * ruled not to reach. */
     s_face_swatch = lv_obj_create(pg);
     lv_obj_set_size(s_face_swatch, 18, 18);
     lv_obj_set_pos(s_face_swatch, V5_PAD, 56);
