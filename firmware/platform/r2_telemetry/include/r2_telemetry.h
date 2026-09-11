@@ -52,6 +52,13 @@ typedef struct {
 typedef struct {
     r2_tm_link_t  link;
     uint32_t      link_since_ms;   /* when the link last entered its current state */
+    /* When the current attempt to reach him BEGAN. Not the same as
+     * link_since_ms, which restarts on every step of a reconnect: everything
+     * between losing him and having him back is ONE attempt, however many
+     * scans, connects and dropped handshakes it takes. Read it through
+     * r2_telemetry_unreachable_ms. */
+    uint32_t      unreachable_since_ms;
+    bool          attempt_open;    /* an attempt is running; closed only by UP */
 
     r2_tm_stamp_t battery;
     uint16_t      battery_centivolts;
@@ -93,6 +100,24 @@ bool r2_telemetry_age_ms(const r2_tm_stamp_t *s, uint32_t now_ms, uint32_t *age_
  * or taken before the current link came up, is not displayable. */
 bool r2_telemetry_displayable(const r2_telemetry_t *t, const r2_tm_stamp_t *s,
                               uint32_t now_ms, uint32_t max_age_ms);
+
+/* How long we have been trying to reach him, or 0 while the link is UP.
+ *
+ * AN ATTEMPT OPENS ON THE FIRST TRANSITION INTO A NON-UP STATE AND CLOSES
+ * ONLY ON UP. Every step in between -- scan, connect, a connect that fails and
+ * rescans, a handshake that drops back through DOWN -- is the same attempt
+ * continuing. An earlier version restarted the clock on leaving DOWN, and a
+ * droid that connected and dropped every 1.5 s then read 100 ms unreachable
+ * forever: `waking` without end, which is the bug the bound exists to end.
+ *
+ * At boot the first transition is DOWN -> SCANNING, so a boot is timed from
+ * its first scan -- the interval P2 measured -- rather than from power-on,
+ * which would bill the radio's own ~1.1 s bring-up to R2. Before that nothing
+ * has opened, so this is the time since reset: a radio that never comes up
+ * reads as unreachable rather than as forever about to connect.
+ *
+ * Wrap-safe across 2^32 ms. */
+uint32_t r2_telemetry_unreachable_ms(const r2_telemetry_t *t, uint32_t now_ms);
 
 const char *r2_telemetry_link_name(r2_tm_link_t s);
 

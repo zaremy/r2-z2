@@ -155,6 +155,7 @@ static const char *k_service_rows[] = {
 };
 #define N_SERVICE_ROWS (sizeof k_service_rows / sizeof k_service_rows[0])
 static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
+static lv_obj_t *s_waking_fill;       /* AC8: the rule, filling while waking */
 static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
 /* EVERY NUMBER BELOW WAS MEASURED off panel-v5-interactive.html, by reading
  * getBoundingClientRect on each element and scaling to the panel's 368 px
@@ -578,6 +579,23 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_pos(rule, V5_PAD, 135);
     lv_obj_set_style_bg_color(rule, lv_color_hex(V5_RULE), 0);
     lv_obj_set_style_border_width(rule, 0, 0);
+
+    /* AC8: `waking` shows BOUNDED PROGRESS, and the bar is this rule.
+     *
+     * The reference has no `waking` state (it is D-023's), so there is no
+     * measured geometry to match -- and the choice was between inventing a
+     * new element and giving an existing one a second job. The rule sits
+     * directly under the word and reason it qualifies, it is already the full
+     * content width, and a rule that fills is read as progress without a
+     * label. It fills in the state's own blue and is empty on every other
+     * state, so at rest it is exactly the reference's rule. */
+    s_waking_fill = lv_obj_create(pg);
+    lv_obj_set_size(s_waking_fill, 0, 2);
+    lv_obj_set_pos(s_waking_fill, V5_PAD, 135);
+    lv_obj_set_style_bg_color(s_waking_fill, lv_color_hex(PANEL_C_BLUE), 0);
+    lv_obj_set_style_border_width(s_waking_fill, 0, 0);
+    lv_obj_set_style_radius(s_waking_fill, 0, 0);
+    lv_obj_add_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
 
     /* ---- R2 PWR: label, bar graph, value ------------------------------ */
     lv_obj_t *pk = lv_label_create(pg);
@@ -1050,9 +1068,29 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
      * each was built above the last without one path reaching the hardware. */
     panel_state_t st;
     panel_offline_mode_t mode;
-    panel_state_from_link(t->link == R2_TM_UP, t->link == R2_TM_DOWN,
-                          &st, &mode);
+    const uint32_t away = r2_telemetry_unreachable_ms(t, now_ms);
+    panel_state_from_link(t->link == R2_TM_UP, away, &st, &mode);
     set_face(st, mode, t, now_ms);
+
+    /* The bar moves every tick, not only on a state change: progress that
+     * repaints only when the state flips is a bar that jumps from empty to
+     * gone. Not counted as a change for the dimmer -- it is time passing,
+     * the same as a value's last digit wobbling. */
+    if (st == PANEL_ST_WAKING) {
+        /* EMPTY UNTIL SOMETHING IS SCANNING. Before the BLE host syncs the
+         * count runs from reset, and the first scan restarts it at ~1.1 s --
+         * so a bar drawn from it would fill to a quarter and snap back to
+         * empty on every boot. There is nothing to show progress OF until a
+         * scan exists; DOWN is only ever held before one does. */
+        const unsigned pm = (t->link == R2_TM_DOWN)
+                            ? 0u : panel_state_waking_permille(away);
+        const int w = (PANEL_W - 2 * V5_PAD) * (int)pm / 1000;
+        if (lv_obj_get_width(s_waking_fill) != w)
+            lv_obj_set_width(s_waking_fill, w);
+        lv_obj_remove_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* The four rows LINK / R2 / STORAGE / BRAIN are GONE from this page.
      * They were built as the whole status screen from AC4's wording; the v5

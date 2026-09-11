@@ -166,35 +166,43 @@ panel_state_t panel_state_resolve(uint32_t active)
     return PANEL_ST_COUNT;
 }
 
-uint32_t panel_state_from_link(bool link_up, bool link_down,
+uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
                                panel_state_t *out_state,
                                panel_offline_mode_t *out_mode)
 {
     uint32_t active = 0;
     panel_offline_mode_t mode = PANEL_OFF_COUNT;
 
-    if (link_down) {
+    if (link_up) {
+        /* `idle`, never `listen` / `thinking` / `waiting`. Those need a
+         * reasoning layer that does not run on this board, and claiming one
+         * would be the panel inventing an interaction that never happened. */
+        active |= 1u << PANEL_ST_IDLE;
+    } else if (unreachable_ms > PANEL_WAKING_BOUND_MS) {
         active |= 1u << PANEL_ST_OFFLINE;
         /* PANEL_OFF_R2 and not NET or LLM: the BLE link is the only one this
          * build has. Reporting NET here would be the panel diagnosing a
          * subsystem it cannot see. */
         mode = PANEL_OFF_R2;
-    } else if (link_up) {
-        /* `idle`, never `listen` / `thinking` / `waiting`. Those need a
-         * reasoning layer that does not run on this board, and claiming one
-         * would be the panel inventing an interaction that never happened. */
-        active |= 1u << PANEL_ST_IDLE;
     }
 
     const panel_state_t won = panel_state_resolve(active);
 
-    /* No ranked state means the link is mid-transition. `waking` is unranked
-     * BY DESIGN (D-023), so it can never win a contest against a real fault;
-     * being chosen deliberately here is the only way an unranked state ever
-     * reaches the glass. */
+    /* No ranked state means the link is mid-reconnect and still inside the
+     * bound. `waking` is unranked BY DESIGN (D-023), so it can never win a
+     * contest against a real fault; being chosen deliberately here is the
+     * only way an unranked state ever reaches the glass. */
     if (out_state) *out_state = (won == PANEL_ST_COUNT) ? PANEL_ST_WAKING : won;
     if (out_mode)  *out_mode  = mode;
     return active;
+}
+
+unsigned panel_state_waking_permille(uint32_t unreachable_ms)
+{
+    /* Test the bound BEFORE multiplying: 4.3 million ms times 1000 already
+     * overflows 32 bits, and he is routinely away for longer than that. */
+    if (unreachable_ms >= PANEL_WAKING_BOUND_MS) return 1000u;
+    return (unsigned)(unreachable_ms * 1000u / PANEL_WAKING_BOUND_MS);
 }
 
 const char *panel_state_name(panel_state_t s)

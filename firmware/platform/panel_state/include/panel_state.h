@@ -135,16 +135,44 @@ panel_state_t panel_state_resolve(uint32_t active);
  * `IDLE` can never be evidence that the derivation works. Both pictures look
  * the same whether the wiring is live or dead.
  *
- * `link_up`/`link_down` are the two link facts this board has. Anything else
- * -- scanning, connecting, handshaking -- is a transition, and both false is
- * how a caller says so.
+ * `link_up` is whether the link is up; `unreachable_ms` is how long we have
+ * been trying to reach him (r2_telemetry_unreachable_ms), ignored while up.
+ *
+ * `waking` IS BOUNDED, and past the bound he is `offline`. The previous
+ * version took a `link_down` flag and called only DOWN offline -- but r2_link
+ * never holds DOWN: a disconnect sets it and restarts the scan in the same
+ * callback. So a droid switched off, flat, or carried out of range read
+ * WAKING / FINDING HIM for as long as he was gone, and `offline` was
+ * unreachable on the one board that renders it. D-023 left `waking` unranked
+ * on the premise that it "resolves itself in seconds"; this is what holds it
+ * to that.
  *
  * Writes the resolved state to `*out_state` and, when that is `offline`, the
  * view to `*out_mode`. Returns the mask it built, so a caller (and a test)
  * can see WHICH states were candidates rather than only which one won. */
-uint32_t panel_state_from_link(bool link_up, bool link_down,
+uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
                                panel_state_t *out_state,
                                panel_offline_mode_t *out_mode);
+
+/* How long `waking` may last before it is `offline` (#101 AC8).
+ *
+ * P2 (#142) timed this board's own reconnect at 2600-3101 ms, n=8, and its
+ * write-up reads the distribution as QUANTISED: six of eight at 2600-2650 and
+ * one at 3101, which is one missed ~500 ms scan window rather than a slow
+ * reconnect -- and it says in terms that 8 trials cannot see a double miss.
+ *
+ * So the bound is 2600 + 3 x 500: it absorbs TWO missed windows. The epic's
+ * "~3.5 s" would have tripped on the first double miss (~3.6 s), and an
+ * overrun here is not a slow bar -- it is OFFLINE in amber and, once the wake
+ * frame exists, a six-second interruption for a fault that is not there. The
+ * cost the other way is 0.6 s more before a real absence is called, which
+ * nobody standing in front of the panel can tell apart. */
+#define PANEL_WAKING_BOUND_MS 4100u
+
+/* Progress through `waking`, 0-1000, for the bar. Saturates at 1000 and does
+ * not wrap: `unreachable_ms` grows without limit while he is away, and a
+ * multiply that overflowed would send the bar back to empty. */
+unsigned panel_state_waking_permille(uint32_t unreachable_ms);
 
 /* Rendering. `since` for `offline` depends on the display mode; for every
  * other state the mode is ignored. */

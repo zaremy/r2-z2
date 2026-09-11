@@ -212,6 +212,110 @@ static void test_nulls(void)
     checks++;  /* survived every null without crashing */
 }
 
+/* ---- how long he has been unreachable ----------------------------------- */
+
+/* THE ILLEGAL CASE FIRST: a step inside one attempt must not restart the
+ * clock. A connect that fails goes CONNECTING -> SCANNING without visiting
+ * DOWN; if that reset the count, a droid that keeps half-answering would hold
+ * the panel in `waking` indefinitely, which is the bug the bound exists to
+ * end. */
+static void test_a_failed_connect_does_not_restart_the_clock(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_link(&t, R2_TM_DOWN,       2000);
+    r2_telemetry_link(&t, R2_TM_SCANNING,   2000);   /* same callback */
+    r2_telemetry_link(&t, R2_TM_CONNECTING, 2500);
+    r2_telemetry_link(&t, R2_TM_SCANNING,   3000);   /* connect failed */
+    r2_telemetry_link(&t, R2_TM_CONNECTING, 3500);
+    r2_telemetry_link(&t, R2_TM_HANDSHAKING, 3600);
+    CHECK(r2_telemetry_unreachable_ms(&t, 6000) == 4000,
+          "unreachable %u ms, want 4000 -- a step restarted the attempt",
+          r2_telemetry_unreachable_ms(&t, 6000));
+}
+
+/* THE CASE THE FIRST VERSION GOT WRONG, found in review: a connection that
+ * is made and then drops mid-handshake goes back through DOWN. Restarting the
+ * clock on leaving DOWN made a droid that connects and drops every 1.5 s read
+ * ~100 ms unreachable indefinitely, and OFFLINE never came. */
+static void test_a_dropped_handshake_does_not_restart_the_clock(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    uint32_t now = 2000;
+    r2_telemetry_link(&t, R2_TM_DOWN,     now);   /* he drops */
+    r2_telemetry_link(&t, R2_TM_SCANNING, now);
+    for (int i = 0; i < 5; i++) {                 /* five near-misses */
+        r2_telemetry_link(&t, R2_TM_CONNECTING,  now + 300);
+        r2_telemetry_link(&t, R2_TM_HANDSHAKING, now + 600);
+        r2_telemetry_link(&t, R2_TM_DOWN,        now + 1500);
+        r2_telemetry_link(&t, R2_TM_SCANNING,    now + 1500);
+        now += 1500;
+        CHECK(r2_telemetry_unreachable_ms(&t, now + 100) == now + 100 - 2000,
+              "near-miss %d: unreachable %u ms, want %u -- a dropped handshake "
+              "restarted the attempt", i + 1,
+              r2_telemetry_unreachable_ms(&t, now + 100), now + 100 - 2000);
+    }
+}
+
+/* And UP is what closes an attempt, so the NEXT loss starts a fresh one
+ * rather than inheriting the last one's age. */
+static void test_having_him_back_closes_the_attempt(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 2000);
+    r2_telemetry_link(&t, R2_TM_UP,       5000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 90000);
+    CHECK(r2_telemetry_unreachable_ms(&t, 90500) == 500,
+          "second loss: unreachable %u ms, want 500 -- it inherited the first",
+          r2_telemetry_unreachable_ms(&t, 90500));
+}
+
+/* A reconnect can leave UP for SCANNING without ever visiting DOWN; the
+ * attempt starts there all the same. */
+static void test_leaving_up_by_any_route_starts_the_clock(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 5000);
+    CHECK(r2_telemetry_unreachable_ms(&t, 6000) == 1000,
+          "UP -> SCANNING: unreachable %u ms, want 1000",
+          r2_telemetry_unreachable_ms(&t, 6000));
+}
+
+static void test_a_live_link_is_not_unreachable(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    CHECK(r2_telemetry_unreachable_ms(&t, 900000) == 0,
+          "a live link reported %u ms unreachable",
+          r2_telemetry_unreachable_ms(&t, 900000));
+    CHECK(r2_telemetry_unreachable_ms(NULL, 900000) == 0, "null telemetry");
+}
+
+/* Boot is timed from the first SCAN, not from power-on -- the interval P2
+ * measured. Before the host syncs there is no scan, and the time since reset
+ * is the honest answer: a radio that never comes up is unreachable, not
+ * forever about to connect. */
+static void test_boot_is_timed_from_the_first_scan(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    CHECK(r2_telemetry_unreachable_ms(&t, 800) == 800,
+          "before the host synced: %u ms, want the time since reset",
+          r2_telemetry_unreachable_ms(&t, 800));
+
+    r2_telemetry_link(&t, R2_TM_SCANNING, 900);
+    CHECK(r2_telemetry_unreachable_ms(&t, 1000) == 100,
+          "after the first scan: %u ms, want 100 -- boot was billed to R2",
+          r2_telemetry_unreachable_ms(&t, 1000));
+}
+
+static void test_unreachable_across_the_wrap(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_link(&t, R2_TM_SCANNING, 0xFFFFF000u);
+    CHECK(r2_telemetry_unreachable_ms(&t, 0x00001000u) == 0x2000u,
+          "across the wrap: %u ms, want %u",
+          r2_telemetry_unreachable_ms(&t, 0x00001000u), 0x2000u);
+}
+
 /* ---- values and accounting ---------------------------------------------- */
 
 static void test_values_are_carried(void)
@@ -280,6 +384,14 @@ int main(void)
     test_the_clock_wrap_at_49_days();
     test_age_refuses_when_there_is_nothing_to_age();
     test_nulls();
+    printf("  unreachable\n");
+    test_a_failed_connect_does_not_restart_the_clock();
+    test_a_dropped_handshake_does_not_restart_the_clock();
+    test_having_him_back_closes_the_attempt();
+    test_leaving_up_by_any_route_starts_the_clock();
+    test_a_live_link_is_not_unreachable();
+    test_boot_is_timed_from_the_first_scan();
+    test_unreachable_across_the_wrap();
     printf("  values\n");
     test_values_are_carried();
     test_request_response_accounting();

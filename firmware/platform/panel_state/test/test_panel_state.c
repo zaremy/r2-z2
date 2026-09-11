@@ -247,13 +247,90 @@ static void test_red_is_reserved_for_danger(void)
 
 /* ---- the live path ----------------------------------------------------- */
 
-static void test_link_down_is_offline_via_r2(void)
+static void test_waking_is_bounded(void)
+{
+    /* THE ILLEGAL CASES FIRST. A dropped link is not `offline` the instant it
+     * drops: r2_link sets DOWN and restarts the scan in one callback, so a
+     * derivation keyed on the drop either flickers OFFLINE for a frame on
+     * every reconnect or, keyed on DOWN being held, never says offline at all
+     * -- which is what shipped. */
+    panel_state_t st; panel_offline_mode_t m;
+    panel_state_from_link(false, 0, &st, &m);
+    CHECK(st == PANEL_ST_WAKING, "a link that just dropped read %s",
+          panel_state_name(st));
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS, &st, &m);
+    CHECK(st == PANEL_ST_WAKING,
+          "a reconnect exactly at the bound read %s -- the bound is inclusive",
+          panel_state_name(st));
+    CHECK(m == PANEL_OFF_COUNT, "waking left an offline view set");
+
+    /* One millisecond past it, he is gone. */
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, &st, &m);
+    CHECK(st == PANEL_ST_OFFLINE, "1 ms past the bound read %s",
+          panel_state_name(st));
+
+    /* And it STAYS offline however long he is away: nothing past the bound is
+     * allowed to fall back into waking, including a count near the top of
+     * the range. */
+    panel_state_from_link(false, 0xFFFFFFFFu, &st, &m);
+    CHECK(st == PANEL_ST_OFFLINE, "gone for 49 days read %s",
+          panel_state_name(st));
+
+    /* Pinned as a range rather than a value. Below ~3600 ms a reconnect that
+     * misses two ~500 ms scan windows (2600 + 2 x 500) calls a false OFFLINE,
+     * which P2's own write-up warns 8 trials could not see; far above it, a
+     * real absence goes unannounced for longer than the evidence justifies. */
+    CHECK(PANEL_WAKING_BOUND_MS > 3600u && PANEL_WAKING_BOUND_MS <= 5000u,
+          "the waking bound is %u ms, outside P2's evidence",
+          (unsigned)PANEL_WAKING_BOUND_MS);
+}
+
+static void test_a_live_link_is_never_offline(void)
+{
+    /* A caller passing a stale count beside a live link must not be able to
+     * call him offline. Up wins, whatever the clock says. */
+    panel_state_t st; panel_offline_mode_t m;
+    panel_state_from_link(true, 0xFFFFFFFFu, &st, &m);
+    CHECK(st == PANEL_ST_IDLE, "a live link with a stale count read %s",
+          panel_state_name(st));
+    CHECK(m == PANEL_OFF_COUNT, "a live link left an offline view set");
+}
+
+static void test_waking_progress_saturates_and_never_wraps(void)
+{
+    /* The ILLEGAL case: 4,294,968 ms (about 72 minutes) is where
+     * ms * 1000 overflows 32 bits. A multiply-first bar would snap back to
+     * near-empty an hour into his absence. */
+    CHECK(panel_state_waking_permille(4294968u) == 1000u,
+          "the bar wrapped at the 32-bit overflow: %u",
+          panel_state_waking_permille(4294968u));
+    CHECK(panel_state_waking_permille(0xFFFFFFFFu) == 1000u,
+          "the bar wrapped at the top of the range: %u",
+          panel_state_waking_permille(0xFFFFFFFFu));
+
+    CHECK(panel_state_waking_permille(0) == 0u, "the bar starts non-empty");
+    CHECK(panel_state_waking_permille(PANEL_WAKING_BOUND_MS / 2) == 500u,
+          "halfway reads %u", panel_state_waking_permille(PANEL_WAKING_BOUND_MS / 2));
+    CHECK(panel_state_waking_permille(PANEL_WAKING_BOUND_MS) == 1000u,
+          "the bar is not full at the bound");
+
+    /* Monotonic across the whole bound: a bar that ever steps backwards reads
+     * as the reconnect starting over. */
+    unsigned prev = 0;
+    for (uint32_t ms = 0; ms <= PANEL_WAKING_BOUND_MS + 50; ms += 7) {
+        const unsigned p = panel_state_waking_permille(ms);
+        CHECK(p >= prev && p <= 1000u, "bar went %u -> %u at %u ms", prev, p, ms);
+        prev = p;
+    }
+}
+
+static void test_past_the_bound_is_offline_via_r2(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    panel_state_from_link(false, true, &st, &m);
-    CHECK(st == PANEL_ST_OFFLINE, "link down gave %s", panel_state_name(st));
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, &st, &m);
+    CHECK(st == PANEL_ST_OFFLINE, "past the bound gave %s", panel_state_name(st));
     CHECK(m == PANEL_OFF_R2,
-          "link down blamed something other than the BLE link");
+          "an unreachable R2 blamed something other than the BLE link");
     /* Through the mode, to the string the operator actually reads. Asserting
      * the enum alone leaves the mapping from mode to reason untested on the
      * live path. */
@@ -264,7 +341,7 @@ static void test_link_down_is_offline_via_r2(void)
 static void test_link_up_is_idle_and_nothing_richer(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    const uint32_t mask = panel_state_from_link(true, false, &st, &m);
+    const uint32_t mask = panel_state_from_link(true, 0, &st, &m);
     CHECK(st == PANEL_ST_IDLE, "link up gave %s", panel_state_name(st));
     /* The mask, not just the winner: `idle` would also be the answer if the
      * derivation had ALSO claimed `listen` and lost the contest. This board
@@ -281,7 +358,7 @@ static void test_link_up_is_idle_and_nothing_richer(void)
 static void test_transition_is_waking_and_stays_unranked(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    const uint32_t mask = panel_state_from_link(false, false, &st, &m);
+    const uint32_t mask = panel_state_from_link(false, 1000, &st, &m);
     CHECK(st == PANEL_ST_WAKING, "a link transition gave %s",
           panel_state_name(st));
     /* Chosen deliberately, never resolved to. If `waking` were in the mask it
@@ -305,7 +382,8 @@ static void test_offline_beats_idle_if_both_were_ever_set(void)
 static void test_null_outs_are_tolerated(void)
 {
     /* A caller that wants only the mask must not have to invent storage. */
-    panel_state_from_link(true, false, NULL, NULL);
+    panel_state_from_link(true, 0, NULL, NULL);
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, NULL, NULL);
     CHECK(1, "null out-params did not crash");
 }
 
@@ -418,7 +496,10 @@ int main(void)
     test_mode_is_ignored_by_every_other_state();
     test_every_state_renders();
     test_red_is_reserved_for_danger();
-    test_link_down_is_offline_via_r2();
+    test_waking_is_bounded();
+    test_a_live_link_is_never_offline();
+    test_waking_progress_saturates_and_never_wraps();
+    test_past_the_bound_is_offline_via_r2();
     test_link_up_is_idle_and_nothing_richer();
     test_transition_is_waking_and_stays_unranked();
     test_offline_beats_idle_if_both_were_ever_set();
