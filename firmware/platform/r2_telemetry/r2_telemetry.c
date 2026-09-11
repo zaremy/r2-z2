@@ -44,6 +44,7 @@ void r2_telemetry_link(r2_telemetry_t *t, r2_tm_link_t state, uint32_t now_ms)
             t->attempt_open = false;
         } else if (!t->attempt_open) {
             t->attempt_open = true;
+            t->attempt_from_up = (t->link == R2_TM_UP);
             t->unreachable_since_ms = now_ms;
         }
     }

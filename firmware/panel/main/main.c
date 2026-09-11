@@ -144,10 +144,32 @@ static void ui_task(void *arg)
             /* THE SWIPE NOW REACHES SOMETHING. It was inert when #150 merged
              * and the PR said so in those words, because there was nowhere to
              * swipe to. There are three pages now, so this is the call site
-             * that stops it being dead code -- and it is one line, which is
+             * that stops it being dead code -- and it was one line, which is
              * exactly the point CLAUDE.md makes about wiring one path before
              * building the layer above. */
-            const panel_swipe_t sw = panel_touch_take_swipe();
+            const panel_swipe_t swiped = panel_touch_take_swipe();
+            const bool touched = panel_touch_take_activity();
+            const bool pressed = panel_touch_take_press();
+
+            /* WHILE THE WAKE FRAME IS UP, NO TOUCH REACHES THE PAGES. D-017's
+             * point is that a glance must not be able to arm anything, and a
+             * swipe completing under the frame is a thumb acting on a screen
+             * its owner cannot see.
+             *
+             * Only a press that LANDS while it is up dismisses it. A finger
+             * already on the glass when it rose -- someone mid-swipe on
+             * SERVICE -- would otherwise dismiss a frame nobody saw, and its
+             * release would then move the page. The dismissing press is voided
+             * too, so lifting it does nothing either. */
+            panel_swipe_t sw = swiped;
+            if (panel_ui_wake_showing()) {
+                sw = PANEL_SWIPE_NONE;
+                if (pressed) {
+                    panel_ui_wake_dismiss();
+                    panel_touch_void_gesture();
+                    ESP_LOGI(TAG, "wake frame dismissed by touch");
+                }
+            }
             if (sw != PANEL_SWIPE_NONE) {
                 const int n = (sw == PANEL_SWIPE_LEFT) ? 1 : -1;
                 int next = panel_ui_page() + n;
@@ -170,9 +192,8 @@ static void ui_task(void *arg)
              * timer keys only on the DATA changing, so someone who picks up
              * the droid and taps is reading a 40% screen because the battery
              * happened to report the same voltage as a minute ago. */
-            const bool touched = panel_touch_take_activity();
             const bool changed = panel_ui_update(&s_tm, now_ms());
-            panel_ui_burn_in(now_ms(), changed || touched || sw != PANEL_SWIPE_NONE,
+            panel_ui_burn_in(now_ms(), changed || touched || swiped != PANEL_SWIPE_NONE,
                              set_brightness_pct);
             bsp_display_unlock();
         }
@@ -217,11 +238,32 @@ static void ui_task(void *arg)
 static void shot_task(void *arg)
 {
     (void)arg;
+#ifdef PANEL_SHOT_WAKE
+    /* The wake frame lasts six seconds and the periodic capture runs once a
+     * minute, so the periodic shot would catch it one time in ten. This
+     * waits for it to rise and captures it 700 ms in, after the 450 ms
+     * sweep has cleared the screen. It never shoots again until the frame
+     * has gone and come back, so the captured frame is not overwritten by
+     * the resting face that follows. Reading the flag from another task is
+     * a benign race for a build that exists only to take this picture. */
+    bool was_up = false;
+    while (1) {
+        const bool up = panel_ui_wake_showing();
+        if (up && !was_up) {
+            vTaskDelay(pdMS_TO_TICKS(700));
+            panel_shot_take();
+            ESP_LOGW(TAG, "shot: wake frame captured");
+        }
+        was_up = up;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+#else
     vTaskDelay(pdMS_TO_TICKS(15000));   /* let the link settle first */
     while (1) {
         panel_shot_take();
         vTaskDelay(pdMS_TO_TICKS(60000));
     }
+#endif
 }
 
 #ifdef PANEL_P2_RECONNECT

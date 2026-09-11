@@ -78,6 +78,12 @@ int         panel_ui_page(void);
 int         panel_ui_page_count(void);
 const char *panel_ui_page_name(int page);
 
+/* The wake frame (#101 AC3). Showing: whether it is on the glass right now.
+ * Dismiss: a tap took it down -- it stays down until the state next
+ * changes, so dismissing one fault never mutes the next. */
+bool        panel_ui_wake_showing(void);
+void        panel_ui_wake_dismiss(void);
+
 
 #ifdef __cplusplus
 }
