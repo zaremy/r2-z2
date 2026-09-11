@@ -154,6 +154,13 @@ Two naming corrections fell out of the same ruling:
 
 - **`wake` is a state here; `waking` is a panel view** (D-023). One word apart,
   and most of why the two documents looked contradictory.
+  **`waking` is bounded**: past `PANEL_WAKING_BOUND_MS` (4.1 s — P2's common
+  2650 ms reconnect plus two missed ~500 ms scan windows, plus ~450 ms margin;
+  `firmware/platform/panel_state/include/panel_state.h`)
+  the panel shows `offline`, R2 view. D-023 leaves `waking` unranked because it
+  "resolves itself in seconds"; the bound is what makes that true on a panel
+  whose link never holds DOWN, where it had read `waking` for as long as he
+  was gone.
 - **`listen`, not `listening`.** The latter was the panel spec's own coinage.
 
 So a panel may split one row of this table into several screens, and must not

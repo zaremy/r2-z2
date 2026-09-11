@@ -35,8 +35,25 @@ void r2_telemetry_link(r2_telemetry_t *t, r2_tm_link_t state, uint32_t now_ms)
     if (state != t->link) {
         forget_readings(t);
         t->link_since_ms = now_ms;
+
+        /* One attempt from losing him to having him back -- see the header.
+         * Only UP closes it, so no path through DOWN can restart the clock:
+         * a droid that keeps half-answering must not hold the panel in
+         * `waking` forever. */
+        if (state == R2_TM_UP) {
+            t->attempt_open = false;
+        } else if (!t->attempt_open) {
+            t->attempt_open = true;
+            t->unreachable_since_ms = now_ms;
+        }
     }
     t->link = state;
+}
+
+uint32_t r2_telemetry_unreachable_ms(const r2_telemetry_t *t, uint32_t now_ms)
+{
+    if (t == NULL || t->link == R2_TM_UP) return 0;
+    return now_ms - t->unreachable_since_ms;   /* unsigned: wrap-safe */
 }
 
 static void stamp(r2_tm_stamp_t *s, uint32_t now_ms)
