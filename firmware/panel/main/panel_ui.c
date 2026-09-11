@@ -322,6 +322,13 @@ static lv_obj_t *s_svc_list, *s_svc_row[PANEL_SVC_COUNT], *s_svc_link_sq;
 static lv_obj_t *s_int, *s_int_back, *s_int_right, *s_int_body, *s_int_foot;
 static lv_obj_t *s_int_val[PANEL_SVC_MAX_ROWS];
 static const char *s_int_key[PANEL_SVC_MAX_ROWS];
+/* What was last SET on each value label, and in what tone. Compared against
+ * rather than lv_label_get_text(): once DOTS truncates a value, LVGL rewrites
+ * the label's own buffer to end in dots, so the label never matches the value
+ * again -- and a refresh keyed on it re-set the text, and redrew the row,
+ * every 40 ms for as long as the interior was open. */
+static char s_int_last[PANEL_SVC_MAX_ROWS][PANEL_SVC_VAL_LEN];
+static int  s_int_tone[PANEL_SVC_MAX_ROWS];
 static int       s_int_rows;
 static panel_svc_t s_int_open = PANEL_SVC_COUNT;       /* none */
 
@@ -570,10 +577,18 @@ static void fill_list(bool build)
              * the row below instead of ending in dots. */
             lv_obj_set_height(s_int_val[i], 29);
             s_int_key[i] = kv[i].key;
+            s_int_last[i][0] = '\x01';          /* matches no value: set it */
+            s_int_tone[i] = -1;
         }
-        if (strcmp(lv_label_get_text(s_int_val[i]), kv[i].val) != 0)
+        if (strcmp(s_int_last[i], kv[i].val) != 0) {
             lv_label_set_text(s_int_val[i], kv[i].val);
-        lv_obj_set_style_text_color(s_int_val[i], lv_color_hex(tone_colour(kv[i].tone)), 0);
+            memcpy(s_int_last[i], kv[i].val, sizeof s_int_last[i]);
+        }
+        if (s_int_tone[i] != (int)kv[i].tone) {
+            lv_obj_set_style_text_color(s_int_val[i],
+                lv_color_hex(tone_colour(kv[i].tone)), 0);
+            s_int_tone[i] = (int)kv[i].tone;
+        }
     }
     if (build) s_int_rows = n;
 }

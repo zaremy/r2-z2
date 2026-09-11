@@ -202,8 +202,8 @@ void panel_touch_poll(void)
         if (s_gesture_void)                         s_gesture_void = false;
         else if (across && dx <= -PANEL_SWIPE_PX)   s_swipe = PANEL_SWIPE_LEFT;
         else if (across && dx >= PANEL_SWIPE_PX)    s_swipe = PANEL_SWIPE_RIGHT;
-        /* A TAP is a release that barely moved in EITHER axis. The y bound is
-         * what keeps scrolling the SERVICE list from opening whatever row the
+        /* A TAP is a release that barely moved in EITHER axis. Staying inside the
+         * radius in y is what keeps scrolling the SERVICE list from opening whatever row the
          * finger started on; the gap between PANEL_TAP_PX and PANEL_SWIPE_PX
          * is deliberately dead, so an uncertain gesture does nothing. The tap
          * lands where the finger went DOWN, which is the row it was aimed
