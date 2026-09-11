@@ -287,6 +287,9 @@ static void test_an_attempt_knows_whether_it_lost_him(void)
     r2_telemetry_link(&t, R2_TM_DOWN, 9800);
     r2_telemetry_link(&t, R2_TM_SCANNING, 9800);
     CHECK(t.attempt_from_up, "a mid-attempt DOWN rewrote how the attempt began");
+    /* And a reset forgets it: the next boot has not lost anyone. */
+    r2_telemetry_reset(&t);
+    CHECK(!t.attempt_from_up, "a reset kept the previous attempt's origin");
 }
 
 /* A reconnect can leave UP for SCANNING without ever visiting DOWN; the

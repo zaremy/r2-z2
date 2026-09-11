@@ -759,7 +759,8 @@ amendment does not make it.
 
 **Operator ruling, 2026-09-11** (#101 AC3, PR #162). The v5 panel reference
 blinks the state swatch — slow for `offline`, fast for `danger` — on the
-resting face and the wake frame. §4 above gives blink to **escalation**, slow
+resting face and the wake frame. Item 4 of the first Amendment A above ("the hardware overrules the
+scheme") gives blink to **escalation**, slow
 for *attention* and fast for danger, and this amendment makes the panel inherit
 the semantics. Two normative sources disagreed about what a blinking swatch
 means, and the ruling is: **follow D-012; the panel does not blink.** The

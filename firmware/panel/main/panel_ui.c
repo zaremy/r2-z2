@@ -611,7 +611,8 @@ static void build_status_face(lv_obj_t *pg)
     /* STEADY, on this face and on the wake frame, and deliberately so. The
      * v5 reference blinks the swatch for offline and danger; D-012 gives
      * blink to escalation (slow attention, fast danger), and the operator
-     * ruled D-012 governs (D-012 Amendment A, "Blink"). Do not re-add the
+     * ruled D-012 governs (D-012, the 2026-09-07 Amendment A,
+     * "Blink"). Do not re-add the
      * reference's blink -- it is the one place "match the reference" was
      * ruled not to reach. */
     s_face_swatch = lv_obj_create(pg);
@@ -820,7 +821,8 @@ static void build_status_face(lv_obj_t *pg)
  * the swatch, the word IN ITS COLOUR, the reason, a boxed subject, the chain,
  * and a sweep down the screen as it lands. Nothing tappable -- D-017: "a
  * glance that lands a thumb on a row is a glance that can arm something which
- * moves him". A touch dismisses it and does nothing else (main.c).
+ * moves him". A press that LANDS while it is up dismisses it and does
+ * nothing else, and no touch reaches the pages beneath it (main.c).
  *
  * WHEN is decided in `panel_wake` and host-tested there; this only draws.
  *
@@ -1368,7 +1370,6 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
         if (strcmp(lv_label_get_text(s_wake_down), down) != 0)
             lv_label_set_text(s_wake_down, down);
     }
-
 
     /* The four rows LINK / R2 / STORAGE / BRAIN are GONE from this page.
      * They were built as the whole status screen from AC4's wording; the v5

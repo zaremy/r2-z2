@@ -182,7 +182,7 @@ static void test_down_for_floors_to_the_largest_whole_unit(void)
 {
     static const struct { uint32_t ms; const char *want; } k[] = {
         { 0u,           "DOWN 0S"  },
-        { 3501u,        "DOWN 3S"  },   /* when the frame first fires */
+        { 4101u,        "DOWN 4S"  },   /* first tick past the bound: it fires */
         { 59999u,       "DOWN 59S" },
         { 60000u,       "DOWN 1M"  },
         { 119999u,      "DOWN 1M"  },   /* floored: 2M would claim time not passed */
