@@ -1,0 +1,125 @@
+/* WHAT THE SERVICE MENU SAYS -- #101 child 6. Pure logic, no LVGL.
+ *
+ * The seven interiors behind SERVICE are the panel's "behind the door" half
+ * (CLAUDE.md: indicator outside, diagnostics behind the door), which makes
+ * them the place a person goes to find out what is wrong -- and therefore the
+ * place a plausible invented value does the most damage. The v5 reference
+ * fills every row with sample data ("HOMENET", "API KEY SET", "41°C"); this
+ * module decides what THIS board can honestly put there, and that decision is
+ * worth host tests in a way that drawing it is not.
+ *
+ * Three rules, and the tests pin each one:
+ *   1. NO READING OUTLIVES ITS LINK (#101 AC7). Anything R2 told us goes to
+ *      "----" the moment the link is not up, through r2_telemetry's own
+ *      displayable() rather than a second copy of that rule.
+ *   2. A THING THIS BUILD DOES NOT HAVE SAYS SO. No Wi-Fi stack, no API key,
+ *      no camera, no microphone: the row reads NOT IN BUILD in the no-claim
+ *      grey, never a sample value.
+ *   3. THE LADDER NEVER BUNDLES (AC6). Every tier is its own rung, anything
+ *      above the gate's ceiling is LOCKED, and there is no "all" rung.
+ */
+#ifndef PANEL_SERVICE_H
+#define PANEL_SERVICE_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "r2_telemetry.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* The SERVICE rows, top to bottom. NETWORK is first and is NOT an interior:
+ * the epic is explicit that it jumps to the lateral NETWORK page rather than
+ * being a second copy of it. The reference's last row, EXIT TO OS, is absent
+ * on purpose -- D-022 removed the vendor launcher, so there is no OS to exit
+ * to, and a row that promised one would be a door painted on a wall. */
+typedef enum {
+    PANEL_SVC_NETWORK = 0,
+    PANEL_SVC_R2_LINK,
+    PANEL_SVC_DIAGNOSTICS,
+    PANEL_SVC_HW_TEST,
+    PANEL_SVC_PROVISIONING,
+    PANEL_SVC_VOICE,
+    PANEL_SVC_CAMERA,
+    PANEL_SVC_ABOUT,
+    PANEL_SVC_COUNT,
+} panel_svc_t;
+
+typedef enum {
+    PANEL_SVC_JUMP = 0,    /* goes somewhere else (NETWORK) */
+    PANEL_SVC_LIST,        /* key / value rows */
+    PANEL_SVC_NOTE,        /* a null state: two lines, nothing to list */
+    PANEL_SVC_LADDER,      /* HARDWARE TEST */
+} panel_svc_kind_t;
+
+/* What colour a value may claim. There is deliberately no RED: D-012 keeps it
+ * for danger and stop, and nothing behind this door is either. NONE is the
+ * panel's no-claim grey (D-012 Amendment A) -- absence, not a colour. */
+typedef enum {
+    PANEL_TONE_PLAIN = 0,  /* a fact, no verdict */
+    PANEL_TONE_GOOD,       /* healthy */
+    PANEL_TONE_WARN,       /* needs monitoring */
+    PANEL_TONE_NONE,       /* we cannot say */
+} panel_tone_t;
+
+#define PANEL_SVC_VAL_LEN   16
+#define PANEL_SVC_MAX_ROWS   8
+
+typedef struct {
+    const char  *key;
+    char         val[PANEL_SVC_VAL_LEN];
+    panel_tone_t tone;
+} panel_kv_t;
+
+/* Everything the rows are made from, gathered by the caller so this file
+ * reads no clock and touches no hardware. */
+typedef struct {
+    const r2_telemetry_t *tm;
+    uint32_t    now_ms;
+    uint32_t    keepalive_ms;   /* main.c's keepalive period, not a copy of it */
+    int         ceiling;        /* the gate's ceiling, as an r2_tier_t index */
+    const char *panel_fw;       /* this app's version string */
+    uint32_t    flash_mb, psram_mb, heap_kb;
+    /* The touch controller's chip id as read at boot from I2C 0x15, or 0
+     * when it did not answer. It is the board-revision probe
+     * (board-revision.md): an answer at 0x15 IS a V2 board. */
+    uint8_t     touch_id;
+} panel_svc_facts_t;
+
+const char       *panel_service_title(panel_svc_t s);   /* "" out of range */
+panel_svc_kind_t  panel_service_kind(panel_svc_t s);
+
+/* Fill a LIST interior's rows. Returns how many were written, never more than
+ * `max`; 0 for anything that is not a LIST or when `f` is NULL. */
+int panel_service_rows(panel_svc_t s, const panel_svc_facts_t *f,
+                       panel_kv_t *out, int max);
+
+/* A NOTE interior's two lines. False for anything that is not a NOTE. */
+bool panel_service_note(panel_svc_t s, const char **line1, const char **line2);
+
+/* The menu row's status square for R2 LINK: GOOD while linked, WARN otherwise.
+ * The only menu row that makes a claim, because it is the only one whose
+ * interior can go wrong while you are looking at the menu. */
+panel_tone_t panel_service_link_tone(const r2_telemetry_t *tm);
+
+/* THE PERMISSION LADDER, bring-up order: READ, LEDS, AUDIO, DOME, STANCE,
+ * LOCOMOTION (CLAUDE.md). `ceiling` is the gate's tier index; every rung above
+ * it is locked, an out-of-range ceiling locks everything, and LOCOMOTION is
+ * locked at every ceiling because it is not a rung of the gate at all -- it
+ * has no allowlist entry and is refused as unlisted. Returns the rung count. */
+#define PANEL_LADDER_RUNGS 6
+typedef struct {
+    const char *tier;
+    bool        allowed;
+} panel_rung_t;
+int panel_service_ladder(int ceiling, panel_rung_t out[PANEL_LADDER_RUNGS]);
+
+/* The ceiling's name for the ladder header, "" when out of range. */
+const char *panel_service_ceiling_name(int ceiling);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* PANEL_SERVICE_H */

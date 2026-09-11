@@ -181,7 +181,8 @@ recoverable from the committed source alone. Pinned here instead.
 
 Regenerate with `npx lv_font_conv@1.5.3 --font <ttf> -r 0x20-0x5F,0xB0 --size
 <n> --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -o <out>.c`.
-`techmono_72` alone takes `-r 0x20,0x2D,0x30-0x39,0x41-0x5A` (space, hyphen,
+`techmono_26` adds `0x2039,0x203A` (the chevrons) and `techmono_14` adds
+`0xB7` (the middle dot). `techmono_72` alone takes `-r 0x20,0x2D,0x30-0x39,0x41-0x5A` (space, hyphen,
 digits, uppercase): it sets only the wake frame's boxed subject. Its `Opts`
 line records the range, like every other file's.
 

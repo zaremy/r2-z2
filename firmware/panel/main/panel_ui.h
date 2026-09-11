@@ -84,6 +84,17 @@ const char *panel_ui_page_name(int page);
 bool        panel_ui_wake_showing(void);
 void        panel_ui_wake_dismiss(void);
 
+/* NAVIGATION (#101 child 6). A swipe is +1 (left: the next page) or -1
+ * (right: back). Inside a SERVICE interior a right swipe is BACK and a
+ * left swipe does nothing -- the reference reserves horizontal swipe for
+ * back in there. A tap is in panel pixels, where the finger went down. */
+void        panel_ui_swipe(int dir);
+void        panel_ui_tap(int x, int y);
+
+/* The link task's period, which IS the keepalive: one number, so the
+ * R2 LINK interior cannot describe a period the link does not use. */
+#define PANEL_KEEPALIVE_MS 3000u
+
 
 #ifdef __cplusplus
 }

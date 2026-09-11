@@ -4,10 +4,17 @@
 #include <math.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
+#include "esp_flash.h"
 #include "esp_log.h"
+#include "esp_psram.h"
+#include "esp_system.h"
 #include "lvgl.h"
 #include "panel_state.h"
 #include "panel_wake.h"
+#include "panel_service.h"
+#include "r2_gate.h"
+#include "panel_touch.h"
 #include "panel_fonts.h"
 
 /* THE v5 PALETTE. Taken from the reference prototype the vault calls "the
@@ -64,8 +71,8 @@ static lv_obj_t *s_root;
  * the gitignored vault was unreachable. It is a directory.
  *
  * What is built here is the FRAME of each page and the navigation between
- * them, not the contents of SERVICE and NETWORK. SERVICE's seven interiors are
- * named in #101 and are rendered as titles; their interiors are child 6.
+ * them. SERVICE's rows and its seven interiors are child 6 and are built
+ * below; what each one may honestly say is decided in `panel_service`.
  * NETWORK's contents are not defined in any source I can find, so the page
  * says so rather than inventing them -- the same choice as STORAGE and BRAIN
  * on the status page, and the one D-017 Amendment B just ruled for. */
@@ -148,13 +155,6 @@ static int s_page_at = PAGE_STATUS;
 
 static const char *k_page_name[PAGE_COUNT] = { "STATUS", "SERVICE", "NETWORK" };
 
-/* #101: "The 7 interiors from SERVICE are unchanged." NETWORK is deliberately
- * absent -- the epic says it is not an interior, it jumps to the lateral page. */
-static const char *k_service_rows[] = {
-    "R2 LINK", "DIAGNOSTICS", "HARDWARE TEST", "PROVISIONING",
-    "VOICE", "CAMERA", "ABOUT",
-};
-#define N_SERVICE_ROWS (sizeof k_service_rows / sizeof k_service_rows[0])
 static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
 static lv_obj_t *s_waking_fill;       /* AC8: the rule, filling while waking */
 static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
@@ -290,17 +290,126 @@ static lv_obj_t *make_page(lv_obj_t *parent)
     return pg;
 }
 
+/* ---- SERVICE (#101 child 6) ----------------------------------------------
+ *
+ * Measured off the reference like the face: rows 87 px with a 2 px rule under
+ * each, the text's baseline 43.5 px into the row, the list from y=51 to the
+ * pager at 410; an interior's header 74 px tall with the back label's
+ * baseline at 45.3, key/value rows 52 px plus a hairline, a ladder rung 56
+ * plus a hairline. Each label is set on its baseline, as the wake frame's
+ * are. WHAT the rows say is `panel_service`'s, and host-tested there. */
+#define SVC_X        26
+#define SVC_W       316
+#define SVC_LIST_Y   51
+#define SVC_LIST_H  359                   /* to the pager at 410 */
+#define SVC_ROW_H    89                   /* 87 + the 2 px rule */
+#define INT_HEAD_H   74
+#define INT_BODY_Y   76
+#define INT_KV_H     53                   /* 52 + hairline */
+#define INT_RUNG_H   54                   /* 53 + hairline: see the ladder */
+#define CHEVRONS     "\xE2\x80\xBA\xE2\x80\xBA"       /* U+203A x2 */
+#define BACK         "\xE2\x80\xB9\xE2\x80\xB9 "      /* U+2039 x2 */
+
+/* panel_service's rungs mirror r2_tier_t INDEX FOR INDEX, and each one is
+ * pinned here -- the count alone would let a reordered enum compile and draw
+ * STANCE as allowed under a DOME ceiling. */
+_Static_assert(R2_TIER__COUNT == 5, "a gate tier was added: give it a rung first");
+_Static_assert(R2_TIER_READ == 0 && R2_TIER_LEDS == 1 && R2_TIER_AUDIO == 2 &&
+               R2_TIER_DOME == 3 && R2_TIER_STANCE == 4,
+               "r2_tier_t was reordered: panel_service's rung order must follow");
+
+static lv_obj_t *s_svc_list, *s_svc_row[PANEL_SVC_COUNT], *s_svc_link_sq;
+static lv_obj_t *s_int, *s_int_back, *s_int_right, *s_int_body, *s_int_foot;
+static lv_obj_t *s_int_val[PANEL_SVC_MAX_ROWS];
+static const char *s_int_key[PANEL_SVC_MAX_ROWS];
+static int       s_int_rows;
+static panel_svc_t s_int_open = PANEL_SVC_COUNT;       /* none */
+
+static uint32_t tone_colour(panel_tone_t t)
+{
+    switch (t) {
+    case PANEL_TONE_GOOD: return PANEL_C_GREEN;
+    case PANEL_TONE_WARN: return PANEL_C_AMBER;
+    case PANEL_TONE_NONE: return V5_DIM;
+    case PANEL_TONE_PLAIN:
+    default:              return V5_TEXT;
+    }
+}
+
+static void bare(lv_obj_t *o)
+{
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_set_style_radius(o, 0, 0);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+/* A vertical scroller with the reference's 3 px scrollbar at the right edge. */
+static void scroller(lv_obj_t *o)
+{
+    bare(o);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(o, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(o, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(o, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_right(o, 0, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(o, 2, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(o, lv_color_hex(V5_LABEL), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_SCROLLBAR);
+}
+
+static lv_obj_t *text(lv_obj_t *parent, const lv_font_t *font, int ls,
+                      uint32_t colour, int x, int y, const char *s)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_letter_space(l, ls, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
+    lv_obj_set_pos(l, x, y);
+    lv_label_set_text(l, s);
+    return l;
+}
+
+/* Right-aligned to `right`, in a box `w` wide. */
+static lv_obj_t *text_r(lv_obj_t *parent, const lv_font_t *font, int ls,
+                        uint32_t colour, int right, int w, int y, const char *s)
+{
+    lv_obj_t *l = text(parent, font, ls, colour, right - w, y, s);
+    lv_obj_set_width(l, w);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+    return l;
+}
+
+/* THE STATUS CHROME, on SERVICE as on the face -- v5 keeps it on every page
+ * because it describes the board, not the page. The same three placeholders
+ * and the same reason they are grey: this build has no Wi-Fi, no LLM client
+ * and no battery ADC to put in them. */
+static void make_chrome(lv_obj_t *pg)
+{
+    lv_obj_t *w = lv_label_create(pg);
+    lv_label_set_text(w, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_color(w, lv_color_hex(V5_SURFACE), 0);
+    lv_obj_set_pos(w, 120, 16);
+    text(pg, &michroma_12, 1, V5_SURFACE, 160, 18, "LLM");
+    text(pg, &michroma_12, 1, V5_SURFACE, 217, 18, "PWR");
+}
+
+static void build_interior(lv_obj_t *pg);
+
 static void build_service_page(lv_obj_t *pg)
 {
-    lv_obj_t *t = lv_label_create(pg);
-    lv_label_set_text(t, "SERVICE");
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
-    lv_obj_set_pos(t, ROW_PAD, 20);
+    make_chrome(pg);
+
+    lv_obj_t *rule = lv_obj_create(pg);
+    lv_obj_set_size(rule, SVC_W, 1);
+    lv_obj_set_pos(rule, SVC_X, 50);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(V5_RULE), 0);
+    lv_obj_set_style_border_width(rule, 0, 0);
 
     /* VERTICAL SCROLL, keeping 87 px rows. Operator ruling, 2026-09-07.
      *
-     * Seven 87 px rows are 609 px and the panel is 448. Something had to give,
+     * Eight 89 px rows are 712 px and the list has 359. Something had to give,
      * and the alternative on the table was shrinking the rows -- which would
      * have traded the 44 pt tap target #106 actually measured as clickable for
      * a tidier screen. Measured hit accuracy beats a screen that fits.
@@ -308,35 +417,317 @@ static void build_service_page(lv_obj_t *pg)
      * It also matches the design: the vault's v5 says "vertical scroll inside
      * a page, horizontal swipe reserved for back". Accepted cost, stated: the
      * panel stops being wholly glanceable here, because something is always
-     * off-screen. */
-    lv_obj_t *list = lv_obj_create(pg);
-    lv_obj_set_size(list, PANEL_W, PANEL_H - 64 - 30);
-    lv_obj_set_pos(list, 0, 64);
-    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(list, 0, 0);
-    lv_obj_set_style_pad_all(list, 0, 0);
-    lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_AUTO);
+     * off-screen. The list runs to x=360 so its scrollbar sits where the
+     * reference's does, outside the rows. */
+    s_svc_list = lv_obj_create(pg);
+    scroller(s_svc_list);
+    lv_obj_set_size(s_svc_list, 334, SVC_LIST_H);
+    lv_obj_set_pos(s_svc_list, SVC_X, SVC_LIST_Y);
 
-    for (unsigned i = 0; i < N_SERVICE_ROWS; i++) {
-        lv_obj_t *row = lv_obj_create(list);
-        lv_obj_set_size(row, PANEL_W, ROW_H);
-        lv_obj_set_pos(row, 0, (int)i * ROW_H);
-        lv_obj_set_style_bg_color(row, lv_color_hex(0x101014), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, lv_color_hex(0x282830), 0);
-        lv_obj_set_style_radius(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < PANEL_SVC_COUNT; i++) {
+        lv_obj_t *row = lv_obj_create(s_svc_list);
+        bare(row);
+        lv_obj_set_size(row, SVC_W, SVC_ROW_H);
+        lv_obj_set_pos(row, 0, i * SVC_ROW_H);
+        if (i < PANEL_SVC_COUNT - 1) {
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+            lv_obj_set_style_border_width(row, 2, 0);
+            lv_obj_set_style_border_color(row, lv_color_hex(V5_RULE), 0);
+        }
+        /* Share Tech Mono 26, 0.04em. Baseline 43.5 into the row; line 26,
+         * base line 4 -> y 21. */
+        text(row, &techmono_26, 1, V5_TEXT, 0, 21, panel_service_title((panel_svc_t)i));
+        text_r(row, &techmono_26, 1, V5_LABEL, SVC_W, 60, 21, CHEVRONS);
 
-        lv_obj_t *r = lv_label_create(row);
-        lv_label_set_text(r, k_service_rows[i]);
-        lv_obj_set_style_text_font(r, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(r, lv_color_hex(0xF0F0F4), 0);
-        lv_obj_set_pos(r, ROW_PAD + 12, (ROW_H - 28) / 2);
+        /* R2 LINK carries a square: the one row whose interior can go wrong
+         * while you are reading the menu. Coloured each tick. */
+        if (i == PANEL_SVC_R2_LINK) {
+            s_svc_link_sq = lv_obj_create(row);
+            lv_obj_set_size(s_svc_link_sq, 14, 14);
+            lv_obj_set_pos(s_svc_link_sq, SVC_W - 26 - 14 - 14, (87 - 14) / 2);
+            lv_obj_set_style_radius(s_svc_link_sq, 0, 0);
+            lv_obj_set_style_border_width(s_svc_link_sq, 0, 0);
+            lv_obj_set_style_bg_color(s_svc_link_sq, lv_color_hex(PANEL_C_AMBER), 0);
+        }
+        s_svc_row[i] = row;
     }
+
+    build_interior(pg);
+}
+
+/* ---- an interior ------------------------------------------------------------
+ *
+ * One view reused by all seven: a header that is the BACK button, a rule, and
+ * a body rebuilt on open. Built on the SERVICE page, so leaving the page
+ * leaves the interior with it. */
+static void build_interior(lv_obj_t *pg)
+{
+    s_int = lv_obj_create(pg);
+    bare(s_int);
+    lv_obj_set_size(s_int, PANEL_W, PANEL_H);
+    lv_obj_set_pos(s_int, 0, 0);
+    lv_obj_set_style_bg_color(s_int, lv_color_hex(V5_GROUND), 0);
+    lv_obj_set_style_bg_opa(s_int, LV_OPA_COVER, 0);
+
+    /* "‹‹ TITLE", Share Tech Mono 26. Baseline 45.3; line 26, base 4 -> 23. */
+    s_int_back = text(s_int, &techmono_26, 1, V5_TEXT, SVC_X, 23, "");
+    /* Michroma 16 on the right. Baseline 44; line 17, base 3 -> 30. */
+    s_int_right = text_r(s_int, &michroma_16, 1, PANEL_C_GREEN, SVC_X + SVC_W, 200, 30, "");
+
+    lv_obj_t *rule = lv_obj_create(s_int);
+    lv_obj_set_size(rule, SVC_W, 2);
+    lv_obj_set_pos(rule, SVC_X, INT_HEAD_H);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(V5_RULE), 0);
+    lv_obj_set_style_border_width(rule, 0, 0);
+
+    s_int_body = lv_obj_create(s_int);
+    scroller(s_int_body);
+    lv_obj_set_pos(s_int_body, SVC_X, INT_BODY_Y);
+
+    /* 14 px, the no-claim grey. Baseline 424; line 14, base 3 -> 413. */
+    s_int_foot = text(s_int, &techmono_14, 1, V5_DIM, SVC_X, 413,
+                      "EACH TIER OPT-IN \xC2\xB7 NEVER BUNDLED");
+    lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void set_pips_hidden(bool hidden)
+{
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        if (s_pip[i] == NULL) continue;
+        if (hidden) lv_obj_add_flag(s_pip[i], LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_remove_flag(s_pip[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void svc_facts(const r2_telemetry_t *t, uint32_t now_ms, panel_svc_facts_t *f)
+{
+    static uint32_t flash_bytes;
+    if (flash_bytes == 0) esp_flash_get_size(NULL, &flash_bytes);
+    const esp_app_desc_t *app = esp_app_get_description();
+    *f = (panel_svc_facts_t){
+        .tm = t, .now_ms = now_ms, .keepalive_ms = PANEL_KEEPALIVE_MS,
+        .ceiling = (int)r2_gate_get_ceiling(),
+        .panel_fw = app ? app->version : NULL,
+        .flash_mb = flash_bytes / (1024u * 1024u),
+        .psram_mb = (uint32_t)(esp_psram_get_size() / (1024u * 1024u)),
+        .heap_kb  = esp_get_free_heap_size() / 1024u,
+        .touch_id = panel_touch_chip_id(),
+    };
+}
+
+/* The telemetry the last update saw, so an interior opened by a tap between
+ * updates is filled from the same data as the tick after it. */
+static const r2_telemetry_t *s_last_tm;
+static int32_t s_svc_scroll_at;
+static uint32_t s_last_now;
+
+static void fill_list(bool build)
+{
+    panel_svc_facts_t f;
+    svc_facts(s_last_tm, s_last_now, &f);
+    panel_kv_t kv[PANEL_SVC_MAX_ROWS];
+    const int n = panel_service_rows(s_int_open, &f, kv, PANEL_SVC_MAX_ROWS);
+
+    /* REBUILD IF THE SHAPE MOVED. The labels are made once and refreshed in
+     * place, so a row that appeared would be written through a freed label
+     * and one that vanished would leave its last value -- possibly R2's --
+     * on the glass after the link went. panel_service keeps the shape fixed
+     * today (and a host test pins it); this is what holds if it ever stops. */
+    bool same = !build && n == s_int_rows;
+    for (int i = 0; same && i < n; i++)
+        if (s_int_key[i] != kv[i].key) same = false;
+    if (!build && !same) {
+        lv_obj_clean(s_int_body);
+        build = true;
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (build) {
+            lv_obj_t *row = lv_obj_create(s_int_body);
+            bare(row);
+            lv_obj_set_size(row, SVC_W, INT_KV_H);
+            lv_obj_set_pos(row, 0, 6 + i * INT_KV_H);
+            if (i < n - 1) {
+                lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+                lv_obj_set_style_border_width(row, 1, 0);
+                lv_obj_set_style_border_color(row, lv_color_hex(V5_HAIRLINE), 0);
+            }
+            /* Key: Michroma 16, baseline 33 in; line 17, base 3 -> 19.
+             * Value: Share Tech Mono 28, baseline 35 in; line 29, base 5 -> 11.
+             * The value gets whatever the key leaves, 16 px clear of it, and
+             * ends in dots rather than drawing over the key or wrapping into
+             * the next row -- a git-describe version is longer than any
+             * value the reference shows. */
+            lv_obj_t *key = text(row, &michroma_16, 1, V5_LABEL, 0, 19, kv[i].key);
+            lv_obj_update_layout(key);
+            const int room = SVC_W - lv_obj_get_width(key) - 16;
+            s_int_val[i] = text_r(row, &techmono_28, 0, V5_TEXT, SVC_W, room, 11, "");
+            lv_label_set_long_mode(s_int_val[i], LV_LABEL_LONG_MODE_DOTS);
+            s_int_key[i] = kv[i].key;
+        }
+        if (strcmp(lv_label_get_text(s_int_val[i]), kv[i].val) != 0)
+            lv_label_set_text(s_int_val[i], kv[i].val);
+        lv_obj_set_style_text_color(s_int_val[i], lv_color_hex(tone_colour(kv[i].tone)), 0);
+    }
+    if (build) s_int_rows = n;
+}
+
+static void open_interior(panel_svc_t s)
+{
+    const panel_svc_kind_t kind = panel_service_kind(s);
+    s_int_open = s;
+    lv_obj_clean(s_int_body);
+    s_int_rows = 0;
+
+    char head[32];
+    snprintf(head, sizeof head, BACK "%s",
+             s == PANEL_SVC_HW_TEST ? "HW TEST" : panel_service_title(s));
+    lv_label_set_text(s_int_back, head);
+    lv_label_set_text(s_int_right, "");
+    lv_obj_add_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(s_int_body, 334, PANEL_H - INT_BODY_Y);
+
+    if (kind == PANEL_SVC_LIST) {
+        fill_list(true);
+    } else if (kind == PANEL_SVC_NOTE) {
+        const char *a = "", *b = "";
+        panel_service_note(s, &a, &b);
+        lv_obj_t *l1 = text(s_int_body, &michroma_16, 2, V5_LABEL, 0, 150, a);
+        lv_obj_t *l2 = text(s_int_body, &techmono_18, 1, V5_DIM, 0, 182, b);
+        lv_obj_set_width(l1, SVC_W);
+        lv_obj_set_width(l2, SVC_W);
+        lv_obj_set_style_text_align(l1, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_align(l2, LV_TEXT_ALIGN_CENTER, 0);
+    } else if (kind == PANEL_SVC_LADDER) {
+        /* THE LADDER DISPLAYS; it does not run anything yet. Each rung says
+         * whether the gate would admit it -- ALLOWED or LOCKED -- and nothing
+         * here is a control. The RUN affordance is its own change, because it
+         * is the first thing on this panel that sends R2 a command a person
+         * chose, and it deserves its own review. */
+        const int ceiling = (int)r2_gate_get_ceiling();
+        char right[24];
+        snprintf(right, sizeof right, "CEIL %s", panel_service_ceiling_name(ceiling));
+        lv_label_set_text(s_int_right, right);
+        /* EVERY RUNG ON SCREEN AT ONCE. The reference's 56 px rungs overflow
+         * its own ladder and push LOCOMOTION's LOCKED below the fold -- the
+         * one rung whose lock matters most. 53 px rungs and a body that runs
+         * to the footer fit all six; each is still far above the 44 pt tap
+         * target for when RUN arrives. */
+        lv_obj_set_size(s_int_body, 334, 410 - INT_BODY_Y);   /* footer below */
+        lv_obj_remove_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
+
+        panel_rung_t r[PANEL_LADDER_RUNGS];
+        const int n = panel_service_ladder(ceiling, r);
+        for (int i = 0; i < n; i++) {
+            lv_obj_t *row = lv_obj_create(s_int_body);
+            bare(row);
+            lv_obj_set_size(row, SVC_W, INT_RUNG_H);
+            lv_obj_set_pos(row, 0, 6 + i * INT_RUNG_H);
+            if (i < n - 1) {
+                lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+                lv_obj_set_style_border_width(row, 1, 0);
+                lv_obj_set_style_border_color(row, lv_color_hex(V5_HAIRLINE), 0);
+            }
+            /* Share Tech Mono 24, baseline 26 in; line 24, base 4 -> 6. The
+             * lock word is 18 px, centred on the rung. ALLOWED is in the
+             * text colour, not green: with no RUN yet it states what the gate
+             * would admit, and green would read as armed. */
+            text(row, &techmono_24, 1, r[i].allowed ? V5_TEXT : V5_DIM, 0, 6, r[i].tier);
+            text_r(row, &techmono_18, 1, r[i].allowed ? V5_TEXT : V5_DIM,
+                   SVC_W, 120, 16, r[i].allowed ? "ALLOWED" : "LOCKED");
+        }
+    }
+
+    lv_obj_remove_flag(s_int, LV_OBJ_FLAG_HIDDEN);
+    set_pips_hidden(true);          /* the reference's interior has no pager */
+}
+
+static void close_interior(void)
+{
+    if (s_int_open == PANEL_SVC_COUNT) return;
+    s_int_open = PANEL_SVC_COUNT;
+    lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clean(s_int_body);
+    s_int_rows = 0;
+    set_pips_hidden(false);
+}
+
+static bool hit(lv_obj_t *o, int x, int y)
+{
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
+}
+
+void panel_ui_tap(int x, int y)
+{
+    if (s_page_at != PAGE_SERVICE || s_svc_list == NULL) return;
+
+    if (s_int_open != PANEL_SVC_COUNT) {
+        /* THE HEADER IS THE BACK BUTTON, all 74 px of it -- a tap target the
+         * size of the reference's whole header rather than the width of its
+         * chevrons. Nothing else in an interior is a control. */
+        if (y < INT_HEAD_H) close_interior();
+        return;
+    }
+
+    /* NOT WHILE THE LIST IS MOVING. A tap meant to stop a flick would
+     * otherwise open whatever row the momentum had carried under the finger.
+     * The scroll position is sampled every tick in svc_refresh; if it moved
+     * since, the list is still in motion. */
+    if (lv_obj_get_scroll_y(s_svc_list) != s_svc_scroll_at) return;
+
+    /* Inside the list's visible box first: a row scrolled under the rule or
+     * the pager still has coordinates, and must not be tappable through them. */
+    lv_obj_update_layout(s_svc_list);
+    if (!hit(s_svc_list, x, y)) return;
+    for (int i = 0; i < PANEL_SVC_COUNT; i++) {
+        if (!hit(s_svc_row[i], x, y)) continue;
+        if (panel_service_kind((panel_svc_t)i) == PANEL_SVC_JUMP)
+            panel_ui_show_page(PAGE_NETWORK);
+        else
+            open_interior((panel_svc_t)i);
+        ESP_LOGI("panel", "tap -> %s", panel_service_title((panel_svc_t)i));
+        return;
+    }
+}
+
+void panel_ui_swipe(int dir)
+{
+    /* Inside an interior, horizontal swipe is reserved for BACK. */
+    if (s_int_open != PANEL_SVC_COUNT) {
+        if (dir < 0) close_interior();
+        return;
+    }
+    int next = s_page_at + (dir > 0 ? 1 : -1);
+    /* Clamp, do not wrap. The pages are an ordered strip, and the vault's own
+     * argument for a fixed ring was that "position in the ring is itself an
+     * orientation cue" -- wrapping destroys that cue on a strip whose ends
+     * are otherwise unmarked. */
+    if (next < 0) next = 0;
+    if (next > PAGE_COUNT - 1) next = PAGE_COUNT - 1;
+    if (next != s_page_at) {
+        panel_ui_show_page(next);
+        ESP_LOGI("panel", "swipe %s -> page %s", dir > 0 ? "left" : "right",
+                 k_page_name[next]);
+    }
+}
+
+/* Every tick: the R2 LINK square, and an open list's values. The values move
+ * -- HEARD ages, R2 LINK goes to "----" the tick the link drops -- and an
+ * interior that only painted on open would be the panel vouching for a
+ * reading after its link had gone, which is AC7 exactly. */
+static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
+{
+    s_last_tm = t;
+    s_last_now = now_ms;
+    if (s_svc_list) s_svc_scroll_at = lv_obj_get_scroll_y(s_svc_list);
+    if (s_svc_link_sq)
+        lv_obj_set_style_bg_color(s_svc_link_sq,
+            lv_color_hex(tone_colour(panel_service_link_tone(t))), 0);
+    if (s_int_open != PANEL_SVC_COUNT &&
+        panel_service_kind(s_int_open) == PANEL_SVC_LIST && s_int_rows > 0)
+        fill_list(false);
 }
 
 static void build_network_page(lv_obj_t *pg)
@@ -381,9 +772,12 @@ static void build_network_page(lv_obj_t *pg)
     lv_obj_set_pos(n, ROW_PAD, PANEL_H - 52);
 }
 
+static void close_interior(void);
+
 void panel_ui_show_page(int page)
 {
     if (page < 0 || page >= PAGE_COUNT) return;
+    close_interior();          /* a page change always leaves an interior */
     s_page_at = page;
     for (int i = 0; i < PAGE_COUNT; i++) {
         if (s_page[i] == NULL) continue;
@@ -1376,6 +1770,8 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
      * reference has no BRAIN row and no four-row status page. See
      * build_status_face() for the conflict this resolves and the ruling it
      * still needs. */
+
+    svc_refresh(t, now_ms);
 
     /* Only the severity kind. The dim timer must not be resettable by noise,
      * or it never expires and the panel never rests. */

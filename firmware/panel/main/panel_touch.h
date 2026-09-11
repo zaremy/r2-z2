@@ -7,11 +7,8 @@
  * the thing being calibrated, and removes the app-swapping that would otherwise
  * make a trip to the droid land on whichever firmware happened to be flashed.
  *
- * WHAT IS DELIBERATELY NOT HERE: the three lateral pages' CONTENT. The epic
- * names page 2 (`NETWORK`) and nothing else; pages 1 and 3 exist only in the
- * gitignored vault. Inventing them is exactly the failure D-017 Amendment B
- * just ruled against -- a view inventing its own model. The mechanism is built;
- * the pages wait for their definition.
+ * WHAT IS DELIBERATELY NOT HERE: what a gesture MEANS. This file reports a
+ * swipe, a tap, a press; which page or row that reaches is panel_ui's call.
  */
 #ifndef PANEL_TOUCH_H
 #define PANEL_TOUCH_H
@@ -25,6 +22,12 @@ extern "C" {
 
 /* AC5: the swipe threshold, in raw panel pixels. */
 #define PANEL_SWIPE_PX 60
+
+/* A tap moves less than this in both axes. Well under the swipe threshold
+ * so the two can never both be true, and also LVGL's scroll limit (set in
+ * panel_touch_init) so a tap and a scroll cannot both be true. Chosen, not
+ * measured: this controller's jitter has never been recorded. */
+#define PANEL_TAP_PX 24
 
 typedef enum { PANEL_SWIPE_NONE = 0, PANEL_SWIPE_LEFT, PANEL_SWIPE_RIGHT } panel_swipe_t;
 
@@ -67,6 +70,14 @@ bool panel_touch_take_press(void);
  * not yet taken is dropped. For a touch that has been consumed by
  * something else -- the wake frame's dismissal. */
 void panel_touch_void_gesture(void);
+
+/* The most recent tap, consumed by reading it: where the finger went down.
+ * A voided gesture never produces one. */
+bool panel_touch_take_tap(int16_t *x, int16_t *y);
+
+/* The touch controller's chip id read at boot, 0 if it never answered. An
+ * answer at 0x15 is also the board-revision probe: it means V2. */
+uint8_t panel_touch_chip_id(void);
 
 #ifdef __cplusplus
 }

@@ -80,7 +80,7 @@ static void link_task(void *arg)
     (void)arg;
     int tick = 0;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(PANEL_KEEPALIVE_MS));
         if (!r2_link_is_up()) continue;
 
         /* Keepalive. This is also what stops him sleeping, which is a real
@@ -150,6 +150,8 @@ static void ui_task(void *arg)
             const panel_swipe_t swiped = panel_touch_take_swipe();
             const bool touched = panel_touch_take_activity();
             const bool pressed = panel_touch_take_press();
+            int16_t tap_x = 0, tap_y = 0;
+            bool tapped = panel_touch_take_tap(&tap_x, &tap_y);
 
             /* WHILE THE WAKE FRAME IS UP, NO TOUCH REACHES THE PAGES. D-017's
              * point is that a glance must not be able to arm anything, and a
@@ -164,29 +166,20 @@ static void ui_task(void *arg)
             panel_swipe_t sw = swiped;
             if (panel_ui_wake_showing()) {
                 sw = PANEL_SWIPE_NONE;
+                tapped = false;
                 if (pressed) {
                     panel_ui_wake_dismiss();
                     panel_touch_void_gesture();
                     ESP_LOGI(TAG, "wake frame dismissed by touch");
                 }
             }
-            if (sw != PANEL_SWIPE_NONE) {
-                const int n = (sw == PANEL_SWIPE_LEFT) ? 1 : -1;
-                int next = panel_ui_page() + n;
-                /* Clamp, do not wrap. The pages are an ordered strip, and the
-                 * vault's own argument for a fixed ring was that "position in
-                 * the ring is itself an orientation cue" -- wrapping destroys
-                 * that cue on a panel with no back button. */
-                if (next < 0) next = 0;
-                if (next > panel_ui_page_count() - 1)
-                    next = panel_ui_page_count() - 1;
-                if (next != panel_ui_page()) {
-                    panel_ui_show_page(next);
-                    ESP_LOGI(TAG, "swipe %s -> page %s",
-                             sw == PANEL_SWIPE_LEFT ? "left" : "right",
-                             panel_ui_page_name(next));
-                }
-            }
+            /* Where a gesture goes -- which page, whether it is BACK inside a
+             * SERVICE interior, which row a tap hit -- is the renderer's to
+             * decide; this loop only reports that one happened. */
+            if (sw != PANEL_SWIPE_NONE)
+                panel_ui_swipe(sw == PANEL_SWIPE_LEFT ? 1 : -1);
+            if (tapped)
+                panel_ui_tap(tap_x, tap_y);
 
             /* A HUMAN TOUCHING IT COUNTS AS ACTIVITY. Without this the dim
              * timer keys only on the DATA changing, so someone who picks up
