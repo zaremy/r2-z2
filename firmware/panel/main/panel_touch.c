@@ -19,7 +19,12 @@ static panel_touch_extremes_t s_ex = { .points = 0, .min_x = INT16_MAX,
 static volatile panel_swipe_t s_swipe;
 static lv_point_t s_press_at;
 static lv_point_t s_last_touch;
-static bool s_pressing;
+/* VOLATILE because three tasks read it now. Written only by touch_task, but
+ * read by the LVGL timer task (indev_read, which decides whether LVGL sees a
+ * finger at all, and so whether the SERVICE list scrolls) and by ui_task.
+ * Every other cross-task scalar in this file was already volatile; this one
+ * was not, and moving the poll off ui_task is what made that matter. */
+static volatile bool s_pressing;
 
 /* A dot under the finger.
  *
@@ -78,7 +83,15 @@ static volatile bool s_gesture_void;  /* this press must become neither swipe no
 static volatile bool s_tap;           /* a press that barely moved, released */
 static volatile int16_t s_tap_x, s_tap_y;
 static int32_t s_press_max;           /* furthest this press strayed */
+/* HOW MANY POLLS SAW THIS PRESS. The measurement that forced it: of 22 presses
+ * from a finger, the eight seen EXACTLY ONCE were every one classified a tap --
+ * a press seen once reports zero travel, because its press position is also its
+ * last position, so it fired a tap wherever the finger was caught mid-flight.
+ * Presses seen twice or more produced whatever the geometry allowed, including
+ * a 2-sample swipe of 271 px. Counted here, judged in panel_gesture. */
+static uint32_t s_press_samples;
 static uint8_t s_chip_id;             /* 0 = the controller did not answer */
+static uint8_t s_last_hw_gesture;     /* so the log says it once, not 25x/s */
 
 static void dot_hide(void)
 {
@@ -106,7 +119,15 @@ static void note(int16_t x, int16_t y)
      * min/max, and "x 1..3" from four separate corners is a diagnosis that
      * arrives too late to act on -- the individual points would have shown
      * immediately that the coordinate was not tracking. */
-    ESP_LOGI(TAG, "point %4u  (%3d,%3d)   gaps: L%-3d R%-3d T%-3d B%-3d",
+    /* DEBUG, NOT INFO. At the 10 ms poll this fires up to 100 times a second
+     * during a drag, and the console is UART0 at 115200 with no driver
+     * installed -- so ESP_LOGI busy-waits on the TX FIFO rather than yielding,
+     * from a task above the UI and the link. ~77 bytes a line is ~6.7 ms of
+     * UART each; at 100/s that is most of the wire. It was written when the
+     * poll ran 25 times a second, and the P1 calibration that wanted every
+     * point is long finished. Turn it back on with a log-level override when
+     * measuring touch, not by default. */
+    ESP_LOGD(TAG, "point %4u  (%3d,%3d)   gaps: L%-3d R%-3d T%-3d B%-3d",
              (unsigned)s_ex.points, x, y,
              s_ex.min_x, (PANEL_W - 1) - s_ex.max_x,
              s_ex.min_y, (PANEL_H - 1) - s_ex.max_y);
@@ -145,10 +166,11 @@ static void indev_read(lv_indev_t *indev, lv_indev_data_t *data);
 static esp_err_t rd(uint8_t reg, uint8_t *out, size_t n)
 {
     if (s_dev == NULL) return ESP_ERR_INVALID_STATE;
-    /* FINDING 2 (review of #150): 20 ms, not 200. This runs every UI tick,
-     * and a wedged controller with a 200 ms timeout would stall the UI for
-     * most of its life. 20 ms is far longer than a 6-byte read at 400 kHz
-     * needs and bounds the damage. */
+    /* FINDING 2 (review of #150): 20 ms, not 200. It bounds the damage from
+     * a wedged controller: far longer than a 6-byte read at 400 kHz needs,
+     * short enough that a dead controller costs one cycle rather than the
+     * session. It no longer runs on the UI tick -- the poll has its own task
+     * -- so what it protects now is the touch rate, not the redraw. */
     return i2c_master_transmit_receive(s_dev, &reg, 1, out, n, 20);
 }
 
@@ -158,6 +180,18 @@ void panel_touch_poll(void)
     static int last_x = -1, last_y = -1;
 
     if (rd(REG_GESTURE, buf, sizeof buf) != ESP_OK) return;
+
+    /* buf[0] IS THE CONTROLLER'S OWN GESTURE, register 0x01, and this code has
+     * always read it and thrown it away. The CST816 computes slide-left and
+     * slide-right at its own scan rate, which is not bounded by how often we
+     * poll -- so if it reports usefully here it is a better swipe source than
+     * anything reconstructed from samples we may not have taken. Logged rather
+     * than used: what this particular part emits has never been observed, and
+     * a gesture source is not something to adopt on the datasheet's word. */
+    const uint8_t hw_gesture = buf[0];
+    if (hw_gesture != 0 && hw_gesture != s_last_hw_gesture)
+        ESP_LOGI(TAG, "controller gesture byte: 0x%02X", hw_gesture);
+    s_last_hw_gesture = hw_gesture;
 
     const uint8_t fingers = buf[1] & 0x0Fu;
     const int x = ((buf[2] & 0x0F) << 8) | buf[3];
@@ -169,7 +203,9 @@ void panel_touch_poll(void)
             s_press_began = true;
             s_gesture_void = false;
             s_press_max = 0;
+            s_press_samples = 0;
         }
+        s_press_samples++;
         {
             const int32_t ax = x > s_press_at.x ? x - s_press_at.x : s_press_at.x - x;
             const int32_t ay = y > s_press_at.y ? y - s_press_at.y : s_press_at.y - y;
@@ -192,30 +228,42 @@ void panel_touch_poll(void)
          * mean anything in that packet. If they are stale it happens to work;
          * if they are zeroed, every swipe becomes a false left-swipe. Not a
          * coin worth flipping for a gesture that changes pages. */
-        const int32_t dx = s_last_touch.x - s_press_at.x;
-        const int32_t dy = s_last_touch.y - s_press_at.y;
-        const int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
-        /* A SWIPE IS HORIZONTAL: at least twice as far across as down. Scrolling
-         * the SERVICE list is now the commonest gesture on the panel, and a
-         * scroll with 60 px of sideways drift used to change the page. */
-        const bool across = adx > 2 * ady;
-        if (s_gesture_void)                         s_gesture_void = false;
-        else if (across && dx <= -PANEL_SWIPE_PX)   s_swipe = PANEL_SWIPE_LEFT;
-        else if (across && dx >= PANEL_SWIPE_PX)    s_swipe = PANEL_SWIPE_RIGHT;
-        /* A TAP is a release that barely moved in EITHER axis. Staying inside the
-         * radius in y is what keeps scrolling the SERVICE list from opening whatever row the
-         * finger started on; the gap between PANEL_TAP_PX and PANEL_SWIPE_PX
-         * is deliberately dead, so an uncertain gesture does nothing. The tap
-         * lands where the finger went DOWN, which is the row it was aimed
-         * at. */
-        /* ...and it must never have LEFT that radius: a drag out past the
-         * scroll limit and back scrolled the list, and ending near where it
-         * started does not make it a tap. */
-        else if (s_press_max < PANEL_TAP_PX) {
+        const panel_press_t press = {
+            .press_x = s_press_at.x,   .press_y = s_press_at.y,
+            .last_x  = s_last_touch.x, .last_y  = s_last_touch.y,
+            .max_dev = s_press_max,
+            .samples = s_press_samples,
+            .voided  = s_gesture_void,
+        };
+        const panel_gesture_t g = panel_gesture_classify(&press);
+        s_gesture_void = false;
+
+        /* The tap lands where the finger went DOWN, which is the row it was
+         * aimed at, not wherever it drifted to. */
+        switch (g) {
+        case PANEL_GESTURE_SWIPE_LEFT:  s_swipe = PANEL_SWIPE_LEFT;  break;
+        case PANEL_GESTURE_SWIPE_RIGHT: s_swipe = PANEL_SWIPE_RIGHT; break;
+        case PANEL_GESTURE_TAP:
             s_tap_x = (int16_t)s_press_at.x;
             s_tap_y = (int16_t)s_press_at.y;
             s_tap = true;
+            break;
+        case PANEL_GESTURE_NONE:
+            break;
         }
+
+        /* EVERY release, with the numbers the verdict was made from. The whole
+         * diagnosis of the swipe bug came from raw points and a reconstruction
+         * afterwards, because nothing logged the decision -- so the one thing
+         * worth keeping from that session is this line. */
+        ESP_LOGI(TAG, "press: n=%u (%3d,%3d)->(%3d,%3d) d=(%d,%d) dev=%d -> %s",
+                 (unsigned)s_press_samples, (int)s_press_at.x, (int)s_press_at.y,
+                 (int)s_last_touch.x, (int)s_last_touch.y,
+                 (int)(s_last_touch.x - s_press_at.x),
+                 (int)(s_last_touch.y - s_press_at.y), (int)s_press_max,
+                 g == PANEL_GESTURE_SWIPE_LEFT  ? "SWIPE LEFT"  :
+                 g == PANEL_GESTURE_SWIPE_RIGHT ? "SWIPE RIGHT" :
+                 g == PANEL_GESTURE_TAP         ? "TAP" : "nothing");
         /* The dot STAYS where the finger left it. Hiding it on release is what
          * makes a working panel look dead to someone who taps once and looks
          * up -- they see nothing, exactly as reported three times. */
@@ -368,7 +416,8 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
  * the state panel_touch_poll() already read. One reader of the hardware,
  * still ours, and LVGL gets its events.
  *
- * THREADING: poll() runs on ui_task and this runs on the LVGL timer task, so
+ * THREADING: poll() runs on touch_task -- its own, since the sampling fix --
+ * and this runs on the LVGL timer task, so
  * these scalars are genuinely shared now rather than same-task as before.
  * They are word-sized and volatile; the worst case is one frame of stale
  * coordinate, which is a redraw away from correct and is why a lock would be
@@ -404,10 +453,17 @@ void panel_touch_void_gesture(void)
 
 bool panel_touch_take_tap(int16_t *x, int16_t *y)
 {
+    /* THE COORDINATES COME OUT WITH THE FLAG, not after it. touch_task runs
+     * ABOVE this one and can land between the clear and the reads, so the tap
+     * being reported would be delivered at the NEXT tap's coordinates -- and
+     * that next tap delivered again on the following tick, at a row the
+     * operator never aimed at. Impossible while both ran on ui_task; the
+     * moment the poll moved to its own task it was not. */
     if (!s_tap) return false;
+    const int16_t tx = s_tap_x, ty = s_tap_y;
     s_tap = false;
-    if (x) *x = s_tap_x;
-    if (y) *y = s_tap_y;
+    if (x) *x = tx;
+    if (y) *y = ty;
     return true;
 }
 

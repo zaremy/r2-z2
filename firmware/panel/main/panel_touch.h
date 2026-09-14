@@ -20,21 +20,19 @@
 extern "C" {
 #endif
 
-/* AC5: the swipe threshold, in raw panel pixels. */
-#define PANEL_SWIPE_PX 60
-
-/* A tap moves less than this in both axes. Well under the swipe threshold
- * so the two can never both be true. It is also LVGL's scroll limit (set in
- * panel_touch_init), and a tap is a press that never strayed this far, so
- * a gesture that scrolled the list is never also a tap. Chosen, not
- * measured: this controller's jitter has never been recorded. */
-#define PANEL_TAP_PX 24
+/* The thresholds and the decision itself live in panel_gesture, which is pure
+ * and has host tests. They were here, inside an I2C poll loop, which is a
+ * decision no test could reach -- and it shipped a bug that only a finger
+ * could find. PANEL_SWIPE_PX and PANEL_TAP_PX come in from there. */
+#include "panel_gesture.h"
 
 typedef enum { PANEL_SWIPE_NONE = 0, PANEL_SWIPE_LEFT, PANEL_SWIPE_RIGHT } panel_swipe_t;
 
 void panel_touch_init(void);
 
-/* Read the controller. Call every UI tick, and NOT under the display lock:
+/* Read the controller. Called from touch_task at its own rate -- NOT from the
+ * UI tick, and NOT from two tasks at once: it accumulates a press across
+ * calls, so a second caller would race it. And never under the display lock:
  * it does a blocking I2C transaction, and holding the LVGL lock across that
  * lets a wedged controller stall every redraw. Touches no LVGL state. */
 void panel_touch_poll(void);
