@@ -117,10 +117,14 @@ static void link_task(void *arg)
 
         /* THE OPERATOR'S TEST FIRST, and before the link check: a tap while he
          * is away must still settle, as NO REPLY rather than as silence. */
-        const int probe_tier = panel_ui_take_probe_request();
+        unsigned probe_gen = 0;
+        const int probe_tier = panel_ui_take_probe_request(&probe_gen);
         if (probe_tier >= 0) {
             const uint32_t at = now_ms();      /* stamped before the ops go */
-            panel_ui_probe_sent(run_tier_test(probe_tier), at);
+            /* Carried through the send, so a panel that left the interior
+             * while these were in flight can disown the result rather than
+             * start a test against a rung that is gone. */
+            panel_ui_probe_sent(run_tier_test(probe_tier), at, probe_gen);
         }
 
         if (!r2_link_is_up()) continue;

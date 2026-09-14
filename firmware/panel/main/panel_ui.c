@@ -367,6 +367,22 @@ static unsigned s_probe_pending_expected;
 static uint32_t s_probe_pending_ms;
 static bool     s_probe_pending;
 
+/* AND A GENERATION, because closing the interior cannot recall a send already
+ * in flight. Clearing the flags is not enough: link_task may already have
+ * taken the request and be inside its three GATT writes, and the `pending` it
+ * sets on the way out lands AFTER the clear. That resurrected start was then
+ * consumed by the refresh which re-opened the ladder, starting a probe against
+ * rung -1 that nothing steps -- RUNNING forever, and every later tap refused.
+ * The tap stamps the generation it was issued under; the close bumps it; a
+ * start whose generation has moved on is dropped. */
+static unsigned s_probe_gen;
+static unsigned s_probe_pending_gen;
+
+/* Bumped every time a tap is accepted, so the tour can tell "this tap took"
+ * from "a request happens to be queued" -- the request may already have been
+ * taken by the link task microseconds later. */
+static unsigned s_probe_accepted;
+
 static uint32_t tone_colour(panel_tone_t t)
 {
     switch (t) {
@@ -738,6 +754,7 @@ static void close_interior(void)
     portENTER_CRITICAL(&s_probe_mux);
     s_probe_request = -1;
     s_probe_pending = false;
+    s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_int_body);
@@ -781,13 +798,28 @@ void panel_ui_tap(int x, int y)
              * one intended test. Harmless on READ, which cannot move him; this
              * is the rate limiter that governs DOME and STANCE the day the
              * ceiling rises, so it is made true now. */
-            bool busy;
+            /* ONE DECISION, UNDER ONE LOCK, and the running probe is part of
+             * it. An earlier version committed the request first and checked
+             * PANEL_PROBE_RUNNING after: that closed the 140 ms hole and
+             * opened the 2 s one, because a tap during a running test still
+             * armed a request the link task then sent. Anything that means a
+             * test is under way -- queued, sent but not yet started, or
+             * running -- refuses the tap, and the refusal is decided before
+             * anything is written. */
+            bool taken;
             portENTER_CRITICAL(&s_probe_mux);
-            busy = (s_probe_request >= 0) || s_probe_pending;
-            if (!busy) s_probe_request = i;
+            taken = (s_probe_request < 0) && !s_probe_pending &&
+                    s_probe.state != PANEL_PROBE_RUNNING;
+            if (taken) {
+                s_probe_request = i;
+                s_probe_rung = i;
+                s_probe_accepted++;
+            }
             portEXIT_CRITICAL(&s_probe_mux);
-            if (busy || s_probe.state == PANEL_PROBE_RUNNING) return;
-            s_probe_rung = i;
+            if (!taken) {
+                ESP_LOGI("panel", "RUN on rung %d ignored -- a test is under way", i);
+                return;
+            }
             ESP_LOGI("panel", "RUN requested for rung %d", i);
             return;
         }
@@ -875,8 +907,19 @@ bool panel_ui_debug_run_rung(int rung)
     lv_obj_update_layout(s_int_body);
     lv_area_t a;
     lv_obj_get_coords(s_rung_row[rung], &a);
+    /* Asked as "did MY tap take", not "is a request queued": the link task
+     * can take the request microseconds later, which made the old check fail
+     * on a perfectly healthy panel and the tour cry refusal. */
+    unsigned before;
+    portENTER_CRITICAL(&s_probe_mux);
+    before = s_probe_accepted;
+    portEXIT_CRITICAL(&s_probe_mux);
     panel_ui_tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
-    return s_probe_request == rung;
+    unsigned after;
+    portENTER_CRITICAL(&s_probe_mux);
+    after = s_probe_accepted;
+    portEXIT_CRITICAL(&s_probe_mux);
+    return after != before;
 }
 
 bool panel_ui_debug_open_row(int row)
@@ -893,21 +936,28 @@ bool panel_ui_debug_open_row(int row)
 }
 #endif
 
-int panel_ui_take_probe_request(void)
+int panel_ui_take_probe_request(unsigned *gen)
 {
     portENTER_CRITICAL(&s_probe_mux);
     const int t = s_probe_request;
     s_probe_request = -1;
+    if (gen) *gen = s_probe_gen;
     portEXIT_CRITICAL(&s_probe_mux);
     return t;
 }
 
-void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms)
+void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen)
 {
     portENTER_CRITICAL(&s_probe_mux);
-    s_probe_pending_expected = expected;
-    s_probe_pending_ms = sent_at_ms;
-    s_probe_pending = true;
+    /* The ops went out; whether anything is left to report them on is the
+     * generation's business. A stale one is dropped here rather than started
+     * against a rung that no longer exists. */
+    if (gen == s_probe_gen) {
+        s_probe_pending_expected = expected;
+        s_probe_pending_ms = sent_at_ms;
+        s_probe_pending_gen = gen;
+        s_probe_pending = true;
+    }
     portEXIT_CRITICAL(&s_probe_mux);
 }
 
@@ -962,8 +1012,8 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     uint32_t at = 0;
     bool start;
     portENTER_CRITICAL(&s_probe_mux);
-    start = s_probe_pending;
-    if (start) {
+    start = s_probe_pending && s_probe_pending_gen == s_probe_gen;
+    if (s_probe_pending) {
         s_probe_pending = false;
         e = s_probe_pending_expected;
         at = s_probe_pending_ms;
