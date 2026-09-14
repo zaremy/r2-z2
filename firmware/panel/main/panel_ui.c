@@ -639,11 +639,11 @@ static void open_interior(panel_svc_t s)
         lv_obj_set_style_text_align(l1, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_align(l2, LV_TEXT_ALIGN_CENTER, 0);
     } else if (kind == PANEL_SVC_LADDER) {
-        /* THE LADDER DISPLAYS; it does not run anything yet. Each rung says
-         * whether the gate would admit it -- ALLOWED or LOCKED -- and nothing
-         * here is a control. The RUN affordance is its own change, because it
-         * is the first thing on this panel that sends R2 a command a person
-         * chose, and it deserves its own review. */
+        /* THE LADDER RUNS. Each rung says whether the gate would admit it,
+         * and a rung it would admit is tappable: the first control on this
+         * panel that sends R2 a command a person chose. What it may send is
+         * bounded twice over -- the ladder offers only what the gate's ceiling
+         * allows, and r2_gate_send refuses the rest regardless. */
         for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
             s_rung_row[i] = NULL;
             s_rung_word[i] = NULL;
@@ -700,6 +700,15 @@ static void close_interior(void)
 {
     if (s_int_open == PANEL_SVC_COUNT) return;
     s_int_open = PANEL_SVC_COUNT;
+    /* The rung labels belong to the body about to be cleaned. Forgetting to
+     * forget them left svc_refresh dereferencing freed LVGL objects on the
+     * next tick -- on a panel bolted to the droid. */
+    for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
+        s_rung_row[i] = NULL;
+        s_rung_word[i] = NULL;
+        s_rung_allowed[i] = false;
+    }
+    s_probe_rung = -1;
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_int_body);
     s_int_rows = 0;
@@ -784,6 +793,11 @@ void panel_ui_tap(int x, int y)
  * can fire mid-tour -- on a bench with no droid the panel goes OFFLINE and
  * the frame pulls STATUS forward -- and a picture of it filed under an
  * interior's name is exactly the lie this rig exists not to tell. */
+/* Has the rung's test settled, and did it pass? For the tour, which must not
+ * photograph a "..." and call it a result. */
+bool panel_ui_debug_probe_settled(void) { return panel_probe_settled(&s_probe); }
+bool panel_ui_debug_probe_passed(void)  { return panel_probe_passed(&s_probe); }
+
 bool panel_ui_debug_showing(int want)
 {
     if (panel_ui_wake_showing()) return false;
@@ -809,13 +823,13 @@ void panel_ui_debug_restore(int want)
 }
 
 /* Tap a ladder rung through the real hit test, for the screenshot tour.
- * False when the rung is not on screen, is locked, or the tap did not take --
- * the tour then says so rather than photographing an unchanged ladder and
- * calling it a result. */
+ * False when the rung does not exist, is locked, or the tap left no request.
+ * Scrolls it into view first, so a ladder longer than its body still works. */
 bool panel_ui_debug_run_rung(int rung)
 {
     if (rung < 0 || rung >= PANEL_LADDER_RUNGS) return false;
     if (s_rung_row[rung] == NULL || !s_rung_allowed[rung]) return false;
+    lv_obj_scroll_to_view(s_rung_row[rung], LV_ANIM_OFF);
     lv_obj_update_layout(s_int_body);
     lv_area_t a;
     lv_obj_get_coords(s_rung_row[rung], &a);
@@ -844,13 +858,23 @@ int panel_ui_take_probe_request(void)
     return t;
 }
 
-void panel_ui_probe_sent(unsigned expected, uint32_t now_ms)
+/* Handed over by whoever sent the ops, and picked up by the next tick.
+ *
+ * NOT started here, because the sender does not hold the display lock and
+ * must not be able to fail to report: an earlier version called into the
+ * renderer under a 100 ms lock attempt, and a lock that timed out left three
+ * ops away with the rung still reading a cheerful green RUN. A flag the tick
+ * loop cannot miss is the difference between "nothing happened" and "nothing
+ * was SHOWN to have happened". */
+static volatile unsigned s_probe_pending_expected;
+static volatile uint32_t s_probe_pending_ms;
+static volatile bool     s_probe_pending;
+
+void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms)
 {
-    /* `expected` is how many ops the gate actually admitted and the link
-     * actually took. Zero settles as NO REPLY rather than running: a test
-     * that asked nothing must never look busy, nor pass. */
-    panel_probe_start(&s_probe, now_ms,
-                      expected > 255u ? 255u : (uint8_t)expected);
+    s_probe_pending_expected = expected;
+    s_probe_pending_ms = sent_at_ms;
+    s_probe_pending = true;
 }
 
 void panel_ui_note_press(void)
@@ -898,11 +922,22 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         panel_service_kind(s_int_open) == PANEL_SVC_LIST)
         fill_list(false);
 
-    /* THE RUNNING TEST'S VERDICT. Counted as the readings THIS test asked for
-     * that have arrived since it started -- not raw replies, which include
-     * the panel's own periodic battery poll and would hand a failing test a
-     * passing mark. */
-    if (s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {
+    /* A test whose ops have gone out starts here, stamped with the moment
+     * they left rather than the moment this tick noticed. */
+    if (s_probe_pending) {
+        s_probe_pending = false;
+        const unsigned e = s_probe_pending_expected;
+        panel_probe_start(&s_probe, s_probe_pending_ms,
+                          e > 255u ? 255u : (uint8_t)e);
+    }
+
+    /* THE RUNNING TEST'S VERDICT. Counted as the readings this test asked for
+     * that arrived since it started, which NARROWS but does not eliminate the
+     * panel's own periodic polls: they land in the same three stamps, so a
+     * reply the test did not ask for can still count toward it. */
+    if (s_int_open != PANEL_SVC_COUNT &&
+        panel_service_kind(s_int_open) == PANEL_SVC_LADDER &&
+        s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {
         const uint32_t since = panel_probe_started_ms(&s_probe);
         const unsigned answered =
             since ? panel_service_fresh_readings(t, since, now_ms) : 0u;

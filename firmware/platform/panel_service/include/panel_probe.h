@@ -6,11 +6,17 @@
  * whether a test PASSED lives here where a test can reach it.
  *
  * IT COUNTS ANSWERS, NOT SENDS. A send that the gate admitted proves the gate
- * admitted it; only an answer proves R2 heard. The caller counts which of the
- * READINGS this test asked for have arrived since it started
- * (`panel_service_fresh_readings`) -- not raw replies, because the panel's own
- * periodic battery poll lands in the same counter and would hand a failing
- * test a passing mark it did not earn.
+ * admitted it; only an answer proves R2 heard. The caller counts the READINGS
+ * that arrived since the test started (`panel_service_fresh_readings`) rather
+ * than raw reply totals, which include every reply since boot.
+ *
+ * THAT NARROWS THE WINDOW; IT DOES NOT CLOSE IT. The panel's own periodic
+ * polls -- battery every 15 s, dome every 30 s -- land in the same three
+ * stamps, so a reply this test did not ask for can still count toward it
+ * inside the 2 s window. Closing that would need per-request accounting the
+ * telemetry layer does not carry. Stated rather than papered over: a PASS
+ * means "three readings arrived while the test was running", which is weaker
+ * than "R2 answered all three of these questions".
  *
  * THE ONLY RUNNABLE TIER ON THIS BUILD IS READ, and read is three questions:
  * his battery, where his dome is pointing, and his firmware version. Nothing

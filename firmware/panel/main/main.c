@@ -82,13 +82,42 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 }
 
 /* Talks to R2. Never touches LVGL. */
+/* Defined with the other senders, below: the link loop calls it the moment
+ * the operator taps a rung. */
+static unsigned run_tier_test(int tier);
+
+/* The link loop's tick. Short enough that a tap on the ladder reaches the
+ * radio promptly; the keepalive and the polls count ticks rather than
+ * sleeping, so their periods are unchanged. */
+#define LINK_TICK_MS 100u
+
 static void link_task(void *arg)
 {
     (void)arg;
     int tick = 0;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(PANEL_KEEPALIVE_MS));
+        /* A 100 ms TICK, with the keepalive derived from it rather than from
+         * the sleep. The loop used to sleep the whole keepalive period, which
+         * made it the wrong place to notice a tap -- and noticing taps in the
+         * UI task instead meant two tasks sharing the sequence counter and the
+         * request tally, the very number this project uses to chase lost
+         * replies. One owner, one tick. */
+        vTaskDelay(pdMS_TO_TICKS(LINK_TICK_MS));
+        tick++;
+
+        /* THE OPERATOR'S TEST FIRST, and before the link check: a tap while he
+         * is away must still settle, as NO REPLY rather than as silence. */
+        const int probe_tier = panel_ui_take_probe_request();
+        if (probe_tier >= 0) {
+            const uint32_t at = now_ms();      /* stamped before the ops go */
+            panel_ui_probe_sent(run_tier_test(probe_tier), at);
+        }
+
         if (!r2_link_is_up()) continue;
+        if (tick % (int)(PANEL_KEEPALIVE_MS / LINK_TICK_MS) != 0) continue;
+        /* One beat per keepalive period: the cadences below are counted in
+         * beats, so their periods are what they always were. */
+        const int beat = tick / (int)(PANEL_KEEPALIVE_MS / LINK_TICK_MS);
 
         /* Keepalive. This is also what stops him sleeping, which is a real
          * cost and a deliberate one for now: D-023 records that powering him
@@ -110,7 +139,7 @@ static void link_task(void *arg)
             s_version_asked = true;
         }
 
-        if (tick % 5 == 0) {
+        if (beat % 5 == 0) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_battery(next_seq(), r2_link_send, NULL);
         }
@@ -120,7 +149,7 @@ static void link_task(void *arg)
          * is a field that should not be on the screen. Asking is the cheaper
          * fix. READ ONLY: this asks where he is looking, it does not turn him,
          * and the gate ceiling stays at 'read'. */
-        if (tick % 10 == 3) {
+        if (beat % 10 == 3) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_head(next_seq(), r2_link_send, NULL);
         }
@@ -129,7 +158,7 @@ static void link_task(void *arg)
          * -- ran 138/138. Either the display is costing us responses or the
          * accounting is wrong, and a number on a panel nobody can screenshot
          * mid-run cannot tell me which. */
-        if (tick % 20 == 0) {
+        if (beat % 20 == 0) {
             uint32_t sent, dropped, admitted, refused;
             r2_link_stats(&sent, &dropped);
             r2_gate_stats(&admitted, &refused);
@@ -138,7 +167,6 @@ static void link_task(void *arg)
                      (unsigned)s_tm.requests, (unsigned)admitted, (unsigned)refused,
                      (unsigned)sent, (unsigned)dropped);
         }
-        tick++;
     }
 }
 
@@ -184,7 +212,6 @@ static void ui_task(void *arg)
          * holding the LVGL lock across a blocking bus transaction lets a
          * wedged controller stall every redraw and every other task that
          * needs the display. */
-        int probe_tier = -1;
         panel_touch_poll();
         if (bsp_display_lock(100)) {
             panel_touch_render();
@@ -239,17 +266,10 @@ static void ui_task(void *arg)
                              set_brightness_pct);
             /* Taken under the lock, sent outside it: a BLE write is not
              * something to hold the display for. */
-            probe_tier = panel_ui_take_probe_request();
             bsp_display_unlock();
         }
 
-        if (probe_tier >= 0) {
-            const unsigned sent = run_tier_test(probe_tier);
-            if (bsp_display_lock(100)) {
-                panel_ui_probe_sent(sent, now_ms());
-                bsp_display_unlock();
-            }
-        }
+
         /* P1 progress, once a minute (#101). Without this the panel records
          * touch extremes and never says so, which makes the measurement
          * INVISIBLE -- and an operator who has done the corners has no way to
@@ -468,7 +488,17 @@ static void tour_task(void *arg)
                     /* Past the probe's own timeout, so the frame shows a
                      * settled verdict and never the "..." in between. */
                     vTaskDelay(pdMS_TO_TICKS(PANEL_PROBE_TIMEOUT_MS + 600u));
-                    tour_shot(2 + i, "HARDWARE TEST after RUN", k_tour_row[i]);
+                    if (!panel_ui_debug_probe_settled()) {
+                        /* Photographing a "..." and calling it a result is
+                         * the lie this rig exists not to tell. */
+                        ESP_LOGE(TAG, "TOUR: the READ test never settled");
+                        s_tour_ok = false;
+                    } else {
+                        ESP_LOGW(TAG, "TOUR: READ test %s",
+                                 panel_ui_debug_probe_passed() ? "PASSED"
+                                                               : "did NOT pass");
+                        tour_shot(2 + i, "HARDWARE TEST after RUN", k_tour_row[i]);
+                    }
                 } else {
                     ESP_LOGE(TAG, "TOUR: the READ rung refused the tap");
                     s_tour_ok = false;

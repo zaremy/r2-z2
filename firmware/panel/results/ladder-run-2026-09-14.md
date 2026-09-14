@@ -26,6 +26,16 @@ R2's three answers -> the verdict.
   direction.
 - **A test that asked nothing settles as NO REPLY**, never as running and
   never as a pass.
+- **The tour fails rather than photographing a `...`.** It checks the verdict
+  settled before taking the picture, so an unfinished test can never be filed
+  as a result.
+
+Re-run on hardware AFTER review, because the review moved the send into the
+link task, took the start stamp before the ops leave, and made the tick loop
+start the probe rather than the sender -- all of them on the path between the
+tap and the verdict. The second run's frame is **byte-identical** to this one
+(sha1 `b634553c`), which is the strongest form the answer comes in: not "it
+still passes", but "the panel drew the same pixels".
 
 ## Still not proven
 

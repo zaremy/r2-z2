@@ -114,6 +114,8 @@ bool        panel_ui_debug_open_row(int row);
 /* Tap a ladder rung through the hit test; false if it was locked, off screen,
  * or the tap did not register a request. */
 bool        panel_ui_debug_run_rung(int rung);
+bool        panel_ui_debug_probe_settled(void);
+bool        panel_ui_debug_probe_passed(void);
 bool        panel_ui_debug_showing(int want);
 void        panel_ui_debug_restore(int want);
 #endif
