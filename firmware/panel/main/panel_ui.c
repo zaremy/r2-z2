@@ -812,14 +812,6 @@ void panel_ui_tap(int x, int y)
                 s_refuse_at = s_last_now;
                 return;
             }
-            /* ONE TEST AT A TIME, counted from the TAP rather than from the
-             * running probe. The probe does not become RUNNING until link_task
-             * picks the request up and the next refresh consumes it -- up to
-             * ~140 ms in which the rung still reads a green RUN and a guard on
-             * the state alone stands open. A double tap there sent six ops for
-             * one intended test. Harmless on READ, which cannot move him; this
-             * is the rate limiter that governs DOME and STANCE the day the
-             * ceiling rises, so it is made true now. */
             /* ONE DECISION, UNDER ONE LOCK, and the running probe is part of
              * it. An earlier version committed the request first and checked
              * PANEL_PROBE_RUNNING after: that closed the 140 ms hole and
