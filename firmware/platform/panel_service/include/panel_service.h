@@ -120,6 +120,14 @@ typedef struct {
 } panel_rung_t;
 int panel_service_ladder(int ceiling, panel_rung_t out[PANEL_LADDER_RUNGS]);
 
+/* How many of R2's three readings -- battery, dome, version -- have arrived
+ * SINCE `since_ms`, on a link that is still up. This is what a hardware test
+ * counts: raw reply totals include the panel's own periodic battery poll, and
+ * a test that passed on somebody else's answer would be the rig lying about
+ * the droid. Wrap-safe. */
+unsigned panel_service_fresh_readings(const r2_telemetry_t *tm, uint32_t since_ms,
+                                      uint32_t now_ms);
+
 /* The ceiling's name for the ladder header, "" when out of range. */
 const char *panel_service_ceiling_name(int ceiling);
 

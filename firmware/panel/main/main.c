@@ -30,6 +30,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "nvs_flash.h"
 
+#include "panel_probe.h"
 #include "panel_shot.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
@@ -141,6 +142,32 @@ static void link_task(void *arg)
     }
 }
 
+/* RUN A TIER'S TEST. The only tier this firmware can run is READ, because the
+ * gate's ceiling is never raised -- and READ is three questions that cannot
+ * move him: his battery, his dome's position, his firmware version.
+ *
+ * Every op goes through r2_gate_send like everything else, so a rung above
+ * the ceiling would be refused here even if the ladder offered it. The count
+ * returned is how many the gate admitted AND the link took; the panel needs
+ * that number to know what a pass looks like. */
+static unsigned run_tier_test(int tier)
+{
+    if (tier != (int)R2_TIER_READ) {
+        /* Not reachable from the ladder, which only offers what the gate
+         * would admit. Said out loud rather than assumed. */
+        ESP_LOGE(TAG, "REFUSED: rung %d is not READ, and this build runs only READ",
+                 tier);
+        return 0;
+    }
+    unsigned sent = 0;
+    if (r2_ops_request_battery(next_seq(), r2_link_send, NULL) > 0) sent++;
+    if (r2_ops_request_head(next_seq(), r2_link_send, NULL) > 0)    sent++;
+    if (r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0)   sent++;
+    for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
+    ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
+    return sent;
+}
+
 /* Injected into panel_ui so the UI file stays free of the BSP. */
 static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent); }
 
@@ -157,6 +184,7 @@ static void ui_task(void *arg)
          * holding the LVGL lock across a blocking bus transaction lets a
          * wedged controller stall every redraw and every other task that
          * needs the display. */
+        int probe_tier = -1;
         panel_touch_poll();
         if (bsp_display_lock(100)) {
             panel_touch_render();
@@ -209,7 +237,18 @@ static void ui_task(void *arg)
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(), changed || touched || swiped != PANEL_SWIPE_NONE,
                              set_brightness_pct);
+            /* Taken under the lock, sent outside it: a BLE write is not
+             * something to hold the display for. */
+            probe_tier = panel_ui_take_probe_request();
             bsp_display_unlock();
+        }
+
+        if (probe_tier >= 0) {
+            const unsigned sent = run_tier_test(probe_tier);
+            if (bsp_display_lock(100)) {
+                panel_ui_probe_sent(sent, now_ms());
+                bsp_display_unlock();
+            }
         }
         /* P1 progress, once a minute (#101). Without this the panel records
          * touch extremes and never says so, which makes the measurement
@@ -413,6 +452,28 @@ static void tour_task(void *arg)
 
         if (opened) {
             tour_shot(2 + i, k_tour_name[i], k_tour_row[i]);
+
+            /* THE LADDER GETS RUN, NOT JUST LISTED. Its slot is re-captured
+             * after tapping READ, so the picture shows the verdict rather
+             * than the offer: a ladder that draws RUN proves nothing about
+             * whether tapping it does anything. The pre-run ladder is already
+             * on record from the run before this one. */
+            if (k_tour_row[i] == 3) {          /* HARDWARE TEST */
+                bool asked = false;
+                if (tour_lock("run rung")) {
+                    asked = panel_ui_debug_run_rung(0);   /* READ */
+                    bsp_display_unlock();
+                }
+                if (asked) {
+                    /* Past the probe's own timeout, so the frame shows a
+                     * settled verdict and never the "..." in between. */
+                    vTaskDelay(pdMS_TO_TICKS(PANEL_PROBE_TIMEOUT_MS + 600u));
+                    tour_shot(2 + i, "HARDWARE TEST after RUN", k_tour_row[i]);
+                } else {
+                    ESP_LOGE(TAG, "TOUR: the READ rung refused the tap");
+                    s_tour_ok = false;
+                }
+            }
         } else {
             /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
              * reports NO FRAME: a missing picture is a finding, while one

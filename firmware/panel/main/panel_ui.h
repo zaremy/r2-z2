@@ -94,6 +94,13 @@ void        panel_ui_tap(int x, int y);
  * it records whether the list was moving at that moment. */
 void        panel_ui_note_press(void);
 
+/* THE LADDER'S RUN (#101 child 6). The renderer never sends anything: a tap
+ * on a permitted rung leaves a request here, main.c takes it, sends that
+ * tier's ops through the gate like everything else, and reports how many the
+ * gate admitted. Returns -1 when nothing was asked for. */
+int         panel_ui_take_probe_request(void);
+void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms);
+
 #ifdef PANEL_SHOT_TOUR
 /* Screenshot-tour build only. `panel_ui_debug_open_row` scrolls a SERVICE row
  * into view and taps its centre through the real hit test, returning false if
@@ -104,6 +111,9 @@ void        panel_ui_note_press(void);
 #define PANEL_TOUR_STATUS (-2)
 #define PANEL_TOUR_MENU   (-1)
 bool        panel_ui_debug_open_row(int row);
+/* Tap a ladder rung through the hit test; false if it was locked, off screen,
+ * or the tap did not register a request. */
+bool        panel_ui_debug_run_rung(int rung);
 bool        panel_ui_debug_showing(int want);
 void        panel_ui_debug_restore(int want);
 #endif

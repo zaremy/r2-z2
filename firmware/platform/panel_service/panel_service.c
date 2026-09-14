@@ -261,6 +261,27 @@ panel_tone_t panel_service_link_tone(const r2_telemetry_t *tm)
     return (tm != NULL && tm->link == R2_TM_UP) ? PANEL_TONE_GOOD : PANEL_TONE_WARN;
 }
 
+unsigned panel_service_fresh_readings(const r2_telemetry_t *tm, uint32_t since_ms,
+                                      uint32_t now_ms)
+{
+    if (tm == NULL) return 0;
+    const r2_tm_stamp_t *st[3] = { &tm->battery, &tm->dome, &tm->version };
+    const uint32_t elapsed = now_ms - since_ms;
+    unsigned n = 0;
+    for (int i = 0; i < 3; i++) {
+        uint32_t age;
+        /* Through displayable(), so a reading that arrived before the link
+         * came up -- or after it went -- is not counted as this test's. An
+         * age no greater than the time since the test began is exactly the
+         * definition of "arrived since", and works across the clock wrap
+         * because both are unsigned differences. */
+        if (r2_says(tm, st[i], now_ms, UINT32_MAX) &&
+            r2_telemetry_age_ms(st[i], now_ms, &age) && age <= elapsed)
+            n++;
+    }
+    return n;
+}
+
 /* ---- the ladder ----------------------------------------------------------- */
 
 /* The bring-up order, CLAUDE.md's and the gate's. The first five mirror

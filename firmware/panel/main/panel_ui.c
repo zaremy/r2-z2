@@ -14,6 +14,7 @@
 #include "panel_state.h"
 #include "panel_wake.h"
 #include "panel_service.h"
+#include "panel_probe.h"
 #include "r2_gate.h"
 #include "panel_touch.h"
 #include "panel_fonts.h"
@@ -333,6 +334,18 @@ static int  s_int_tone[PANEL_SVC_MAX_ROWS];
 static int       s_int_rows;
 static panel_svc_t s_int_open = PANEL_SVC_COUNT;       /* none */
 
+/* THE LADDER'S RUN (#101 child 6). A tap on a rung the gate would admit asks
+ * main.c to send that tier's ops; `panel_probe` decides what the rung then
+ * says. Only rungs panel_service_ladder called allowed are tappable, and the
+ * gate refuses anything above its ceiling in any case -- two refusals, and
+ * this one is the softer of them. */
+static lv_obj_t   *s_rung_row[PANEL_LADDER_RUNGS];
+static lv_obj_t   *s_rung_word[PANEL_LADDER_RUNGS];
+static bool        s_rung_allowed[PANEL_LADDER_RUNGS];
+static panel_probe_t s_probe;
+static int         s_probe_rung = -1;      /* which rung the verdict belongs to */
+static volatile int s_probe_request = -1;  /* a tier main.c has yet to send */
+
 static uint32_t tone_colour(panel_tone_t t)
 {
     switch (t) {
@@ -631,6 +644,14 @@ static void open_interior(panel_svc_t s)
          * here is a control. The RUN affordance is its own change, because it
          * is the first thing on this panel that sends R2 a command a person
          * chose, and it deserves its own review. */
+        for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
+            s_rung_row[i] = NULL;
+            s_rung_word[i] = NULL;
+            s_rung_allowed[i] = false;
+        }
+        panel_probe_init(&s_probe);
+        s_probe_rung = -1;
+
         const int ceiling = (int)r2_gate_get_ceiling();
         char right[24];
         snprintf(right, sizeof right, "CEIL %s", panel_service_ceiling_name(ceiling));
@@ -660,8 +681,14 @@ static void open_interior(panel_svc_t s)
              * text colour, not green: with no RUN yet it states what the gate
              * would admit, and green would read as armed. */
             text(row, &techmono_24, 1, r[i].allowed ? V5_TEXT : V5_DIM, 0, 6, r[i].tier);
-            text_r(row, &techmono_18, 1, r[i].allowed ? V5_TEXT : V5_DIM,
-                   SVC_W, 120, 16, r[i].allowed ? "ALLOWED" : "LOCKED");
+            /* RUN in green on a rung the gate would admit -- it is a control
+             * now, and the reference greens it. LOCKED stays the no-claim
+             * grey. */
+            s_rung_word[i] = text_r(row, &techmono_18, 1,
+                                    r[i].allowed ? PANEL_C_GREEN : V5_DIM,
+                                    SVC_W, 120, 16, r[i].allowed ? "RUN" : "LOCKED");
+            s_rung_row[i] = row;
+            s_rung_allowed[i] = r[i].allowed;
         }
     }
 
@@ -693,8 +720,26 @@ void panel_ui_tap(int x, int y)
     if (s_int_open != PANEL_SVC_COUNT) {
         /* THE HEADER IS THE BACK BUTTON, all 74 px of it -- a tap target the
          * size of the reference's whole header rather than the width of its
-         * chevrons. Nothing else in an interior is a control. */
-        if (y < INT_HEAD_H) close_interior();
+         * chevrons. */
+        if (y < INT_HEAD_H) { close_interior(); return; }
+
+        /* A RUNG THE GATE WOULD ADMIT IS THE ONE OTHER CONTROL ON THIS PANEL.
+         * A locked rung is inert on purpose: the refusal the operator sees is
+         * the same one the gate would give, and a tap that "did nothing"
+         * silently would leave them guessing which. */
+        if (panel_service_kind(s_int_open) != PANEL_SVC_LADDER) return;
+        for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
+            if (s_rung_row[i] == NULL || !hit(s_rung_row[i], x, y)) continue;
+            if (!s_rung_allowed[i]) {
+                ESP_LOGI("panel", "tap on a LOCKED rung %d -- refused", i);
+                return;
+            }
+            if (s_probe.state == PANEL_PROBE_RUNNING) return;   /* one at a time */
+            s_probe_rung = i;
+            s_probe_request = i;
+            ESP_LOGI("panel", "RUN requested for rung %d", i);
+            return;
+        }
         return;
     }
 
@@ -763,6 +808,21 @@ void panel_ui_debug_restore(int want)
     }
 }
 
+/* Tap a ladder rung through the real hit test, for the screenshot tour.
+ * False when the rung is not on screen, is locked, or the tap did not take --
+ * the tour then says so rather than photographing an unchanged ladder and
+ * calling it a result. */
+bool panel_ui_debug_run_rung(int rung)
+{
+    if (rung < 0 || rung >= PANEL_LADDER_RUNGS) return false;
+    if (s_rung_row[rung] == NULL || !s_rung_allowed[rung]) return false;
+    lv_obj_update_layout(s_int_body);
+    lv_area_t a;
+    lv_obj_get_coords(s_rung_row[rung], &a);
+    panel_ui_tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    return s_probe_request == rung;
+}
+
 bool panel_ui_debug_open_row(int row)
 {
     if (s_svc_list == NULL || row < 0 || row >= PANEL_SVC_COUNT) return false;
@@ -776,6 +836,22 @@ bool panel_ui_debug_open_row(int row)
     return s_int_open == (panel_svc_t)row;
 }
 #endif
+
+int panel_ui_take_probe_request(void)
+{
+    const int t = s_probe_request;
+    s_probe_request = -1;
+    return t;
+}
+
+void panel_ui_probe_sent(unsigned expected, uint32_t now_ms)
+{
+    /* `expected` is how many ops the gate actually admitted and the link
+     * actually took. Zero settles as NO REPLY rather than running: a test
+     * that asked nothing must never look busy, nor pass. */
+    panel_probe_start(&s_probe, now_ms,
+                      expected > 255u ? 255u : (uint8_t)expected);
+}
 
 void panel_ui_note_press(void)
 {
@@ -821,6 +897,27 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     if (s_int_open != PANEL_SVC_COUNT &&
         panel_service_kind(s_int_open) == PANEL_SVC_LIST)
         fill_list(false);
+
+    /* THE RUNNING TEST'S VERDICT. Counted as the readings THIS test asked for
+     * that have arrived since it started -- not raw replies, which include
+     * the panel's own periodic battery poll and would hand a failing test a
+     * passing mark. */
+    if (s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {
+        const uint32_t since = panel_probe_started_ms(&s_probe);
+        const unsigned answered =
+            since ? panel_service_fresh_readings(t, since, now_ms) : 0u;
+        panel_probe_step(&s_probe, now_ms, answered, t->link == R2_TM_UP);
+
+        char word[16];
+        panel_probe_word(&s_probe, word, sizeof word);
+        lv_obj_t *lbl = s_rung_word[s_probe_rung];
+        if (strcmp(lv_label_get_text(lbl), word) != 0)
+            lv_label_set_text(lbl, word);
+        uint32_t colour = PANEL_C_GREEN;                 /* RUN, and a pass */
+        if (!panel_probe_settled(&s_probe))  colour = V5_TEXT;      /* running */
+        else if (!panel_probe_passed(&s_probe)) colour = PANEL_C_AMBER;
+        lv_obj_set_style_text_color(lbl, lv_color_hex(colour), 0);
+    }
 }
 
 static void build_network_page(lv_obj_t *pg)
