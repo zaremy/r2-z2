@@ -759,7 +759,10 @@ void app_main(void)
     nimble_port_freertos_init(host_task);
 
     /* Above the link and the UI: a finger is the one input with a human
-     * waiting on it, and its work is a 6-byte I2C read. */
+     * waiting on it, and its work is a 6-byte I2C read that yields on a
+     * semaphore. Its per-point logging is ESP_LOGD for the same reason -- at
+     * INFO this task would hold a 115200 console for most of a drag, from
+     * above both of them. */
     xTaskCreate(touch_task, "panel_touch", 3072, NULL, 5, NULL);
     xTaskCreate(link_task, "r2_link_task", 4096, NULL, 4, NULL);
     xTaskCreate(ui_task,   "panel_ui",     4096, NULL, 3, NULL);

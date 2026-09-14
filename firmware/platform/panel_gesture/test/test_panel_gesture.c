@@ -125,6 +125,27 @@ static void test_the_swipe_thresholds(void)
           "a %d px rightward drag was not a tap", PANEL_TAP_PX - 1);
 }
 
+static void test_the_thresholds_are_the_values_we_think(void)
+{
+    /* LITERAL PIXELS, ONCE. Every other test writes its fixtures relative to
+     * the constants -- press(200, 300, 200 - PANEL_SWIPE_PX, ...) -- which
+     * pins the comparisons and leaves the VALUES free: a mutation battery
+     * changed 60 to 50 and 24 to 40 with the whole suite green. These are the
+     * numbers a finger actually meets. */
+    panel_press_t p = press(200, 300, 140, 300, 3);      /* exactly 60 left */
+    CHECK(panel_gesture_classify(&p) == PANEL_GESTURE_SWIPE_LEFT,
+          "60 px is no longer the swipe threshold");
+    p = press(200, 300, 141, 300, 3);                    /* 59 */
+    CHECK(panel_gesture_classify(&p) == PANEL_GESTURE_NONE,
+          "59 px crossed the swipe threshold");
+    p = press(200, 300, 223, 300, 3);                    /* 23: still a tap */
+    CHECK(panel_gesture_classify(&p) == PANEL_GESTURE_TAP,
+          "23 px is no longer inside the tap radius");
+    p = press(200, 300, 224, 300, 3);                    /* 24: not a tap */
+    CHECK(panel_gesture_classify(&p) == PANEL_GESTURE_NONE,
+          "24 px is still inside the tap radius");
+}
+
 static void test_a_swipe_must_be_horizontal(void)
 {
     /* Far enough across, but the finger arced: twice as far across as down is
@@ -165,38 +186,76 @@ static void test_a_drag_out_and_back_is_not_a_tap(void)
 
 static void test_the_captured_gestures_classify_as_measured(void)
 {
-    /* Every gesture from the 2026-09-14 capture, by sample count and
-     * endpoints. The five that worked must still work -- a fix that cured the
-     * flicks by breaking the swipes would pass every test above. */
-    struct { int32_t x0, y0, x1, y1; uint32_t n; panel_gesture_t want; } k[] = {
-        { 367, 230, 141, 267, 7, PANEL_GESTURE_SWIPE_LEFT },
-        { 362, 291, 262, 281, 4, PANEL_GESTURE_SWIPE_LEFT },
-        { 360, 250, 138, 263, 15, PANEL_GESTURE_SWIPE_LEFT },
-        { 367, 215, 122, 228, 10, PANEL_GESTURE_SWIPE_LEFT },
-        { 367, 270, 206, 228, 3, PANEL_GESTURE_SWIPE_LEFT },
-        /* the two-sample diagonal: far enough, not straight enough */
-        { 367, 341, 243, 199, 2, PANEL_GESTURE_NONE },
-        /* the seven single-sample flicks that used to fire taps */
-        { 136, 275, 136, 275, 1, PANEL_GESTURE_NONE },
-        { 254, 275, 254, 275, 1, PANEL_GESTURE_NONE },
-        { 345, 299, 345, 299, 1, PANEL_GESTURE_NONE },
-        { 271, 318, 271, 318, 1, PANEL_GESTURE_NONE },
-        { 144, 277, 144, 277, 1, PANEL_GESTURE_NONE },
-        { 358, 280, 358, 280, 1, PANEL_GESTURE_NONE },
-        { 285, 300, 285, 300, 1, PANEL_GESTURE_NONE },
+    /* THE OPERATOR'S OWN PRESSES, and where the panel logged a verdict at the
+     * time, that verdict is the expectation -- ground truth from the same file,
+     * not something recomputed here. Re-derive with tools/seg_touch.py against
+     * results/touch-sampling-before-2026-09-14.txt.
+     *
+     * The five that worked must still work: a fix that cured the flicks by
+     * breaking the swipes would pass every test above this one. */
+    struct { int32_t x0, y0, x1, y1; uint32_t n; panel_gesture_t want;
+             const char *panel_said; } k[] = {
+        /* --- the panel logged a verdict for these; it is the expectation --- */
+        { 367, 230, 141, 267,  7, PANEL_GESTURE_SWIPE_LEFT,  "swipe left" },
+        {   1, 275, 136, 275,  3, PANEL_GESTURE_SWIPE_RIGHT, "swipe right" },
+        { 362, 291, 262, 281,  4, PANEL_GESTURE_SWIPE_LEFT,  "swipe left" },
+        {   1, 282, 254, 275,  5, PANEL_GESTURE_SWIPE_RIGHT, "swipe right" },
+        {   1, 204,  88, 215,  3, PANEL_GESTURE_SWIPE_RIGHT, "swipe right" },
+        /* TWO SAMPLES, 271 px, and the panel called it correctly. This is the
+         * press that says the floor is 2 and not 3. */
+        { 358, 280,  87, 253,  2, PANEL_GESTURE_SWIPE_LEFT,  "swipe left" },
+        /* --- the bug: one sample, and the panel acted on it --- */
+        { 271, 318, 271, 318,  1, PANEL_GESTURE_NONE, "tap -> HARDWARE TEST" },
+        {  59, 279,  59, 279,  1, PANEL_GESTURE_NONE, "tap on a LOCKED rung" },
+        { 285, 300, 285, 300,  1, PANEL_GESTURE_NONE, "tap -> DIAGNOSTICS" },
+        /* the other five 1-sample presses: taps that landed on nothing, which
+         * is luck rather than design */
+        {  53,  18,  53,  18,  1, PANEL_GESTURE_NONE, NULL },
+        { 345, 299, 345, 299,  1, PANEL_GESTURE_NONE, NULL },
+        {   1, 264,   1, 264,  1, PANEL_GESTURE_NONE, NULL },
+        {  11, 284,  11, 284,  1, PANEL_GESTURE_NONE, NULL },
+        {  36,  33,  36,  33,  1, PANEL_GESTURE_NONE, NULL },
+        /* --- correctly refused: far across, but the finger arced --- */
+        { 367, 341,  80, 166,  3, PANEL_GESTURE_NONE, NULL },
+        /* --- long deliberate swipes, inside an interior so the panel logged
+         *     no page change; the classifier must still read them --- */
+        { 360, 250, 138, 263, 15, PANEL_GESTURE_SWIPE_LEFT,  NULL },
+        { 367, 215,  40, 239, 12, PANEL_GESTURE_SWIPE_LEFT,  NULL },
+        { 367, 270,  78, 216,  4, PANEL_GESTURE_SWIPE_LEFT,  NULL },
+        /* --- short drags: past the tap radius, short of the swipe --- */
+        {   1, 285,  26, 281,  2, PANEL_GESTURE_NONE, NULL },
+        {   2, 279,  44, 290,  7, PANEL_GESTURE_NONE, NULL },
+        /* --- and one that stayed inside the tap radius --- */
+        {   1, 326,  11, 329,  2, PANEL_GESTURE_TAP, NULL },
+        /* 143 px across in 2 samples, inside an interior: a swipe either way */
+        {   1, 281, 144, 277,  2, PANEL_GESTURE_SWIPE_RIGHT, NULL },
     };
-    unsigned taps = 0;
+
+    unsigned taps_from_one_sample = 0, rights = 0;
     for (unsigned i = 0; i < sizeof k / sizeof k[0]; i++) {
         panel_press_t p = press(k[i].x0, k[i].y0, k[i].x1, k[i].y1, k[i].n);
         const panel_gesture_t g = panel_gesture_classify(&p);
-        CHECK(g == k[i].want, "captured gesture %u (%d,%d)->(%d,%d) n=%u: "
-              "wanted %s, got %s", i, k[i].x0, k[i].y0, k[i].x1, k[i].y1,
-              k[i].n, name(k[i].want), name(g));
-        if (g == PANEL_GESTURE_TAP) taps++;
+        CHECK(g == k[i].want, "captured press %u (%d,%d)->(%d,%d) n=%u%s%s: "
+              "wanted %s, got %s", i, k[i].x0, k[i].y0, k[i].x1, k[i].y1, k[i].n,
+              k[i].panel_said ? " -- panel said " : "",
+              k[i].panel_said ? k[i].panel_said : "",
+              name(k[i].want), name(g));
+        if (k[i].n == 1 && g == PANEL_GESTURE_TAP) taps_from_one_sample++;
+        if (g == PANEL_GESTURE_SWIPE_RIGHT) rights++;
     }
-    /* NOT ONE of the thirteen was a tap. The operator was swiping throughout,
-     * and the old code produced seven. */
-    CHECK(taps == 0, "%u of the captured swipes still fire taps", taps);
+
+    /* NOT ONE of the eight single-sample presses may be a tap. The old code
+     * made all eight taps, and three of them did something visible the
+     * operator had not asked for. */
+    CHECK(taps_from_one_sample == 0,
+          "%u single-sample presses still fire taps", taps_from_one_sample);
+
+    /* AND RIGHT SWIPES STILL WORK. Three registered on hardware before this
+     * change. An early write-up claimed none ever had -- that came from a
+     * parser blind to x <= 99, which is where a rightward swipe begins, and
+     * the claim went into a results doc as a finding. The count is pinned here
+     * so the false version cannot come back quietly. */
+    CHECK(rights == 4, "expected 4 rightward verdicts, got %u", rights);
 }
 
 int main(void)
@@ -204,6 +263,7 @@ int main(void)
     test_a_press_seen_once_is_never_a_tap();
     test_a_voided_press_means_nothing();
     test_the_swipe_thresholds();
+    test_the_thresholds_are_the_values_we_think();
     test_a_swipe_must_be_horizontal();
     test_a_drag_out_and_back_is_not_a_tap();
     test_the_captured_gestures_classify_as_measured();

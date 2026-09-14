@@ -19,7 +19,12 @@ static panel_touch_extremes_t s_ex = { .points = 0, .min_x = INT16_MAX,
 static volatile panel_swipe_t s_swipe;
 static lv_point_t s_press_at;
 static lv_point_t s_last_touch;
-static bool s_pressing;
+/* VOLATILE because three tasks read it now. Written only by touch_task, but
+ * read by the LVGL timer task (indev_read, which decides whether LVGL sees a
+ * finger at all, and so whether the SERVICE list scrolls) and by ui_task.
+ * Every other cross-task scalar in this file was already volatile; this one
+ * was not, and moving the poll off ui_task is what made that matter. */
+static volatile bool s_pressing;
 
 /* A dot under the finger.
  *
@@ -112,7 +117,15 @@ static void note(int16_t x, int16_t y)
      * min/max, and "x 1..3" from four separate corners is a diagnosis that
      * arrives too late to act on -- the individual points would have shown
      * immediately that the coordinate was not tracking. */
-    ESP_LOGI(TAG, "point %4u  (%3d,%3d)   gaps: L%-3d R%-3d T%-3d B%-3d",
+    /* DEBUG, NOT INFO. At the 10 ms poll this fires up to 100 times a second
+     * during a drag, and the console is UART0 at 115200 with no driver
+     * installed -- so ESP_LOGI busy-waits on the TX FIFO rather than yielding,
+     * from a task above the UI and the link. ~77 bytes a line is ~6.7 ms of
+     * UART each; at 100/s that is most of the wire. It was written when the
+     * poll ran 25 times a second, and the P1 calibration that wanted every
+     * point is long finished. Turn it back on with a log-level override when
+     * measuring touch, not by default. */
+    ESP_LOGD(TAG, "point %4u  (%3d,%3d)   gaps: L%-3d R%-3d T%-3d B%-3d",
              (unsigned)s_ex.points, x, y,
              s_ex.min_x, (PANEL_W - 1) - s_ex.max_x,
              s_ex.min_y, (PANEL_H - 1) - s_ex.max_y);
@@ -151,10 +164,11 @@ static void indev_read(lv_indev_t *indev, lv_indev_data_t *data);
 static esp_err_t rd(uint8_t reg, uint8_t *out, size_t n)
 {
     if (s_dev == NULL) return ESP_ERR_INVALID_STATE;
-    /* FINDING 2 (review of #150): 20 ms, not 200. This runs every UI tick,
-     * and a wedged controller with a 200 ms timeout would stall the UI for
-     * most of its life. 20 ms is far longer than a 6-byte read at 400 kHz
-     * needs and bounds the damage. */
+    /* FINDING 2 (review of #150): 20 ms, not 200. It bounds the damage from
+     * a wedged controller: far longer than a 6-byte read at 400 kHz needs,
+     * short enough that a dead controller costs one cycle rather than the
+     * session. It no longer runs on the UI tick -- the poll has its own task
+     * -- so what it protects now is the touch rate, not the redraw. */
     return i2c_master_transmit_receive(s_dev, &reg, 1, out, n, 20);
 }
 
@@ -436,10 +450,17 @@ void panel_touch_void_gesture(void)
 
 bool panel_touch_take_tap(int16_t *x, int16_t *y)
 {
+    /* THE COORDINATES COME OUT WITH THE FLAG, not after it. touch_task runs
+     * ABOVE this one and can land between the clear and the reads, so the tap
+     * being reported would be delivered at the NEXT tap's coordinates -- and
+     * that next tap delivered again on the following tick, at a row the
+     * operator never aimed at. Impossible while both ran on ui_task; the
+     * moment the poll moved to its own task it was not. */
     if (!s_tap) return false;
+    const int16_t tx = s_tap_x, ty = s_tap_y;
     s_tap = false;
-    if (x) *x = s_tap_x;
-    if (y) *y = s_tap_y;
+    if (x) *x = tx;
+    if (y) *y = ty;
     return true;
 }
 

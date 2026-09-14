@@ -2,6 +2,15 @@
 
 #include <stddef.h>
 
+/* THE TWO THRESHOLDS MUST NOT MEET. A tap is a press that never strayed
+ * PANEL_TAP_PX; a swipe must travel PANEL_SWIPE_PX. If those ever overlap, a
+ * gesture could satisfy both and the order of the tests would decide -- which
+ * is the kind of thing that reads fine and behaves randomly. PANEL_TAP_PX is
+ * also handed to lv_indev_set_scroll_limit, so widening it moves LVGL's
+ * scrolling too. */
+_Static_assert(PANEL_TAP_PX * 2 < PANEL_SWIPE_PX,
+               "the tap radius must stay well inside the swipe threshold");
+
 static int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 
 panel_gesture_t panel_gesture_classify(const panel_press_t *p)
