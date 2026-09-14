@@ -71,8 +71,22 @@ typedef struct {
  * task taking the request and it reporting the send. On READ that is harmless
  * -- READ cannot move him -- but this is the rate limiter that governs DOME
  * and STANCE the day the ceiling rises, so it is true now rather than later. */
-bool panel_probe_may_start(bool queued, bool in_flight, bool pending,
-                           panel_probe_state_t state);
+typedef struct {
+    bool queued;                /* tapped; the link task has not taken it */
+    bool in_flight;             /* taken; its ops are going out RIGHT NOW */
+    bool pending;               /* the ops went; the clock has not started */
+    panel_probe_state_t state;  /* and what the clock says */
+} panel_probe_gate_t;
+
+/* NAMED FIELDS, NOT THREE POSITIONAL BOOLS. The caller lives in an LVGL file
+ * with no host harness, so a transposed pair of arguments there compiles
+ * silently and leaves every test green -- the predicate perfectly tested and
+ * perfectly bypassed. Naming the fields does not make that impossible, and
+ * saying so matters: `.pending = s_probe_in_flight` still compiles. What it
+ * does is put the intended name beside the value at the call site, so the
+ * mismatch is on the line rather than in the argument order. The untestable
+ * part is smaller, not gone. */
+bool panel_probe_may_start(panel_probe_gate_t g);
 
 void panel_probe_init(panel_probe_t *p);
 

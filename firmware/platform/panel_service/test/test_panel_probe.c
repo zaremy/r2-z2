@@ -139,17 +139,19 @@ static void test_a_test_already_under_way_refuses_the_tap(void)
      * passes through four states before it is over. Each one was a real
      * window at some point in this feature's review: a second tap inside it
      * bought three more ops for one intended test. */
-    CHECK(!panel_probe_may_start(true, false, false, PANEL_PROBE_IDLE),
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){.queued = true}),
           "a queued request did not refuse the tap");
-    CHECK(!panel_probe_may_start(false, true, false, PANEL_PROBE_IDLE),
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){.in_flight = true}),
           "ops in flight did not refuse the tap");
-    CHECK(!panel_probe_may_start(false, false, true, PANEL_PROBE_IDLE),
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){.pending = true}),
           "a sent-but-unclocked test did not refuse the tap");
-    CHECK(!panel_probe_may_start(false, false, false, PANEL_PROBE_RUNNING),
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){.state = PANEL_PROBE_RUNNING}),
           "a running test did not refuse the tap");
 
     /* And any combination of them, since they overlap in practice. */
-    CHECK(!panel_probe_may_start(true, true, true, PANEL_PROBE_RUNNING),
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){
+              .queued = true, .in_flight = true, .pending = true,
+              .state = PANEL_PROBE_RUNNING}),
           "all four at once did not refuse the tap");
 }
 
@@ -158,7 +160,7 @@ static void test_a_settled_test_lets_the_next_tap_through(void)
     /* Nothing under way: the tap is admitted. A panel that refused forever
      * after one test would be worse than one that never ran a test, because
      * it would look identical to a working one. */
-    CHECK(panel_probe_may_start(false, false, false, PANEL_PROBE_IDLE),
+    CHECK(panel_probe_may_start((panel_probe_gate_t){0}),
           "a fresh panel refused the first tap");
 
     /* EVERY settled verdict must let the operator try again -- including the
@@ -168,8 +170,22 @@ static void test_a_settled_test_lets_the_next_tap_through(void)
         PANEL_PROBE_NO_REPLY, PANEL_PROBE_LINK_LOST,
     };
     for (unsigned i = 0; i < sizeof settled / sizeof settled[0]; i++)
-        CHECK(panel_probe_may_start(false, false, false, settled[i]),
+        CHECK(panel_probe_may_start((panel_probe_gate_t){.state = settled[i]}),
               "a settled test (%u) refused the next tap", (unsigned)settled[i]);
+}
+
+static void test_a_pass_is_not_mistaken_for_a_test_in_progress(void)
+{
+    /* The stale-green bug from the guard's side: after a PASS the panel must
+     * admit the next tap, and it is the RENDERER's job to stop showing the old
+     * verdict. If this ever starts refusing, the operator gets a rung that
+     * looks tappable, reads a cheerful green, and does nothing when pressed --
+     * indistinguishable from a working panel. */
+    CHECK(panel_probe_may_start((panel_probe_gate_t){.state = PANEL_PROBE_PASS}),
+          "a settled PASS refused the next tap");
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){
+              .queued = true, .state = PANEL_PROBE_PASS}),
+          "a PASS with a tap already queued admitted another");
 }
 
 static void test_the_guard_covers_the_whole_life_of_a_test(void)
@@ -178,31 +194,31 @@ static void test_the_guard_covers_the_whole_life_of_a_test(void)
      * The point of this one is that there is no seam between the steps: a tap
      * is refused continuously from the moment it is accepted until the verdict
      * settles. Checking the states one at a time cannot show that. */
-    bool queued = false, in_flight = false, pending = false;
-    panel_probe_state_t st = PANEL_PROBE_IDLE;
+    panel_probe_gate_t g = {0};
 
-    CHECK(panel_probe_may_start(queued, in_flight, pending, st), "step 0");
+    CHECK(panel_probe_may_start(g), "step 0");
 
-    queued = true;                                   /* the tap lands */
-    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 1");
+    g.queued = true;                                 /* the tap lands */
+    CHECK(!panel_probe_may_start(g), "step 1");
 
-    queued = false; in_flight = true;                /* the link task takes it */
-    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 2");
+    g.queued = false; g.in_flight = true;            /* the link task takes it */
+    CHECK(!panel_probe_may_start(g), "step 2");
 
-    in_flight = false; pending = true;               /* the ops are away */
-    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 3");
+    g.in_flight = false; g.pending = true;           /* the ops are away */
+    CHECK(!panel_probe_may_start(g), "step 3");
 
-    pending = false; st = PANEL_PROBE_RUNNING;       /* the clock starts */
-    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 4");
+    g.pending = false; g.state = PANEL_PROBE_RUNNING;/* the clock starts */
+    CHECK(!panel_probe_may_start(g), "step 4");
 
-    st = PANEL_PROBE_PASS;                           /* and it settles */
-    CHECK(panel_probe_may_start(queued, in_flight, pending, st), "step 5");
+    g.state = PANEL_PROBE_PASS;                      /* and it settles */
+    CHECK(panel_probe_may_start(g), "step 5");
 }
 
 int main(void)
 {
     test_a_test_already_under_way_refuses_the_tap();
     test_a_settled_test_lets_the_next_tap_through();
+    test_a_pass_is_not_mistaken_for_a_test_in_progress();
     test_the_guard_covers_the_whole_life_of_a_test();
     test_asking_nothing_is_not_running();
     test_a_dead_link_is_not_his_silence();

@@ -376,7 +376,6 @@ static bool     s_probe_pending;
  * The tap stamps the generation it was issued under; the close bumps it; a
  * start whose generation has moved on is dropped. */
 static unsigned s_probe_gen;
-static unsigned s_probe_pending_gen;
 
 /* TAKEN, AND ITS OPS ARE GOING OUT RIGHT NOW. Nothing represented this: the
  * request is cleared the moment the link task takes it and `pending` is not
@@ -385,12 +384,6 @@ static unsigned s_probe_pending_gen;
  * than by timing. */
 static bool     s_probe_in_flight;
 
-/* Which rung the NEXT probe will belong to. Separate from s_probe_rung, which
- * names the rung whose word is being painted: a tap used to move that one
- * immediately, so a freshly tapped rung inherited the previous test's green
- * "3/3 OK" for the ~140 ms before its own clock started -- a pass it had not
- * earned, rendered in the reassuring direction. */
-static int      s_probe_next_rung = -1;
 
 /* Bumped every time a tap is accepted, so the tour can tell "this tap took"
  * from "a request happens to be queued" -- the request may already have been
@@ -769,7 +762,6 @@ static void close_interior(void)
     s_probe_request = -1;
     s_probe_pending = false;
     s_probe_in_flight = false;
-    s_probe_next_rung = -1;
     s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
@@ -824,16 +816,29 @@ void panel_ui_tap(int x, int y)
              * anything is written. */
             bool taken;
             portENTER_CRITICAL(&s_probe_mux);
-            taken = panel_probe_may_start(s_probe_request >= 0,
-                                          s_probe_in_flight,
-                                          s_probe_pending,
-                                          s_probe.state);
+            taken = panel_probe_may_start((panel_probe_gate_t){
+                .queued    = s_probe_request >= 0,
+                .in_flight = s_probe_in_flight,
+                .pending   = s_probe_pending,
+                .state     = s_probe.state,
+            });
             if (taken) {
                 s_probe_request = i;
-                s_probe_next_rung = i;
+                s_probe_rung = i;
                 s_probe_accepted++;
             }
             portEXIT_CRITICAL(&s_probe_mux);
+
+            /* AND THE OLD VERDICT GOES NOW, not when the new clock starts.
+             * Deferring the rung index was not enough: at this ceiling exactly
+             * one rung is tappable, so the rung tapped IS the rung that just
+             * passed, and it wore a green "3/3 OK" for the ~140 ms before its
+             * own test began -- a pass it had not earned, in the reassuring
+             * direction. Reset here and it reads RUN until it reads "...".
+             * Safe outside the spinlock: s_probe is touched only by this task,
+             * under the display lock, and the start happens in the refresh --
+             * also this task, so it cannot land in between. */
+            if (taken) panel_probe_init(&s_probe);
             if (!taken) {
                 ESP_LOGI("panel", "RUN on rung %d ignored -- a test is under way", i);
                 return;
@@ -977,7 +982,6 @@ void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen)
     if (gen == s_probe_gen) {
         s_probe_pending_expected = expected;
         s_probe_pending_ms = sent_at_ms;
-        s_probe_pending_gen = gen;   /* recorded for a debugger, not re-tested */
         s_probe_pending = true;
     }
     portEXIT_CRITICAL(&s_probe_mux);
@@ -1044,8 +1048,6 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         s_probe_pending = false;
         e = s_probe_pending_expected;
         at = s_probe_pending_ms;
-        /* The rung inherits the verdict only now, when its own clock starts. */
-        s_probe_rung = s_probe_next_rung;
     }
     portEXIT_CRITICAL(&s_probe_mux);
     if (start)
