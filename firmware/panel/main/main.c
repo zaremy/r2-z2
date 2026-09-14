@@ -295,13 +295,18 @@ static bool tour_lock(const char *step)
     return false;
 }
 
-/* CHECK THE GLASS, THEN SHOOT. The panel is live while the tour runs: on a
- * bench with no droid it reaches OFFLINE and the wake frame fires, which
+/* CHECK THE GLASS, SHOOT, CHECK AGAIN. The panel is live while the tour runs:
+ * on a bench with no droid it reaches OFFLINE and the wake frame fires, which
  * brings STATUS forward -- landing, if the timing is unlucky, between opening
  * an interior and photographing it. That would file the face under an
- * interior's name and still print TOUR COMPLETE. So each capture asks what is
- * actually showing, puts it back once if something moved it, and leaves the
- * slot EMPTY rather than photograph the wrong view. */
+ * interior's name and still print TOUR COMPLETE.
+ *
+ * So each capture asks what is showing, puts it back once if something moved
+ * it, and leaves the slot EMPTY rather than photograph the wrong view. The
+ * check before is not enough on its own: the snapshot takes the display lock
+ * again, so the view could move in between. Hence the second check after,
+ * which ERASES the slot it just wrote. A missing picture is a finding; a
+ * wrong one under a right name is the lie this rig exists to prevent. */
 static void tour_shot(unsigned slot, const char *what, int want)
 {
     vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
@@ -323,6 +328,18 @@ static void tour_shot(unsigned slot, const char *what, int want)
     }
 
     if (panel_shot_take_slot(slot)) {
+        /* Still the same view? The snapshot took the lock separately, so a
+         * state change could have moved the panel under it. */
+        if (!tour_lock("recheck")) return;
+        const bool still = panel_ui_debug_showing(want);
+        bsp_display_unlock();
+        if (!still) {
+            ESP_LOGE(TAG, "TOUR %u/%u: %s moved DURING the capture -- slot "
+                          "erased", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+            panel_shot_erase_slot(slot);
+            s_tour_ok = false;
+            return;
+        }
         ESP_LOGW(TAG, "TOUR %u/%u: %s", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
     } else {
         /* An empty slot is the honest outcome, and grab_tour.sh prints NO
@@ -386,15 +403,14 @@ static void tour_task(void *arg)
         }
 
         if (!tour_lock("back")) break;
-        if (opened) {
-            panel_ui_swipe(-1);        /* back, the way a finger would */
-        } else {
-            /* With no interior open, a back swipe would change PAGE -- and
-             * every later tap would then bounce off panel_ui_tap's
-             * "not on SERVICE" guard, turning one failure into six frames of
-             * the STATUS face under interior names. */
-            panel_ui_show_page(1);
-        }
+        if (opened) panel_ui_swipe(-1);   /* back, the way a finger would */
+        /* However this iteration went -- a failed open, a wake frame that
+         * pulled STATUS forward mid-capture, a back swipe from a page the
+         * interior had already left -- the next tap needs SERVICE. Asserted
+         * rather than assumed: every later tap would otherwise bounce off
+         * panel_ui_tap's "not on SERVICE" guard, turning one failure into a
+         * run of empty slots. */
+        if (panel_ui_page() != 1) panel_ui_show_page(1);
         lv_refr_now(NULL);
         bsp_display_unlock();
     }

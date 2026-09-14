@@ -30,6 +30,12 @@ if [ -z "$SLOT_BYTES" ]; then
     exit 1
 fi
 SLOT_BYTES=$((SLOT_BYTES))
+case "$SLOT" in
+    ''|*[!0-9]*)
+        echo "slot must be a whole number, got '$SLOT'" >&2
+        exit 1
+        ;;
+esac
 FW_SLOTS=$(sed -n 's/^#define PANEL_SHOT_SLOTS  *\([0-9]*\)u.*/\1/p' \
            "$HERE/../main/panel_shot.h")
 if [ -n "$FW_SLOTS" ] && [ "$SLOT" -ge "$FW_SLOTS" ]; then

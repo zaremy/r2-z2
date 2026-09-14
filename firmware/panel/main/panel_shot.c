@@ -50,6 +50,24 @@ static uint32_t s_seq = 0;
 
 bool panel_shot_take(void) { return panel_shot_take_slot(0); }
 
+bool panel_shot_erase_slot(unsigned slot)
+{
+    if (slot >= PANEL_SHOT_SLOTS) return false;
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "storage");
+    if (part == NULL) { ESP_LOGE(TAG, "no 'storage' partition"); return false; }
+    const uint32_t base = slot * PANEL_SHOT_SLOT_BYTES;
+    if (base + PANEL_SHOT_SLOT_BYTES > part->size) return false;
+    const esp_err_t err =
+        esp_partition_erase_range(part, base, PANEL_SHOT_SLOT_BYTES);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "could not erase slot %u (%s) -- it still holds a frame",
+                 slot, esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
 bool panel_shot_erase_all(void)
 {
     const esp_partition_t *part = esp_partition_find_first(

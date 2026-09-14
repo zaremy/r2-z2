@@ -26,4 +26,9 @@ bool panel_shot_take_slot(unsigned slot);
  * one is the failure this whole tool exists to avoid. False if the erase
  * failed, which means exactly that danger is still present. */
 bool panel_shot_erase_all(void);
+
+/* Erase ONE slot: for a caller that captured a frame and then found it was
+ * not of what it meant to photograph. Blanking it turns a wrong picture into
+ * a missing one, which is the honest outcome. */
+bool panel_shot_erase_slot(unsigned slot);
 #endif
