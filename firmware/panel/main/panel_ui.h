@@ -94,6 +94,20 @@ void        panel_ui_tap(int x, int y);
  * it records whether the list was moving at that moment. */
 void        panel_ui_note_press(void);
 
+#ifdef PANEL_SHOT_TOUR
+/* Screenshot-tour build only. `panel_ui_debug_open_row` scrolls a SERVICE row
+ * into view and taps its centre through the real hit test, returning false if
+ * that did not open the row asked for. `panel_ui_debug_showing` answers what
+ * is on the glass NOW, and `panel_ui_debug_restore` puts a view back after an
+ * interruption -- the wake frame can fire mid-tour. The two non-interior
+ * views have their own ids; anything >= 0 is a SERVICE row. */
+#define PANEL_TOUR_STATUS (-2)
+#define PANEL_TOUR_MENU   (-1)
+bool        panel_ui_debug_open_row(int row);
+bool        panel_ui_debug_showing(int want);
+void        panel_ui_debug_restore(int want);
+#endif
+
 /* The link task's period, which IS the keepalive: one number, so the
  * R2 LINK interior cannot describe a period the link does not use. */
 #define PANEL_KEEPALIVE_MS 3000u

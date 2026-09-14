@@ -229,6 +229,9 @@ static void ui_task(void *arg)
  *
  * So the diagnostic is isolated from the thing it diagnoses: a screenshot can
  * now fail, or run out of stack, without taking the panel down with it. */
+/* The periodic capture, replaced wholesale by the tour when that is built:
+ * two tasks writing slot 0 would race, and only one of them is wanted. */
+#ifndef PANEL_SHOT_TOUR
 static void shot_task(void *arg)
 {
     (void)arg;
@@ -259,6 +262,170 @@ static void shot_task(void *arg)
     }
 #endif
 }
+
+#endif  /* PANEL_SHOT_TOUR */
+
+#ifdef PANEL_SHOT_TOUR
+/* THE TOUR: one boot, nine frames, no finger.
+ *
+ * Every visual check of this panel has cost the operator a walk to the droid
+ * and a phone photo, and the UI now has nine views -- the face, the menu and
+ * seven interiors. This build drives itself through them and captures each
+ * into its own slot, so one flash and one esptool read shows the lot.
+ *
+ * IT TAPS RATHER THAN CALLING THE RENDERER. Rows are opened by scrolling
+ * them into view and tapping where they landed, through panel_ui_tap -- so
+ * the pictures also exercise the hit test against real, scrolled coordinates,
+ * which no host test can reach.
+ *
+ * WHAT IT DOES NOT PROVE, and the distinction matters: no finger is involved.
+ * It enters below panel_touch.c, so the controller, the press and release
+ * edges, the tap-versus-scroll thresholds and the moving-list guard are all
+ * untouched by this. It proves the hit-test geometry and what each view draws;
+ * it says nothing about touch. */
+static bool s_tour_ok = true;
+
+/* Take the display lock or say why not. A silent failure here would capture
+ * whatever was on screen and still print TOUR COMPLETE. */
+static bool tour_lock(const char *step)
+{
+    if (bsp_display_lock(1000)) return true;
+    ESP_LOGE(TAG, "TOUR ABORTED: could not take the display lock at %s", step);
+    s_tour_ok = false;
+    return false;
+}
+
+/* CHECK THE GLASS, SHOOT, CHECK AGAIN. The panel is live while the tour runs:
+ * on a bench with no droid it reaches OFFLINE and the wake frame fires, which
+ * brings STATUS forward -- landing, if the timing is unlucky, between opening
+ * an interior and photographing it. That would file the face under an
+ * interior's name and still print TOUR COMPLETE.
+ *
+ * So each capture asks what is showing, puts it back once if something moved
+ * it, and leaves the slot EMPTY rather than photograph the wrong view. The
+ * check before is not enough on its own: the snapshot takes the display lock
+ * again, so the view could move in between. Hence the second check after,
+ * which ERASES the slot it just wrote. A missing picture is a finding; a
+ * wrong one under a right name is the lie this rig exists to prevent. */
+static void tour_shot(unsigned slot, const char *what, int want)
+{
+    vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
+
+    if (!tour_lock(what)) return;
+    if (!panel_ui_debug_showing(want)) {
+        ESP_LOGW(TAG, "TOUR: %s was interrupted -- restoring it", what);
+        panel_ui_debug_restore(want);
+    }
+    lv_refr_now(NULL);
+    const bool ready = panel_ui_debug_showing(want);
+    bsp_display_unlock();
+
+    if (!ready) {
+        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- slot left EMPTY",
+                 slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+        s_tour_ok = false;
+        return;
+    }
+
+    if (panel_shot_take_slot(slot)) {
+        /* Still the same view? The snapshot took the lock separately, so a
+         * state change could have moved the panel under it. */
+        if (!tour_lock("recheck")) return;
+        const bool still = panel_ui_debug_showing(want);
+        bsp_display_unlock();
+        if (!still) {
+            ESP_LOGE(TAG, "TOUR %u/%u: %s moved DURING the capture -- slot "
+                          "erased", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+            panel_shot_erase_slot(slot);
+            s_tour_ok = false;
+            return;
+        }
+        ESP_LOGW(TAG, "TOUR %u/%u: %s", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+    } else {
+        /* An empty slot is the honest outcome, and grab_tour.sh prints NO
+         * FRAME for it. Silence here would have been "TOUR COMPLETE" beside
+         * a missing picture. */
+        ESP_LOGE(TAG, "TOUR %u/%u: %s NOT CAPTURED", slot + 1,
+                 (unsigned)PANEL_SHOT_SLOTS, what);
+        s_tour_ok = false;
+    }
+}
+
+/* Which SERVICE row each interior sits on, and what to call its picture. */
+static const int k_tour_row[] = { 1, 2, 3, 4, 5, 6, 7 };
+static const char *const k_tour_name[] = {
+    "R2 LINK", "DIAGNOSTICS", "HARDWARE TEST", "PROVISIONING",
+    "VOICE", "CAMERA", "ABOUT",
+};
+
+static void tour_task(void *arg)
+{
+    (void)arg;
+    /* Long enough for the link to settle: a STATUS frame taken before that is
+     * a picture of WAKING, which is a real state but not the resting one. It
+     * is also past the wake frame that fires ~5 s in when no droid answers.
+     * The whole tour finishes well inside the 60 s burn-in drift step, so the
+     * nine frames share one alignment. */
+    vTaskDelay(pdMS_TO_TICKS(12000));
+
+    /* Blank every slot first, so a tour that dies half way leaves EMPTY slots
+     * rather than the tail of the last one, which would decode perfectly. */
+    if (!panel_shot_erase_all()) s_tour_ok = false;
+
+    if (!tour_lock("STATUS")) vTaskDelete(NULL);
+    panel_ui_show_page(0);
+    bsp_display_unlock();
+    tour_shot(0, "STATUS face", PANEL_TOUR_STATUS);
+
+    if (!tour_lock("SERVICE")) vTaskDelete(NULL);
+    panel_ui_show_page(1);
+    bsp_display_unlock();
+    tour_shot(1, "SERVICE menu", PANEL_TOUR_MENU);
+
+    for (unsigned i = 0; i < sizeof k_tour_row / sizeof k_tour_row[0]; i++) {
+        bool opened = false;
+        if (!tour_lock(k_tour_name[i])) break;
+        /* Scrolls the row into view, taps where it actually landed, and says
+         * whether that opened the row asked for. */
+        opened = panel_ui_debug_open_row(k_tour_row[i]);
+        lv_refr_now(NULL);
+        bsp_display_unlock();
+
+        if (opened) {
+            tour_shot(2 + i, k_tour_name[i], k_tour_row[i]);
+        } else {
+            /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
+             * reports NO FRAME: a missing picture is a finding, while one
+             * filed under the wrong name is a lie the tool exists to avoid. */
+            ESP_LOGE(TAG, "TOUR: tapping row %d did NOT open %s -- slot %u "
+                          "left EMPTY", k_tour_row[i], k_tour_name[i], 2 + i);
+            s_tour_ok = false;
+        }
+
+        if (!tour_lock("back")) break;
+        if (opened) panel_ui_swipe(-1);   /* back, the way a finger would */
+        /* However this iteration went -- a failed open, a wake frame that
+         * pulled STATUS forward mid-capture, a back swipe from a page the
+         * interior had already left -- the next tap needs SERVICE. Asserted
+         * rather than assumed: every later tap would otherwise bounce off
+         * panel_ui_tap's "not on SERVICE" guard, turning one failure into a
+         * run of empty slots. */
+        if (panel_ui_page() != 1) panel_ui_show_page(1);
+        lv_refr_now(NULL);
+        bsp_display_unlock();
+    }
+
+    if (s_tour_ok) {
+        ESP_LOGW(TAG, "TOUR COMPLETE -- read all %u slots with:",
+                 (unsigned)PANEL_SHOT_SLOTS);
+        ESP_LOGW(TAG, "  tools/grab_tour.sh <port> <outdir> [build dir]");
+    } else {
+        ESP_LOGE(TAG, "TOUR FINISHED WITH FAILURES -- see the errors above; do "
+                      "not trust the slot names");
+    }
+    vTaskDelete(NULL);
+}
+#endif
 
 #ifdef PANEL_P2_RECONNECT
 /* P2 — time the PANEL'S OWN reconnect (#101, gates AC8).
@@ -419,7 +586,11 @@ void app_main(void)
 
     xTaskCreate(link_task, "r2_link_task", 4096, NULL, 4, NULL);
     xTaskCreate(ui_task,   "panel_ui",     4096, NULL, 3, NULL);
+#ifdef PANEL_SHOT_TOUR
+    xTaskCreate(tour_task, "panel_tour",   8192, NULL, 2, NULL);
+#else
     xTaskCreate(shot_task, "panel_shot",   8192, NULL, 2, NULL);
+#endif
 #ifdef PANEL_P4_IDLE
     xTaskCreate(p4_task,   "panel_p4",     4096, NULL, 4, NULL);
 #endif
