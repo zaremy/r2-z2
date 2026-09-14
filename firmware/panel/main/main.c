@@ -46,9 +46,15 @@ static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static uint8_t next_seq(void) { static uint8_t s; return s++; }
 
+/* Asked once per connection, cleared when the link falls. Written by the UI
+ * loop and cleared on the NimBLE host task, hence volatile: the worst
+ * interleaving costs one duplicate probe, never a missed one. */
+static volatile bool s_version_asked;
+
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
     (void)ctx; (void)reason;
+    if (s != R2_LINK_UP) s_version_asked = false;
     /* The telemetry layer forgets every reading here. That is what keeps a
      * voltage from outliving the link that carried it, and it is why the R2
      * row goes to "--" rather than holding the last good number. */
@@ -88,6 +94,20 @@ static void link_task(void *arg)
          * down is us stopping, and the panel's RELEASE control is the place
          * that gets decided -- not here. */
         r2_gate_send(0x13, 0x0D, next_seq(), NULL, 0, r2_link_send, NULL);
+
+        /* HIS FIRMWARE VERSION, once per connection. It is a read-tier probe
+         * and the telemetry has always had a slot for it; nothing ever asked,
+         * so the R2 LINK interior's R2 FW row could never fill -- honest, and
+         * permanently blank. Seen on the glass, 2026-09-14. */
+        /* LATCHED ON SUCCESS, NOT ON THE ATTEMPT. This is the only one-shot
+         * request in this loop -- battery and dome repeat, so a lost write
+         * heals itself on the next tick. A probe latched on the attempt would
+         * leave R2 FW blank for the whole connection after one dropped GATT
+         * write, with ANSWERED short by one and nothing able to close it. */
+        if (!s_version_asked && r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0) {
+            r2_telemetry_note_request(&s_tm);
+            s_version_asked = true;
+        }
 
         if (tick % 5 == 0) {
             r2_telemetry_note_request(&s_tm);
@@ -504,13 +524,18 @@ static void p2_task(void *arg)
 static void p4_task(void *arg)
 {
     (void)arg;
+    /* The flag is set in app_main, BEFORE the host syncs -- setting it here
+     * raced the first scan, which could find him and connect in the 500 ms
+     * below. That race is why an earlier session recorded this build as
+     * unable to produce an offline frame. Set again, harmlessly, so this
+     * task still reads as self-contained. */
     r2_link_set_scan_only(true);
-    /* RESTART the scan. The flag is read when ble_gap_disc is called, and
-     * on_sync already started one with filter_duplicates=1 -- so without this
-     * we see him ONCE and never again, and the very comment in r2_link warning
-     * about that was written by the same hand that then wired it wrong. The
-     * first run reported "1 advert this minute", which is the dedup filter, not
-     * his advertising rate, and would have made a real silence unmeasurable. */
+    /* RESTART the scan -- now belt and braces rather than the fix it was.
+     * The flag is read when ble_gap_disc is called, and it is set in app_main
+     * before the host syncs, so on_sync's own scan already has duplicate
+     * filtering off. Before that, this restart was the only thing stopping us
+     * seeing him ONCE and never again: the first run reported "1 advert this
+     * minute", which is the dedup filter rather than his advertising rate. */
     vTaskDelay(pdMS_TO_TICKS(500));
     r2_link_start();
     ESP_LOGW(TAG, "P4: scan-only. We will NOT connect, because the keepalive");
@@ -577,6 +602,12 @@ void app_main(void)
              r2_gate_tier_name(r2_gate_get_ceiling()));
 
     r2_telemetry_reset(&s_tm);
+#ifdef PANEL_P4_IDLE
+    /* BEFORE the host syncs: on_sync starts a scan the moment NimBLE is up,
+     * and a scan started without this flag will connect to him. Deciding not
+     * to connect after that has already happened is too late. */
+    r2_link_set_scan_only(true);
+#endif
     const r2_link_cbs_t cbs = { .on_state = on_state, .on_frame = on_frame, .ctx = NULL };
     r2_link_init(&cbs);
 

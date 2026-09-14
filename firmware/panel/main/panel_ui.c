@@ -8,6 +8,7 @@
 #include "esp_flash.h"
 #include "esp_log.h"
 #include "esp_psram.h"
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "lvgl.h"
 #include "panel_state.h"
@@ -517,7 +518,9 @@ static void svc_facts(const r2_telemetry_t *t, uint32_t now_ms, panel_svc_facts_
         .panel_fw = app ? app->version : NULL,
         .flash_mb = flash_bytes / (1024u * 1024u),
         .psram_mb = (uint32_t)(esp_psram_get_size() / (1024u * 1024u)),
-        .heap_kb  = esp_get_free_heap_size() / 1024u,
+        /* INTERNAL only: the total counts this board's 8 MB of PSRAM and so
+         * reads reassuring whatever the internal heap is doing. */
+        .heap_kb  = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u),
         .touch_id = panel_touch_chip_id(),
     };
 }
@@ -613,8 +616,11 @@ static void open_interior(panel_svc_t s)
     } else if (kind == PANEL_SVC_NOTE) {
         const char *a = "", *b = "";
         panel_service_note(s, &a, &b);
-        lv_obj_t *l1 = text(s_int_body, &michroma_16, 2, V5_LABEL, 0, 150, a);
-        lv_obj_t *l2 = text(s_int_body, &techmono_18, 1, V5_DIM, 0, 182, b);
+        /* Centred in the BODY, which starts below the header. Measured off
+         * the glass: the ink ran 228-273, a midpoint of 250 against the
+         * body's centre of 262 -- 12 px high. It now runs 240-285. */
+        lv_obj_t *l1 = text(s_int_body, &michroma_16, 2, V5_LABEL, 0, 162, a);
+        lv_obj_t *l2 = text(s_int_body, &techmono_18, 1, V5_DIM, 0, 194, b);
         lv_obj_set_width(l1, SVC_W);
         lv_obj_set_width(l2, SVC_W);
         lv_obj_set_style_text_align(l1, LV_TEXT_ALIGN_CENTER, 0);

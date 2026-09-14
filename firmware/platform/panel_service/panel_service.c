@@ -203,9 +203,10 @@ static int rows_provisioning(const panel_svc_facts_t *f, panel_kv_t *out, int ma
     put(out, &n, max, "WI-FI",   PANEL_TONE_NONE,  "NOT IN BUILD");
     put(out, &n, max, "API KEY", PANEL_TONE_NONE,  "NOT IN BUILD");
     /* What the link will pair with: r2_link matches any advertiser whose name
-     * begins "D2-" and takes the first. True, and worth knowing in a house
-     * with two droids. */
-    put(out, &n, max, "PAIRS WITH", PANEL_TONE_PLAIN, "FIRST D2-");
+     * begins "D2-" and takes the first. Worth knowing in a house with two
+     * droids. Written as a glob because "FIRST D2-" read like a string that
+     * had been cut off -- seen on the glass, 2026-09-14. */
+    put(out, &n, max, "PAIRS WITH", PANEL_TONE_PLAIN, "ANY D2-*");
     /* OK BY CONSTRUCTION, and said so: main.c ESP_ERROR_CHECKs nvs_flash_init,
      * so a panel drawing this row is one whose NVS came up. */
     put(out, &n, max, "NVS", PANEL_TONE_GOOD, "OK");

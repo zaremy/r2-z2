@@ -254,6 +254,12 @@ static void test_nothing_absent_is_given_a_value(void)
         CHECK(r && strcmp(r->val, "NOT IN BUILD") == 0 && r->tone == PANEL_TONE_NONE,
               "%s reads '%s'", absent[i], r ? r->val : "(missing)");
     }
+    /* The pairing rule is a glob, not a truncated name: it read "FIRST D2-"
+     * before, which on the glass looked like a string that had been cut. */
+    const panel_kv_t *pw = row(kv, n, "PAIRS WITH");
+    CHECK(pw && strcmp(pw->val, "ANY D2-*") == 0, "PAIRS WITH reads '%s'",
+          pw ? pw->val : "(missing)");
+
     /* A board that found no PSRAM says so rather than "0 MB". */
     f.psram_mb = 0;
     const int d = panel_service_rows(PANEL_SVC_DIAGNOSTICS, &f, kv, PANEL_SVC_MAX_ROWS);
