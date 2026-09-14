@@ -99,7 +99,8 @@ void        panel_ui_note_press(void);
  * tier's ops through the gate like everything else, and reports how many the
  * gate admitted. Returns -1 when nothing was asked for. */
 int         panel_ui_take_probe_request(unsigned *gen);
-void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen);
+void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
+                                bool link_up);
 
 #ifdef PANEL_SHOT_TOUR
 /* Screenshot-tour build only. `panel_ui_debug_open_row` scrolls a SERVICE row

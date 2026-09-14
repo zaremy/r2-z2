@@ -26,6 +26,11 @@ R2's three answers -> the verdict.
   represented "taken, going out right now"). `panel_probe_may_start` is a pure
   function with host tests and named fields, rather than three positional
   bools inside an LVGL callback where a transposition would compile.
+- **A refused tap says so on the rung**, for 1.2 s, in amber. The refusals
+  were log lines only, on a board whose serial cannot be read without
+  resetting it into the ROM downloader -- so the operator standing at the
+  droid saw nothing, and the code claiming they "see the same refusal the gate
+  would give" described something that was never rendered.
 - **The verdict counts answers, not sends.** A send proves only that the gate
   admitted it. It counts the readings that arrived since this test started,
   rather than raw reply totals, which include every reply since boot.
@@ -38,7 +43,11 @@ R2's three answers -> the verdict.
   does not carry; it is stated here rather than papered over.
 - **A lost link reads LINK LOST, not NO REPLY**: the question never reached
   him, and blaming him for our silence is the wrong answer in the reassuring
-  direction.
+  direction. This holds for a tap made WITH HIM ALREADY AWAY -- the common
+  case -- as well as for a link that drops mid-window. The first of those read
+  NO REPLY until round 6: every send failed, which arrived at the probe as
+  "nothing was asked" and is indistinguishable there from a gate refusal, so
+  the link state is now sampled beside the sends and carried in.
 - **A test that asked nothing settles as NO REPLY**, never as running and
   never as a pass.
 - **The tour fails rather than photographing a `...`.** It checks the verdict
@@ -52,7 +61,7 @@ tap and the verdict. The second run's frame is **byte-identical** to this one
 (sha1 `b634553c`), which is the strongest form the answer comes in: not "it
 still passes", but "the panel drew the same pixels".
 
-FIVE RUNS, one per review round, because each round changed the path between
+SIX RUNS, one per review round, because each round changed the path between
 the tap and the verdict: the send moving to the link task, the poll cadence
 returning to link-up beats, the one-at-a-time guard moving to the tap and then
 being made a tested predicate, and the generation that lets a closed interior
@@ -60,6 +69,20 @@ disown a send already in flight, and the old verdict being cleared when a tap
 is accepted rather than when the next clock starts. The ladder frame is
 byte-identical across all five; the frames that differ between runs are the
 ones carrying live values -- voltage, dome angle, uptime.
+
+## What this evidence cannot show
+
+The tour photographs the ladder only after the probe's own timeout has passed,
+so the frame is the SETTLED verdict. Everything that happens in the ~140 ms
+between the tap and the clock starting -- the refusal flash, the old verdict
+being cleared -- is invisible to it, and a byte-identical frame across runs is
+guaranteed by construction for those. It is evidence that the settled verdict
+did not regress; it is not evidence about the tap.
+
+Nothing in the host suite compiles `panel_ui.c`, so the wiring between the
+tested predicate and the renderer has no automated coverage at all. And
+`s_probe_accepted`, the tour's "did my tap take" signal, is incremented by the
+tap itself: it proves the guard admitted, never that ops left the panel.
 
 ## Still not proven
 

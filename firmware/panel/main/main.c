@@ -124,7 +124,11 @@ static void link_task(void *arg)
             /* Carried through the send, so a panel that left the interior
              * while these were in flight can disown the result rather than
              * start a test against a rung that is gone. */
-            panel_ui_probe_sent(run_tier_test(probe_tier), at, probe_gen);
+            /* Sampled HERE, beside the sends, because a tap with him away
+             * fails every one of them and must read LINK LOST rather than
+             * NO REPLY -- our silence, not his. */
+            const bool up = r2_link_is_up();
+            panel_ui_probe_sent(run_tier_test(probe_tier), at, probe_gen, up);
         }
 
         if (!r2_link_is_up()) continue;

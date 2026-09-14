@@ -17,14 +17,30 @@ void panel_probe_init(panel_probe_t *p)
     p->got = 0;
 }
 
-void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected)
+void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
+                       bool link_up)
 {
     if (p == NULL) return;
+    if (!link_up) {
+        /* THE LINK IS ITS OWN ANSWER, at the start as well as during. Every
+         * op fails to send when he is away, which used to arrive here as
+         * `expected == 0` and settle NO REPLY -- blaming him for a silence
+         * that is entirely ours, which is exactly what this module says
+         * elsewhere it must not do. Tapping RUN with the link down is the
+         * COMMON case of that, not the rare one: the rare one is a link that
+         * drops mid-window, and only that was handled. */
+        p->state = PANEL_PROBE_LINK_LOST;
+        p->started_ms = now_ms;
+        p->expected = expected;
+        p->got = 0;
+        return;
+    }
     if (expected == 0) {
-        /* Nothing went out -- the gate refused every op, or the link did.
-         * NO REPLY rather than RUNNING: a test that never asked must not sit
+        /* Nothing went out on a live link -- the gate refused every op. NO
+         * REPLY rather than RUNNING: a test that never asked must not sit
          * there looking busy, and must never settle as a pass. */
         p->state = PANEL_PROBE_NO_REPLY;
+        p->started_ms = now_ms;
         p->expected = 0;
         p->got = 0;
         return;

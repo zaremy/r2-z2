@@ -30,7 +30,7 @@ static void test_asking_nothing_is_not_running(void)
     /* The gate refused every op, or the link went before they left. The rung
      * must not sit there looking busy, and must never settle as a pass. */
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 0);
+    panel_probe_start(&p, 1000, 0, true);
     CHECK(p.state == PANEL_PROBE_NO_REPLY, "expected NO REPLY, got %d", (int)p.state);
     CHECK(strcmp(word(&p), "NO REPLY") == 0, "reads '%s'", word(&p));
     CHECK(!panel_probe_passed(&p), "a probe that asked nothing passed");
@@ -46,7 +46,7 @@ static void test_asking_nothing_is_not_running(void)
 static void test_a_dead_link_is_not_his_silence(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3);
+    panel_probe_start(&p, 1000, 3, true);
     CHECK(panel_probe_step(&p, 1100, 0, false) == PANEL_PROBE_LINK_LOST,
           "a dropped link read as %d", (int)p.state);
     CHECK(strcmp(word(&p), "LINK LOST") == 0, "reads '%s'", word(&p));
@@ -59,7 +59,7 @@ static void test_a_dead_link_is_not_his_silence(void)
 static void test_answers_that_arrive_late_do_not_pass(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3);
+    panel_probe_start(&p, 1000, 3, true);
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS - 1, 0, true)
               == PANEL_PROBE_RUNNING, "gave up early");
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS, 0, true)
@@ -74,7 +74,7 @@ static void test_every_answer_is_a_pass(void)
 {
     panel_probe_t p; panel_probe_init(&p);
     CHECK(strcmp(word(&p), "RUN") == 0, "idle reads '%s'", word(&p));
-    panel_probe_start(&p, 1000, 3);
+    panel_probe_start(&p, 1000, 3, true);
     CHECK(strcmp(word(&p), "...") == 0, "running reads '%s'", word(&p));
     CHECK(panel_probe_step(&p, 1100, 1, true) == PANEL_PROBE_RUNNING, "one reply ended it");
     CHECK(panel_probe_step(&p, 1200, 3, true) == PANEL_PROBE_PASS, "three replies did not pass");
@@ -85,7 +85,7 @@ static void test_every_answer_is_a_pass(void)
 static void test_some_answers_is_partial(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3);
+    panel_probe_start(&p, 1000, 3, true);
     panel_probe_step(&p, 1100, 2, true);
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS, 2, true)
               == PANEL_PROBE_PARTIAL, "two of three was not partial");
@@ -99,7 +99,7 @@ static void test_the_clock_wrapping_does_not_break_it(void)
      * still time out on time rather than never. */
     panel_probe_t p; panel_probe_init(&p);
     const uint32_t t0 = 0xFFFFF000u;          /* 4096 ms before the wrap */
-    panel_probe_start(&p, t0, 3);
+    panel_probe_start(&p, t0, 3, true);
     CHECK(panel_probe_step(&p, t0 + 100u, 0, true) == PANEL_PROBE_RUNNING,
           "gave up before the wrap");
     CHECK(panel_probe_step(&p, t0 + PANEL_PROBE_TIMEOUT_MS, 0, true)
@@ -112,7 +112,7 @@ static void test_more_answers_than_asked_still_passes(void)
      * battery poll lands in the same three stamps. More than asked is a pass,
      * not a fault; what matters is that FEWER never is. */
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3);
+    panel_probe_start(&p, 1000, 3, true);
     CHECK(panel_probe_step(&p, 1100, 9, true) == PANEL_PROBE_PASS, "extra replies failed");
 }
 
@@ -124,7 +124,7 @@ static void test_nulls_and_a_short_buffer(void)
     CHECK(!panel_probe_passed(NULL) && !panel_probe_settled(NULL), "null passed");
     CHECK(panel_probe_word(NULL, buf, sizeof buf)[0] == '\0', "null wrote a word");
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 0, 3);
+    panel_probe_start(&p, 0, 3, true);
     panel_probe_step(&p, 9999, 0, true);
     panel_probe_word(&p, buf, 4);
     CHECK(buf[3] == '\0', "a short buffer was overrun");
@@ -214,8 +214,44 @@ static void test_the_guard_covers_the_whole_life_of_a_test(void)
     CHECK(panel_probe_may_start(g), "step 5");
 }
 
+/* ---- a tap made while he is away ---------------------------------------- */
+
+static void test_a_test_sent_with_the_link_down_blames_the_link(void)
+{
+    /* THE ILLEGAL ANSWER FIRST: NO REPLY. With him away every send fails, so
+     * nothing went out -- which at this layer looks exactly like a gate that
+     * refused every op, and the two deserve opposite answers. Calling it NO
+     * REPLY blames him for a silence that is entirely ours, and it is the
+     * COMMON case: the rare one is a link that drops mid-window, and only
+     * that one was ever handled. */
+    panel_probe_t p;
+    panel_probe_init(&p);
+    panel_probe_start(&p, 1000, 0, false);
+    CHECK(p.state == PANEL_PROBE_LINK_LOST,
+          "a test sent with the link down did not read LINK LOST (%d)", (int)p.state);
+    CHECK(panel_probe_settled(&p), "LINK LOST did not settle");
+    CHECK(!panel_probe_passed(&p), "LINK LOST passed");
+
+    /* Even if ops somehow reported away, the link was down when they went:
+     * the verdict is about the link, not the count. */
+    panel_probe_init(&p);
+    panel_probe_start(&p, 1000, 3, false);
+    CHECK(p.state == PANEL_PROBE_LINK_LOST,
+          "a down link with ops away did not read LINK LOST");
+
+    /* And a LIVE link that sent nothing is still NO REPLY. That is the gate
+     * refusing, which is also our doing and not his silence -- but it is not
+     * the link's doing either, and must not say so. */
+    panel_probe_init(&p);
+    panel_probe_start(&p, 1000, 0, true);
+    CHECK(p.state == PANEL_PROBE_NO_REPLY,
+          "a live link that sent nothing did not read NO REPLY");
+    CHECK(!panel_probe_passed(&p), "NO REPLY passed");
+}
+
 int main(void)
 {
+    test_a_test_sent_with_the_link_down_blames_the_link();
     test_a_test_already_under_way_refuses_the_tap();
     test_a_settled_test_lets_the_next_tap_through();
     test_a_pass_is_not_mistaken_for_a_test_in_progress();

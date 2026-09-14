@@ -365,6 +365,7 @@ static int         s_probe_request = -1;   /* a tier main.c has yet to send */
 static portMUX_TYPE s_probe_mux = portMUX_INITIALIZER_UNLOCKED;
 static unsigned s_probe_pending_expected;
 static uint32_t s_probe_pending_ms;
+static bool     s_probe_pending_link;   /* was he there when they went out? */
 static bool     s_probe_pending;
 
 /* AND A GENERATION, because closing the interior cannot recall a send already
@@ -383,6 +384,16 @@ static unsigned s_probe_gen;
  * read clear and a second tap bought three more ops. Closed by name rather
  * than by timing. */
 static bool     s_probe_in_flight;
+
+/* A REFUSED TAP, SHOWN. The refusals were ESP_LOGI only, on a board whose
+ * serial cannot be read without resetting it into the ROM downloader
+ * (CLAUDE.md) -- so the operator standing at the droid saw nothing at all,
+ * and the comment claiming they "see the same refusal the gate would give"
+ * described something that was never rendered. A locked rung says so on
+ * itself for a moment instead. */
+#define PANEL_REFUSE_FLASH_MS 1200u
+static int      s_refuse_rung = -1;
+static uint32_t s_refuse_at;
 
 
 /* Bumped every time a tap is accepted, so the tour can tell "this tap took"
@@ -762,6 +773,7 @@ static void close_interior(void)
     s_probe_request = -1;
     s_probe_pending = false;
     s_probe_in_flight = false;
+    s_refuse_rung = -1;             /* its label is about to be freed */
     s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
@@ -796,6 +808,8 @@ void panel_ui_tap(int x, int y)
             if (s_rung_row[i] == NULL || !hit(s_rung_row[i], x, y)) continue;
             if (!s_rung_allowed[i]) {
                 ESP_LOGI("panel", "tap on a LOCKED rung %d -- refused", i);
+                s_refuse_rung = i;
+                s_refuse_at = s_last_now;
                 return;
             }
             /* ONE TEST AT A TIME, counted from the TAP rather than from the
@@ -840,7 +854,14 @@ void panel_ui_tap(int x, int y)
              * also this task, so it cannot land in between. */
             if (taken) panel_probe_init(&s_probe);
             if (!taken) {
+                /* The running rung already reads "..." -- the refusal of a
+                 * second tap is legible there. Flashed anyway when the tap
+                 * lands on a rung that is NOT the running one. */
                 ESP_LOGI("panel", "RUN on rung %d ignored -- a test is under way", i);
+                if (i != s_probe_rung) {
+                    s_refuse_rung = i;
+                    s_refuse_at = s_last_now;
+                }
                 return;
             }
             ESP_LOGI("panel", "RUN requested for rung %d", i);
@@ -970,7 +991,8 @@ int panel_ui_take_probe_request(unsigned *gen)
     return t;
 }
 
-void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen)
+void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen,
+                         bool link_up)
 {
     portENTER_CRITICAL(&s_probe_mux);
     s_probe_in_flight = false;      /* they are out; it is the clock's turn */
@@ -982,6 +1004,7 @@ void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen)
     if (gen == s_probe_gen) {
         s_probe_pending_expected = expected;
         s_probe_pending_ms = sent_at_ms;
+        s_probe_pending_link = link_up;
         s_probe_pending = true;
     }
     portEXIT_CRITICAL(&s_probe_mux);
@@ -1036,6 +1059,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
      * they left rather than the moment this tick noticed. */
     unsigned e = 0;
     uint32_t at = 0;
+    bool was_up = false;
     bool start;
     portENTER_CRITICAL(&s_probe_mux);
     /* No generation test here: panel_ui_probe_sent only sets `pending` under a
@@ -1048,15 +1072,38 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         s_probe_pending = false;
         e = s_probe_pending_expected;
         at = s_probe_pending_ms;
+        was_up = s_probe_pending_link;
     }
     portEXIT_CRITICAL(&s_probe_mux);
     if (start)
-        panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e);
+        panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e, was_up);
 
     /* THE RUNNING TEST'S VERDICT. Counted as the readings this test asked for
      * that arrived since it started, which NARROWS but does not eliminate the
      * panel's own periodic polls: they land in the same three stamps, so a
      * reply the test did not ask for can still count toward it. */
+    /* THE REFUSAL FLASH, before the verdict, so a refused tap on the running
+     * rung never overwrites what the test is saying. */
+    if (s_refuse_rung >= 0) {
+        if (now_ms - s_refuse_at >= PANEL_REFUSE_FLASH_MS) {
+            /* Back to whatever the rung says for itself. */
+            if (s_rung_word[s_refuse_rung] != NULL) {
+                lv_label_set_text(s_rung_word[s_refuse_rung],
+                                  s_rung_allowed[s_refuse_rung] ? "RUN" : "LOCKED");
+                lv_obj_set_style_text_color(
+                    s_rung_word[s_refuse_rung],
+                    lv_color_hex(s_rung_allowed[s_refuse_rung] ? PANEL_C_GREEN
+                                                               : V5_DIM), 0);
+            }
+            s_refuse_rung = -1;
+        } else if (s_rung_word[s_refuse_rung] != NULL &&
+                   s_refuse_rung != s_probe_rung) {
+            lv_label_set_text(s_rung_word[s_refuse_rung], "REFUSED");
+            lv_obj_set_style_text_color(s_rung_word[s_refuse_rung],
+                                        lv_color_hex(PANEL_C_AMBER), 0);
+        }
+    }
+
     if (s_int_open != PANEL_SVC_COUNT &&
         panel_service_kind(s_int_open) == PANEL_SVC_LADDER &&
         s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {

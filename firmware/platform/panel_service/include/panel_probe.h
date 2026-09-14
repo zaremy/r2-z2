@@ -69,8 +69,17 @@ typedef struct {
  * `in_flight` is the one that is easy to forget, and it is the window in which
  * a second tap used to buy six ops for one intended test: between the link
  * task taking the request and it reporting the send. On READ that is harmless
- * -- READ cannot move him -- but this is the rate limiter that governs DOME
- * and STANCE the day the ceiling rises, so it is true now rather than later. */
+ * -- READ cannot move him.
+ *
+ * IT IS NOT YET ADEQUATE FOR A TIER THAT MOVES HIM, and saying otherwise here
+ * would be the reassuring kind of wrong. The guard releases when the VERDICT
+ * settles, which is PANEL_PROBE_TIMEOUT_MS = 2 s; D-013 measured a dome move
+ * at 2.0-2.2 s regardless of distance. So the first moving tier would release
+ * this guard while he is still travelling, and would report PARTIAL or NO
+ * REPLY for a move that worked -- the timeout is calibrated on read latency
+ * (138/138 sub-second) and is the wrong constant for every tier above READ.
+ * Raising the ceiling needs a per-tier timeout, a completion signal rather
+ * than a reply count, and an abort. None of those are here. */
 typedef struct {
     bool queued;                /* tapped; the link task has not taken it */
     bool in_flight;             /* taken; its ops are going out RIGHT NOW */
@@ -95,7 +104,11 @@ void panel_probe_init(panel_probe_t *p);
  * gate needs two answers to pass, not three. Zero expected is refused -- a
  * test that asked nothing cannot pass, and reporting one that did would be
  * the rig lying. */
-void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected);
+/* `link_up` is sampled WHERE THE OPS WERE SENT, not here. With him away every
+ * send fails and `expected` is 0, which is indistinguishable at this layer
+ * from a gate that refused -- and the two deserve opposite answers. */
+void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
+                       bool link_up);
 
 /* Feed every tick while RUNNING. `answered` is how many of the readings this
  * test asked for have arrived since it started. Returns the state, which
