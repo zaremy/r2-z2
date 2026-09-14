@@ -78,7 +78,13 @@ static volatile bool s_gesture_void;  /* this press must become neither swipe no
 static volatile bool s_tap;           /* a press that barely moved, released */
 static volatile int16_t s_tap_x, s_tap_y;
 static int32_t s_press_max;           /* furthest this press strayed */
+/* HOW MANY POLLS SAW THIS PRESS. The measurement that forced it: 5 of 5
+ * gestures with >= 3 samples registered, 0 of 8 with <= 2 did, and a press
+ * seen exactly ONCE reported zero travel and fired a tap wherever the finger
+ * was caught mid-flight. Counted here, judged in panel_gesture. */
+static uint32_t s_press_samples;
 static uint8_t s_chip_id;             /* 0 = the controller did not answer */
+static uint8_t s_last_hw_gesture;     /* so the log says it once, not 25x/s */
 
 static void dot_hide(void)
 {
@@ -159,6 +165,18 @@ void panel_touch_poll(void)
 
     if (rd(REG_GESTURE, buf, sizeof buf) != ESP_OK) return;
 
+    /* buf[0] IS THE CONTROLLER'S OWN GESTURE, register 0x01, and this code has
+     * always read it and thrown it away. The CST816 computes slide-left and
+     * slide-right at its own scan rate, which is not bounded by how often we
+     * poll -- so if it reports usefully here it is a better swipe source than
+     * anything reconstructed from samples we may not have taken. Logged rather
+     * than used: what this particular part emits has never been observed, and
+     * a gesture source is not something to adopt on the datasheet's word. */
+    const uint8_t hw_gesture = buf[0];
+    if (hw_gesture != 0 && hw_gesture != s_last_hw_gesture)
+        ESP_LOGI(TAG, "controller gesture byte: 0x%02X", hw_gesture);
+    s_last_hw_gesture = hw_gesture;
+
     const uint8_t fingers = buf[1] & 0x0Fu;
     const int x = ((buf[2] & 0x0F) << 8) | buf[3];
     const int y = ((buf[4] & 0x0F) << 8) | buf[5];
@@ -169,7 +187,9 @@ void panel_touch_poll(void)
             s_press_began = true;
             s_gesture_void = false;
             s_press_max = 0;
+            s_press_samples = 0;
         }
+        s_press_samples++;
         {
             const int32_t ax = x > s_press_at.x ? x - s_press_at.x : s_press_at.x - x;
             const int32_t ay = y > s_press_at.y ? y - s_press_at.y : s_press_at.y - y;
@@ -192,30 +212,42 @@ void panel_touch_poll(void)
          * mean anything in that packet. If they are stale it happens to work;
          * if they are zeroed, every swipe becomes a false left-swipe. Not a
          * coin worth flipping for a gesture that changes pages. */
-        const int32_t dx = s_last_touch.x - s_press_at.x;
-        const int32_t dy = s_last_touch.y - s_press_at.y;
-        const int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
-        /* A SWIPE IS HORIZONTAL: at least twice as far across as down. Scrolling
-         * the SERVICE list is now the commonest gesture on the panel, and a
-         * scroll with 60 px of sideways drift used to change the page. */
-        const bool across = adx > 2 * ady;
-        if (s_gesture_void)                         s_gesture_void = false;
-        else if (across && dx <= -PANEL_SWIPE_PX)   s_swipe = PANEL_SWIPE_LEFT;
-        else if (across && dx >= PANEL_SWIPE_PX)    s_swipe = PANEL_SWIPE_RIGHT;
-        /* A TAP is a release that barely moved in EITHER axis. Staying inside the
-         * radius in y is what keeps scrolling the SERVICE list from opening whatever row the
-         * finger started on; the gap between PANEL_TAP_PX and PANEL_SWIPE_PX
-         * is deliberately dead, so an uncertain gesture does nothing. The tap
-         * lands where the finger went DOWN, which is the row it was aimed
-         * at. */
-        /* ...and it must never have LEFT that radius: a drag out past the
-         * scroll limit and back scrolled the list, and ending near where it
-         * started does not make it a tap. */
-        else if (s_press_max < PANEL_TAP_PX) {
+        const panel_press_t press = {
+            .press_x = s_press_at.x,   .press_y = s_press_at.y,
+            .last_x  = s_last_touch.x, .last_y  = s_last_touch.y,
+            .max_dev = s_press_max,
+            .samples = s_press_samples,
+            .voided  = s_gesture_void,
+        };
+        const panel_gesture_t g = panel_gesture_classify(&press);
+        s_gesture_void = false;
+
+        /* The tap lands where the finger went DOWN, which is the row it was
+         * aimed at, not wherever it drifted to. */
+        switch (g) {
+        case PANEL_GESTURE_SWIPE_LEFT:  s_swipe = PANEL_SWIPE_LEFT;  break;
+        case PANEL_GESTURE_SWIPE_RIGHT: s_swipe = PANEL_SWIPE_RIGHT; break;
+        case PANEL_GESTURE_TAP:
             s_tap_x = (int16_t)s_press_at.x;
             s_tap_y = (int16_t)s_press_at.y;
             s_tap = true;
+            break;
+        case PANEL_GESTURE_NONE:
+            break;
         }
+
+        /* EVERY release, with the numbers the verdict was made from. The whole
+         * diagnosis of the swipe bug came from raw points and a reconstruction
+         * afterwards, because nothing logged the decision -- so the one thing
+         * worth keeping from that session is this line. */
+        ESP_LOGI(TAG, "press: n=%u (%3d,%3d)->(%3d,%3d) d=(%d,%d) dev=%d -> %s",
+                 (unsigned)s_press_samples, (int)s_press_at.x, (int)s_press_at.y,
+                 (int)s_last_touch.x, (int)s_last_touch.y,
+                 (int)(s_last_touch.x - s_press_at.x),
+                 (int)(s_last_touch.y - s_press_at.y), (int)s_press_max,
+                 g == PANEL_GESTURE_SWIPE_LEFT  ? "SWIPE LEFT"  :
+                 g == PANEL_GESTURE_SWIPE_RIGHT ? "SWIPE RIGHT" :
+                 g == PANEL_GESTURE_TAP         ? "TAP" : "nothing");
         /* The dot STAYS where the finger left it. Hiding it on release is what
          * makes a working panel look dead to someone who taps once and looks
          * up -- they see nothing, exactly as reported three times. */

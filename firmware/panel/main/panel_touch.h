@@ -20,15 +20,11 @@
 extern "C" {
 #endif
 
-/* AC5: the swipe threshold, in raw panel pixels. */
-#define PANEL_SWIPE_PX 60
-
-/* A tap moves less than this in both axes. Well under the swipe threshold
- * so the two can never both be true. It is also LVGL's scroll limit (set in
- * panel_touch_init), and a tap is a press that never strayed this far, so
- * a gesture that scrolled the list is never also a tap. Chosen, not
- * measured: this controller's jitter has never been recorded. */
-#define PANEL_TAP_PX 24
+/* The thresholds and the decision itself live in panel_gesture, which is pure
+ * and has host tests. They were here, inside an I2C poll loop, which is a
+ * decision no test could reach -- and it shipped a bug that only a finger
+ * could find. PANEL_SWIPE_PX and PANEL_TAP_PX come in from there. */
+#include "panel_gesture.h"
 
 typedef enum { PANEL_SWIPE_NONE = 0, PANEL_SWIPE_LEFT, PANEL_SWIPE_RIGHT } panel_swipe_t;
 

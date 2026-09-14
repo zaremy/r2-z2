@@ -1,0 +1,219 @@
+^D--- esp-idf-monitor 1.9.0 on /dev/cu.usbmodem101 115200
+--- Warning: No ELF files found. Please provide the ELF file paths, required for binary log decoding.
+--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+--- Print filter: "*:V"
+2026-09-14 15:46:33 I (2126800) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:33 I (2126800) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:33 
+2026-09-14 15:46:36 I (2129800) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:36 I (2129800) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:36 
+2026-09-14 15:46:39 I (2132800) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:39 I (2132800) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:39 
+2026-09-14 15:46:42 I (2135800) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:42 I (2135800) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:42 
+2026-09-14 15:46:42 I (2135800) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:42 I (2135802) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:42 
+2026-09-14 15:46:45 I (2138806) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:45 I (2138806) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:45 
+2026-09-14 15:46:48 I (2141806) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:48 I (2141806) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:48 
+2026-09-14 15:46:51 I (2144806) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:51 I (2144806) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:51 
+2026-09-14 15:46:51 I (2144806) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:51 I (2144808) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:51 
+2026-09-14 15:46:53 I (2147391) touch: point   50  (367,230)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147393) panel: brightness -> 90% (active)
+2026-09-14 15:46:53 I (2147436) touch: point   51  (367,242)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147478) touch: point   52  (365,246)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147520) touch: point   53  (356,250)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147562) touch: point   54  (329,255)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147604) touch: point   55  (272,261)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147646) touch: point   56  (141,267)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:53 I (2147690) panel: swipe left -> page NETWORK
+2026-09-14 15:46:54 I (2147812) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:54 I (2147812) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:54 
+2026-09-14 15:46:57 I (2150812) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:57 I (2150812) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:57 
+2026-09-14 15:46:57 I (2150812) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:46:57 I (2150814) NimBLE: att_handle=28 len=7
+2026-09-14 15:46:57 
+2026-09-14 15:46:58 I (2151919) touch: point   57  (  1,326)   gaps: L1   R0   T86  B21 
+2026-09-14 15:46:58 I (2151963) touch: point   58  ( 11,329)   gaps: L1   R0   T86  B21 
+2026-09-14 15:47:00 I (2153818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:00 I (2153818) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:00 
+2026-09-14 15:47:00 I (2154137) touch: point   59  (  1,275)   gaps: L1   R0   T86  B21 
+2026-09-14 15:47:00 I (2154263) touch: point   60  (  7,275)   gaps: L1   R0   T86  B21 
+2026-09-14 15:47:00 I (2154306) touch: point   61  (136,275)   gaps: L1   R0   T86  B21 
+2026-09-14 15:47:00 I (2154349) panel: swipe right -> page SERVICE
+2026-09-14 15:47:01 I (2155491) touch: point   62  ( 53, 18)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:03 I (2156818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:03 I (2156818) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:03 
+2026-09-14 15:47:05 I (2159313) touch: point   63  (362,291)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:05 I (2159358) touch: point   64  (359,290)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:05 I (2159400) touch: point   65  (332,287)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:05 I (2159442) touch: point   66  (262,281)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:05 I (2159486) panel: swipe left -> page NETWORK
+2026-09-14 15:47:06 I (2159818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:06 I (2159818) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:06 
+2026-09-14 15:47:07 I (2161020) touch: point   67  (  1,282)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:07 I (2161105) touch: point   68  (  6,282)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:07 I (2161148) touch: point   69  ( 30,281)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:07 I (2161190) touch: point   70  ( 86,279)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:07 I (2161232) touch: point   71  (254,275)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:07 I (2161276) panel: swipe right -> page SERVICE
+2026-09-14 15:47:09 I (2162818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:09 I (2162818) NimBLE: att_handle=28 len=8
+2026-09-14 15:47:09 
+2026-09-14 15:47:11 I (2164804) touch: point   72  (345,299)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:12 I (2165818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:12 I (2165818) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:12 
+2026-09-14 15:47:12 I (2165818) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:12 I (2165820) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:12 
+2026-09-14 15:47:12 I (2165824) panel: t+2165s  answered 220/221  | gate adm=942 ref=0  link sent=942 drop=0
+2026-09-14 15:47:12 I (2165978) touch: point   73  (271,318)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:12 I (2166036) panel: tap -> HARDWARE TEST
+2026-09-14 15:47:13 I (2167563) touch: point   74  (  1,264)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:15 I (2168831) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:15 I (2168831) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:15 
+2026-09-14 15:47:15 I (2169242) touch: point   75  (  1,285)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:15 I (2169286) touch: point   76  ( 26,281)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:16 I (2170081) touch: point   77  ( 59,279)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:16 I (2170127) panel: tap on a LOCKED rung 3 -- refused
+2026-09-14 15:47:17 I (2170776) touch: point   78  (  1,281)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:17 I (2170865) touch: point   79  (144,277)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:18 I (2171831) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:18 I (2171831) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:18 
+2026-09-14 15:47:21 I (2174831) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:21 I (2174831) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:21 
+2026-09-14 15:47:21 I (2174831) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:21 I (2174833) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:21 
+2026-09-14 15:47:22 I (2176410) touch: point   80  (367,341)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:22 I (2176456) touch: point   81  (243,199)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:22 I (2176498) touch: point   82  ( 80,166)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:23 I (2177464) panel: P1: 82 points  x 1..367  y 18..426
+2026-09-14 15:47:23 I (2177464) panel:     edge gaps: L1 R0 T18 B21  (0 = bezel reached)
+2026-09-14 15:47:24 I (2177837) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:24 I (2177837) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:24 
+2026-09-14 15:47:24 I (2178471) touch: point   83  (  1,204)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:24 I (2178517) touch: point   84  (  8,208)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:24 I (2178559) touch: point   85  ( 88,215)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:24 I (2178603) panel: swipe right -> page STATUS
+2026-09-14 15:47:26 I (2179756) touch: point   86  (358,280)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:26 I (2179828) touch: point   87  ( 87,253)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:26 I (2179902) panel: swipe left -> page SERVICE
+2026-09-14 15:47:26 I (2180602) touch: point   88  ( 11,284)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:27 I (2180837) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:27 I (2180837) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:27 
+2026-09-14 15:47:27 I (2180837) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:27 I (2180839) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:27 
+2026-09-14 15:47:27 I (2181400) touch: point   89  (285,300)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:27 I (2181464) panel: tap -> DIAGNOSTICS
+2026-09-14 15:47:30 I (2183843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:30 I (2183843) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:30 
+2026-09-14 15:47:30 I (2184456) touch: point   90  (360,250)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184502) touch: point   91  (360,255)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184544) touch: point   92  (360,258)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184627) touch: point   93  (357,262)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184669) touch: point   94  (354,262)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184711) touch: point   95  (350,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:30 I (2184753) touch: point   96  (344,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2184795) touch: point   97  (336,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2184837) touch: point   98  (330,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2184879) touch: point   99  (321,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2184921) touch: point  100  (309,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2184963) touch: point  101  (291,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2185005) touch: point  102  (238,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2185047) touch: point  103  (181,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:31 I (2185089) touch: point  104  (138,263)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:32 I (2186553) touch: point  105  (  2,279)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:32 I (2186599) touch: point  106  (  6,283)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:32 I (2186641) touch: point  107  (  9,286)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:32 I (2186683) touch: point  108  ( 16,289)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:32 I (2186725) touch: point  109  ( 24,290)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:33 I (2186767) touch: point  110  ( 36,290)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:33 I (2186814) touch: point  111  ( 44,290)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:33 I (2186843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:33 I (2186843) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:33 
+2026-09-14 15:47:36 I (2189843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:36 I (2189843) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:36 
+2026-09-14 15:47:38 I (2191879) touch: point  112  (367,215)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2191924) touch: point  113  (366,222)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2191966) touch: point  114  (362,225)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192008) touch: point  115  (354,225)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192050) touch: point  116  (333,225)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192092) touch: point  117  (310,225)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192134) touch: point  118  (279,225)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192176) touch: point  119  (236,226)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192218) touch: point  120  (169,226)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192260) touch: point  121  (122,228)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192302) touch: point  122  ( 79,232)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:38 I (2192349) touch: point  123  ( 40,239)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:39 I (2192843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:39 I (2192843) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:39 
+2026-09-14 15:47:39 I (2193076) touch: point  124  (367,270)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:39 I (2193123) touch: point  125  (349,258)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:39 I (2193165) touch: point  126  (206,228)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:39 I (2193207) touch: point  127  ( 78,216)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:41 I (2194939) touch: point  128  ( 36, 33)   gaps: L1   R0   T18  B21 
+2026-09-14 15:47:42 I (2195843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:42 I (2195843) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:42 
+2026-09-14 15:47:42 I (2195843) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:42 I (2195845) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:42 
+2026-09-14 15:47:45 I (2198849) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:45 I (2198849) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:45 
+2026-09-14 15:47:48 I (2201849) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:48 I (2201849) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:48 
+2026-09-14 15:47:51 I (2204849) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:51 I (2204849) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:51 
+2026-09-14 15:47:51 I (2204849) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:51 I (2204851) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:51 
+2026-09-14 15:47:54 I (2207855) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:54 I (2207855) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:54 
+2026-09-14 15:47:57 I (2210855) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:57 I (2210855) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:57 
+2026-09-14 15:47:57 I (2210855) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:47:57 I (2210857) NimBLE: att_handle=28 len=7
+2026-09-14 15:47:57 
+2026-09-14 15:48:00 I (2213861) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:48:00 I (2213861) NimBLE: att_handle=28 len=7
+2026-09-14 15:48:00 
+2026-09-14 15:48:03 I (2216861) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:48:03 I (2216861) NimBLE: att_handle=28 len=7
+2026-09-14 15:48:03 
+2026-09-14 15:48:06 I (2219861) NimBLE: GATT procedure initiated: write; 
+2026-09-14 15:48:06 I (2219861) NimBLE: att_handle=28 len=7
+2026-09-14 15:48:06 

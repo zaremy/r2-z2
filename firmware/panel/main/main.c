@@ -96,6 +96,33 @@ _Static_assert(PANEL_KEEPALIVE_MS >= LINK_TICK_MS &&
                "the keepalive must be a whole number of link ticks: a shorter "
                "one makes the beat `tick % 0`, and a ragged one drifts");
 
+/* THE CONTROLLER GETS ITS OWN TASK, AND ITS OWN RATE.
+ *
+ * It was polled once per UI tick -- every 40 ms -- and a flick is 40-80 ms of
+ * contact, so a flick got one or two looks at the finger. Measured 2026-09-14
+ * on an operator's own gestures: every gesture with 3+ samples registered,
+ * not one with 2 or fewer did. The UI's frame rate has nothing to do with how
+ * fast a finger moves, and tying the two together is what made swipes feel
+ * random.
+ *
+ * ONE OWNER. panel_touch_poll accumulates a press across calls, so polling it
+ * from here AND from ui_task would race two tasks over s_pressing and the
+ * sample count -- the sampling bug's own shape, one layer up. ui_task no
+ * longer polls; it only takes the finished gesture.
+ *
+ * Safe off the display lock by construction: poll() does I2C and touches no
+ * LVGL, which is exactly why it was split from panel_touch_render(). */
+#define PANEL_TOUCH_TICK_MS 10u
+
+static void touch_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        panel_touch_poll();
+        vTaskDelay(pdMS_TO_TICKS(PANEL_TOUCH_TICK_MS));
+    }
+}
+
 static void link_task(void *arg)
 {
     (void)arg;
@@ -240,7 +267,6 @@ static void ui_task(void *arg)
          * holding the LVGL lock across a blocking bus transaction lets a
          * wedged controller stall every redraw and every other task that
          * needs the display. */
-        panel_touch_poll();
         if (bsp_display_lock(100)) {
             panel_touch_render();
 
@@ -732,6 +758,9 @@ void app_main(void)
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
 
+    /* Above the link and the UI: a finger is the one input with a human
+     * waiting on it, and its work is a 6-byte I2C read. */
+    xTaskCreate(touch_task, "panel_touch", 3072, NULL, 5, NULL);
     xTaskCreate(link_task, "r2_link_task", 4096, NULL, 4, NULL);
     xTaskCreate(ui_task,   "panel_ui",     4096, NULL, 3, NULL);
 #ifdef PANEL_SHOT_TOUR
