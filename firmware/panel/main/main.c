@@ -46,8 +46,10 @@ static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static uint8_t next_seq(void) { static uint8_t s; return s++; }
 
-/* Asked once per connection, cleared when the link falls. */
-static bool s_version_asked;
+/* Asked once per connection, cleared when the link falls. Written by the UI
+ * loop and cleared on the NimBLE host task, hence volatile: the worst
+ * interleaving costs one duplicate probe, never a missed one. */
+static volatile bool s_version_asked;
 
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
@@ -97,9 +99,13 @@ static void link_task(void *arg)
          * and the telemetry has always had a slot for it; nothing ever asked,
          * so the R2 LINK interior's R2 FW row could never fill -- honest, and
          * permanently blank. Seen on the glass, 2026-09-14. */
-        if (!s_version_asked) {
+        /* LATCHED ON SUCCESS, NOT ON THE ATTEMPT. This is the only one-shot
+         * request in this loop -- battery and dome repeat, so a lost write
+         * heals itself on the next tick. A probe latched on the attempt would
+         * leave R2 FW blank for the whole connection after one dropped GATT
+         * write, with ANSWERED short by one and nothing able to close it. */
+        if (!s_version_asked && r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0) {
             r2_telemetry_note_request(&s_tm);
-            r2_ops_probe_version(next_seq(), r2_link_send, NULL);
             s_version_asked = true;
         }
 
@@ -524,12 +530,12 @@ static void p4_task(void *arg)
      * unable to produce an offline frame. Set again, harmlessly, so this
      * task still reads as self-contained. */
     r2_link_set_scan_only(true);
-    /* RESTART the scan. The flag is read when ble_gap_disc is called, and
-     * on_sync already started one with filter_duplicates=1 -- so without this
-     * we see him ONCE and never again, and the very comment in r2_link warning
-     * about that was written by the same hand that then wired it wrong. The
-     * first run reported "1 advert this minute", which is the dedup filter, not
-     * his advertising rate, and would have made a real silence unmeasurable. */
+    /* RESTART the scan -- now belt and braces rather than the fix it was.
+     * The flag is read when ble_gap_disc is called, and it is set in app_main
+     * before the host syncs, so on_sync's own scan already has duplicate
+     * filtering off. Before that, this restart was the only thing stopping us
+     * seeing him ONCE and never again: the first run reported "1 advert this
+     * minute", which is the dedup filter rather than his advertising rate. */
     vTaskDelay(pdMS_TO_TICKS(500));
     r2_link_start();
     ESP_LOGW(TAG, "P4: scan-only. We will NOT connect, because the keepalive");

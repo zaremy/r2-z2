@@ -49,6 +49,16 @@ Everything below was found by looking at the previous run's frames.
 | `FREE HEAP 7203 KB` — counted 8 MB of PSRAM | **`183 KB`** internal, the heap that actually runs out |
 | VOICE/CAMERA notes 12 px above their body's centre | centred: measured midpoint **262**, body centre **262** |
 
+The version probe **latches on a successful send**, not on the attempt: it is
+the only one-shot request in the link loop, so a single dropped GATT write
+would otherwise blank `R2 FW` for the whole connection and leave `ANSWERED`
+one short with nothing able to close it. Found in review; re-photographed
+after the fix, still `7.0.101`.
+
+Only the `ANY D2-*` string has a host test, and that one asserts shipped data
+rather than a guard. The latch, the heap call and the note geometry are
+device-only and rest on the frames in this directory.
+
 `ANSWERED` reads **4/4** on the polished build — the version probe is the
 fourth, and it is counted as asked, so the ratio stays honest.
 

@@ -616,8 +616,9 @@ static void open_interior(panel_svc_t s)
     } else if (kind == PANEL_SVC_NOTE) {
         const char *a = "", *b = "";
         panel_service_note(s, &a, &b);
-        /* Centred in the BODY, which starts below the header: measured off
-         * the glass at 228-273 for a body of 76-448, i.e. 12 px high. */
+        /* Centred in the BODY, which starts below the header. Measured off
+         * the glass: the ink ran 228-273, a midpoint of 250 against the
+         * body's centre of 262 -- 12 px high. It now runs 240-285. */
         lv_obj_t *l1 = text(s_int_body, &michroma_16, 2, V5_LABEL, 0, 162, a);
         lv_obj_t *l2 = text(s_int_body, &techmono_18, 1, V5_DIM, 0, 194, b);
         lv_obj_set_width(l1, SVC_W);
