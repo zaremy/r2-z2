@@ -16,11 +16,19 @@ R2's three answers -> the verdict.
   refuse it too. Two independent refusals.
 - **READ is three questions that cannot move him**: his battery, his dome's
   position, his firmware version.
-- **One test at a time**; a second tap while one is running is ignored.
+- **One test at a time**, counted from the tap rather than from the running
+  probe -- the probe does not start until the link task picks the request up,
+  and a guard on its state alone stood open for the ~140 ms in between.
 - **The verdict counts answers, not sends.** A send proves only that the gate
-  admitted it. And it counts the readings THIS test asked for, arriving since
-  it started -- raw reply totals include the panel's own periodic battery poll
-  and would hand a failing test a passing mark it did not earn.
+  admitted it. It counts the readings that arrived since this test started,
+  rather than raw reply totals, which include every reply since boot.
+- **That narrows the window; it does not close it.** The panel's own periodic
+  polls -- battery every 15 s, dome every 30 s -- land in the same three
+  stamps, so a reply this test did not ask for can still count toward it
+  inside the 2 s window. A PASS therefore means "three readings arrived while
+  the test was running", which is weaker than "R2 answered all three of these
+  questions". Closing it would need per-request accounting the telemetry layer
+  does not carry; it is stated here rather than papered over.
 - **A lost link reads LINK LOST, not NO REPLY**: the question never reached
   him, and blaming him for our silence is the wrong answer in the reassuring
   direction.
@@ -35,7 +43,9 @@ link task, took the start stamp before the ops leave, and made the tick loop
 start the probe rather than the sender -- all of them on the path between the
 tap and the verdict. The second run's frame is **byte-identical** to this one
 (sha1 `b634553c`), which is the strongest form the answer comes in: not "it
-still passes", but "the panel drew the same pixels".
+still passes", but "the panel drew the same pixels". A third run, after a
+second review round moved the one-at-a-time guard to the tap and restored the
+poll cadence to link-up beats, reproduced the same bytes again.
 
 ## Still not proven
 

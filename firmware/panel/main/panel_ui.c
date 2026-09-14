@@ -4,6 +4,9 @@
 #include <math.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_app_desc.h"
 #include "esp_flash.h"
 #include "esp_log.h"
@@ -344,7 +347,25 @@ static lv_obj_t   *s_rung_word[PANEL_LADDER_RUNGS];
 static bool        s_rung_allowed[PANEL_LADDER_RUNGS];
 static panel_probe_t s_probe;
 static int         s_probe_rung = -1;      /* which rung the verdict belongs to */
-static volatile int s_probe_request = -1;  /* a tier main.c has yet to send */
+static int         s_probe_request = -1;   /* a tier main.c has yet to send */
+
+/* THE HANDOVER, and it crosses tasks on two cores: the touch tap and the
+ * renderer live in ui_task, the send in link_task. Three words that must be
+ * read together are not made safe by `volatile`, which orders the compiler and
+ * nothing else -- so they are written and read under one spinlock. It also
+ * makes take-and-clear atomic, where a plain read-modify-write could drop a
+ * tap that landed between the two statements.
+ *
+ * The probe is NOT started by the sender, because the sender does not hold the
+ * display lock and must not be able to fail to report: an earlier version
+ * called into the renderer under a 100 ms lock attempt, and a lock that timed
+ * out left three ops away with the rung still reading a cheerful green RUN. A
+ * flag the tick loop cannot miss is the difference between "nothing happened"
+ * and "nothing was SHOWN to have happened". */
+static portMUX_TYPE s_probe_mux = portMUX_INITIALIZER_UNLOCKED;
+static unsigned s_probe_pending_expected;
+static uint32_t s_probe_pending_ms;
+static bool     s_probe_pending;
 
 static uint32_t tone_colour(panel_tone_t t)
 {
@@ -709,6 +730,15 @@ static void close_interior(void)
         s_rung_allowed[i] = false;
     }
     s_probe_rung = -1;
+    /* AND THE HANDOVER, both halves. A request left behind sends three ops
+     * with no rung left to report them on; a pending start left behind is
+     * consumed by the refresh that re-opens the ladder, which leaves the probe
+     * RUNNING against rung -1 -- nothing steps it, and every later tap is
+     * refused by the guard above for the rest of the visit. */
+    portENTER_CRITICAL(&s_probe_mux);
+    s_probe_request = -1;
+    s_probe_pending = false;
+    portEXIT_CRITICAL(&s_probe_mux);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clean(s_int_body);
     s_int_rows = 0;
@@ -743,9 +773,21 @@ void panel_ui_tap(int x, int y)
                 ESP_LOGI("panel", "tap on a LOCKED rung %d -- refused", i);
                 return;
             }
-            if (s_probe.state == PANEL_PROBE_RUNNING) return;   /* one at a time */
+            /* ONE TEST AT A TIME, counted from the TAP rather than from the
+             * running probe. The probe does not become RUNNING until link_task
+             * picks the request up and the next refresh consumes it -- up to
+             * ~140 ms in which the rung still reads a green RUN and a guard on
+             * the state alone stands open. A double tap there sent six ops for
+             * one intended test. Harmless on READ, which cannot move him; this
+             * is the rate limiter that governs DOME and STANCE the day the
+             * ceiling rises, so it is made true now. */
+            bool busy;
+            portENTER_CRITICAL(&s_probe_mux);
+            busy = (s_probe_request >= 0) || s_probe_pending;
+            if (!busy) s_probe_request = i;
+            portEXIT_CRITICAL(&s_probe_mux);
+            if (busy || s_probe.state == PANEL_PROBE_RUNNING) return;
             s_probe_rung = i;
-            s_probe_request = i;
             ESP_LOGI("panel", "RUN requested for rung %d", i);
             return;
         }
@@ -853,28 +895,20 @@ bool panel_ui_debug_open_row(int row)
 
 int panel_ui_take_probe_request(void)
 {
+    portENTER_CRITICAL(&s_probe_mux);
     const int t = s_probe_request;
     s_probe_request = -1;
+    portEXIT_CRITICAL(&s_probe_mux);
     return t;
 }
 
-/* Handed over by whoever sent the ops, and picked up by the next tick.
- *
- * NOT started here, because the sender does not hold the display lock and
- * must not be able to fail to report: an earlier version called into the
- * renderer under a 100 ms lock attempt, and a lock that timed out left three
- * ops away with the rung still reading a cheerful green RUN. A flag the tick
- * loop cannot miss is the difference between "nothing happened" and "nothing
- * was SHOWN to have happened". */
-static volatile unsigned s_probe_pending_expected;
-static volatile uint32_t s_probe_pending_ms;
-static volatile bool     s_probe_pending;
-
 void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms)
 {
+    portENTER_CRITICAL(&s_probe_mux);
     s_probe_pending_expected = expected;
     s_probe_pending_ms = sent_at_ms;
     s_probe_pending = true;
+    portEXIT_CRITICAL(&s_probe_mux);
 }
 
 void panel_ui_note_press(void)
@@ -924,12 +958,19 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
 
     /* A test whose ops have gone out starts here, stamped with the moment
      * they left rather than the moment this tick noticed. */
-    if (s_probe_pending) {
+    unsigned e = 0;
+    uint32_t at = 0;
+    bool start;
+    portENTER_CRITICAL(&s_probe_mux);
+    start = s_probe_pending;
+    if (start) {
         s_probe_pending = false;
-        const unsigned e = s_probe_pending_expected;
-        panel_probe_start(&s_probe, s_probe_pending_ms,
-                          e > 255u ? 255u : (uint8_t)e);
+        e = s_probe_pending_expected;
+        at = s_probe_pending_ms;
     }
+    portEXIT_CRITICAL(&s_probe_mux);
+    if (start)
+        panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e);
 
     /* THE RUNNING TEST'S VERDICT. Counted as the readings this test asked for
      * that arrived since it started, which NARROWS but does not eliminate the

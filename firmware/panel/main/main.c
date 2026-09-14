@@ -87,14 +87,24 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 static unsigned run_tier_test(int tier);
 
 /* The link loop's tick. Short enough that a tap on the ladder reaches the
- * radio promptly; the keepalive and the polls count ticks rather than
- * sleeping, so their periods are unchanged. */
+ * radio promptly; the keepalive and the polls count beats of it rather than
+ * sleeping, so their periods are what they always were. */
 #define LINK_TICK_MS 100u
+#define LINK_TICKS_PER_BEAT (PANEL_KEEPALIVE_MS / LINK_TICK_MS)
 
 static void link_task(void *arg)
 {
     (void)arg;
-    int tick = 0;
+    /* UNSIGNED, and the beat counts LINK-UP periods, not wall clock. Both are
+     * the old loop's behaviour restored rather than preserved by accident: it
+     * incremented after the link check, so a period spent disconnected cost
+     * nothing and the first poll landed on the first beat of a connection.
+     * Counting wall clock instead delayed the battery to t=15 s on every cold
+     * link-up and let a flapping link swallow a dome read entirely. Signed
+     * would also, at the wrap, make `beat % 10 == 3` unsatisfiable forever --
+     * six years out, and a dome that never polls again. */
+    unsigned tick = 0;
+    unsigned beat = 0;
     while (1) {
         /* A 100 ms TICK, with the keepalive derived from it rather than from
          * the sleep. The loop used to sleep the whole keepalive period, which
@@ -114,10 +124,7 @@ static void link_task(void *arg)
         }
 
         if (!r2_link_is_up()) continue;
-        if (tick % (int)(PANEL_KEEPALIVE_MS / LINK_TICK_MS) != 0) continue;
-        /* One beat per keepalive period: the cadences below are counted in
-         * beats, so their periods are what they always were. */
-        const int beat = tick / (int)(PANEL_KEEPALIVE_MS / LINK_TICK_MS);
+        if (tick % LINK_TICKS_PER_BEAT != 0) continue;
 
         /* Keepalive. This is also what stops him sleeping, which is a real
          * cost and a deliberate one for now: D-023 records that powering him
@@ -139,7 +146,11 @@ static void link_task(void *arg)
             s_version_asked = true;
         }
 
-        if (beat % 5 == 0) {
+        /* One beat per keepalive period WITH THE LINK UP. Counted here so a
+         * beat is never spent on a connection that was not there. */
+        const unsigned b = beat++;
+
+        if (b % 5 == 0) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_battery(next_seq(), r2_link_send, NULL);
         }
@@ -149,7 +160,7 @@ static void link_task(void *arg)
          * is a field that should not be on the screen. Asking is the cheaper
          * fix. READ ONLY: this asks where he is looking, it does not turn him,
          * and the gate ceiling stays at 'read'. */
-        if (beat % 10 == 3) {
+        if (b % 10 == 3) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_head(next_seq(), r2_link_send, NULL);
         }
@@ -158,7 +169,7 @@ static void link_task(void *arg)
          * -- ran 138/138. Either the display is costing us responses or the
          * accounting is wrong, and a number on a panel nobody can screenshot
          * mid-run cannot tell me which. */
-        if (beat % 20 == 0) {
+        if (b % 20 == 0) {
             uint32_t sent, dropped, admitted, refused;
             r2_link_stats(&sent, &dropped);
             r2_gate_stats(&admitted, &refused);
