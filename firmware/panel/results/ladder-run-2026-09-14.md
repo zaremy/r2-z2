@@ -1,0 +1,98 @@
+# The permission ladder runs a tier — 2026-09-14
+
+`ladder-run-read-2026-09-14.png`: **READ 3/3 OK** in green, LEDS through
+LOCOMOTION still **LOCKED**, captured on hardware with R2 linked.
+
+The tour tapped the READ rung itself, through the same hit test a finger
+would use. What the picture shows is therefore the whole path: tap -> the
+renderer's request -> `main.c` sending three read ops through `r2_gate` ->
+R2's three answers -> the verdict.
+
+## What RUN will and will not do
+
+- **Only rungs the gate would admit are tappable.** On this firmware that is
+  READ alone, because the ceiling is never raised. A tap on a locked rung is
+  refused by the panel and logged; if one ever got past, `r2_gate_send` would
+  refuse it too. Two independent refusals.
+- **READ is three questions that cannot move him**: his battery, his dome's
+  position, his firmware version.
+- **One test at a time**, and the guard names every state that means one is
+  under way: queued, its ops in flight, sent but not yet clocked, or running.
+  Four review rounds went into that list, because each shorter version left a
+  window in which a second tap bought three more ops: first ~140 ms (the guard
+  read only the running probe, which does not start until the link task picks
+  the request up), then 2 s (a fix that committed the request before checking
+  for a running test), then the length of three GATT writes (nothing
+  represented "taken, going out right now"). `panel_probe_may_start` is a pure
+  function with host tests and named fields, rather than three positional
+  bools inside an LVGL callback where a transposition would compile.
+- **A refused tap says so on the rung**, for 1.2 s, in amber. The refusals
+  were log lines only, on a board whose serial cannot be read without
+  resetting it into the ROM downloader -- so the operator standing at the
+  droid saw nothing, and the code claiming they "see the same refusal the gate
+  would give" described something that was never rendered.
+- **The verdict counts answers, not sends.** A send proves only that the gate
+  admitted it. It counts the readings that arrived since this test started,
+  rather than raw reply totals, which include every reply since boot.
+- **That narrows the window; it does not close it.** The panel's own periodic
+  polls -- battery every 15 s, dome every 30 s -- land in the same three
+  stamps, so a reply this test did not ask for can still count toward it
+  inside the 2 s window. A PASS therefore means "three readings arrived while
+  the test was running", which is weaker than "R2 answered all three of these
+  questions". Closing it would need per-request accounting the telemetry layer
+  does not carry; it is stated here rather than papered over.
+- **A lost link reads LINK LOST, not NO REPLY**: the question never reached
+  him, and blaming him for our silence is the wrong answer in the reassuring
+  direction. This holds for a tap made WITH HIM ALREADY AWAY -- the common
+  case -- as well as for a link that drops mid-window. The first of those read
+  NO REPLY until round 6: every send failed, which arrived at the probe as
+  "nothing was asked" and is indistinguishable there from a gate refusal, so
+  the link state is now sampled beside the sends and carried in.
+- **A test that asked nothing settles as NO REPLY**, never as running and
+  never as a pass.
+- **The tour fails rather than photographing a `...`.** It checks the verdict
+  settled before taking the picture, so an unfinished test can never be filed
+  as a result.
+
+Re-run on hardware AFTER review, because the review moved the send into the
+link task, took the start stamp before the ops leave, and made the tick loop
+start the probe rather than the sender -- all of them on the path between the
+tap and the verdict. The second run's frame is **byte-identical** to this one
+(sha1 `b634553c`), which is the strongest form the answer comes in: not "it
+still passes", but "the panel drew the same pixels".
+
+SEVEN RUNS, one per review round, because each round changed the path between
+the tap and the verdict: the send moving to the link task, the poll cadence
+returning to link-up beats, the one-at-a-time guard moving to the tap and then
+being made a tested predicate, and the generation that lets a closed interior
+disown a send already in flight, the old verdict being cleared when a tap is
+accepted, and the link being sampled where the ops go out. The ladder frame is
+byte-identical across all seven; the frames that differ between runs are the ones
+carrying live values -- voltage, dome angle, uptime.
+
+AND FOR THE LATER ROUNDS THAT IS WORTH LESS THAN IT LOOKS, for the reason the
+next section gives: changes that live entirely in the ~140 ms before the clock
+starts cannot alter a frame taken after the timeout. The run still proves the
+build boots, links, and settles a verdict on the glass; it does not
+independently confirm the thing that round changed.
+
+## What this evidence cannot show
+
+The tour photographs the ladder only after the probe's own timeout has passed,
+so the frame is the SETTLED verdict. Everything that happens in the ~140 ms
+between the tap and the clock starting -- the refusal flash, the old verdict
+being cleared -- is invisible to it, and a byte-identical frame across runs is
+guaranteed by construction for those. It is evidence that the settled verdict
+did not regress; it is not evidence about the tap.
+
+Nothing in the host suite compiles `panel_ui.c`, so the wiring between the
+tested predicate and the renderer has no automated coverage at all. And
+`s_probe_accepted`, the tour's "did my tap take" signal, is incremented by the
+tap itself: it proves the guard admitted, never that ops left the panel.
+
+## Still not proven
+
+No finger has touched this panel yet. The tour enters below `panel_touch.c`,
+so the controller, the press and release edges, and the tap-versus-scroll
+thresholds remain unobserved -- including on this rung, where a real tap is
+the last untested step between a person and a command reaching R2.

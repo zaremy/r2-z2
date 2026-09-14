@@ -30,6 +30,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "nvs_flash.h"
 
+#include "panel_probe.h"
 #include "panel_shot.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
@@ -81,13 +82,66 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 }
 
 /* Talks to R2. Never touches LVGL. */
+/* Defined with the other senders, below: the link loop calls it the moment
+ * the operator taps a rung. */
+static unsigned run_tier_test(int tier);
+
+/* The link loop's tick. Short enough that a tap on the ladder reaches the
+ * radio promptly; the keepalive and the polls count beats of it rather than
+ * sleeping, so their periods are what they always were. */
+#define LINK_TICK_MS 100u
+#define LINK_TICKS_PER_BEAT (PANEL_KEEPALIVE_MS / LINK_TICK_MS)
+_Static_assert(PANEL_KEEPALIVE_MS >= LINK_TICK_MS &&
+               PANEL_KEEPALIVE_MS % LINK_TICK_MS == 0,
+               "the keepalive must be a whole number of link ticks: a shorter "
+               "one makes the beat `tick % 0`, and a ragged one drifts");
+
 static void link_task(void *arg)
 {
     (void)arg;
-    int tick = 0;
+    /* UNSIGNED, and the beat counts LINK-UP periods, not wall clock. Both are
+     * the old loop's behaviour restored rather than preserved by accident: it
+     * incremented after the link check, so a period spent disconnected cost
+     * nothing and the first poll landed on the first beat of a connection.
+     * Counting wall clock instead delayed the battery to t=15 s on every cold
+     * link-up and let a flapping link swallow a dome read entirely. Signed
+     * would also, at the wrap, make `beat % 10 == 3` unsatisfiable forever --
+     * six years out, and a dome that never polls again. */
+    unsigned tick = 0;
+    unsigned beat = 0;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(PANEL_KEEPALIVE_MS));
+        /* A 100 ms TICK, with the keepalive derived from it rather than from
+         * the sleep. The loop used to sleep the whole keepalive period, which
+         * made it the wrong place to notice a tap -- and noticing taps in the
+         * UI task instead meant two tasks sharing the sequence counter and the
+         * request tally, the very number this project uses to chase lost
+         * replies. One owner, one tick. */
+        vTaskDelay(pdMS_TO_TICKS(LINK_TICK_MS));
+        tick++;
+
+        /* THE OPERATOR'S TEST FIRST, and before the link check: a tap while he
+         * is away must still settle, as NO REPLY rather than as silence. */
+        unsigned probe_gen = 0;
+        const int probe_tier = panel_ui_take_probe_request(&probe_gen);
+        if (probe_tier >= 0) {
+            const uint32_t at = now_ms();      /* stamped before the ops go */
+            /* Carried through the send, so a panel that left the interior
+             * while these were in flight can disown the result rather than
+             * start a test against a rung that is gone. */
+            /* SENT FIRST, THEN ASKED. A tap with him away fails every op and
+             * must read LINK LOST rather than NO REPLY -- our silence, not
+             * his. Reading the link before the sends left a window, however
+             * small, in which it dropped in between and the verdict blamed
+             * him anyway: the answer is about the link the sends actually
+             * met. Argument order is unsequenced in C, so the two are
+             * separate statements rather than one call. */
+            const unsigned sent = run_tier_test(probe_tier);
+            const bool up = r2_link_is_up();
+            panel_ui_probe_sent(sent, at, probe_gen, up);
+        }
+
         if (!r2_link_is_up()) continue;
+        if (tick % LINK_TICKS_PER_BEAT != 0) continue;
 
         /* Keepalive. This is also what stops him sleeping, which is a real
          * cost and a deliberate one for now: D-023 records that powering him
@@ -109,7 +163,11 @@ static void link_task(void *arg)
             s_version_asked = true;
         }
 
-        if (tick % 5 == 0) {
+        /* One beat per keepalive period WITH THE LINK UP. Counted here so a
+         * beat is never spent on a connection that was not there. */
+        const unsigned b = beat++;
+
+        if (b % 5 == 0) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_battery(next_seq(), r2_link_send, NULL);
         }
@@ -119,7 +177,7 @@ static void link_task(void *arg)
          * is a field that should not be on the screen. Asking is the cheaper
          * fix. READ ONLY: this asks where he is looking, it does not turn him,
          * and the gate ceiling stays at 'read'. */
-        if (tick % 10 == 3) {
+        if (b % 10 == 3) {
             r2_telemetry_note_request(&s_tm);
             r2_ops_request_head(next_seq(), r2_link_send, NULL);
         }
@@ -128,7 +186,7 @@ static void link_task(void *arg)
          * -- ran 138/138. Either the display is costing us responses or the
          * accounting is wrong, and a number on a panel nobody can screenshot
          * mid-run cannot tell me which. */
-        if (tick % 20 == 0) {
+        if (b % 20 == 0) {
             uint32_t sent, dropped, admitted, refused;
             r2_link_stats(&sent, &dropped);
             r2_gate_stats(&admitted, &refused);
@@ -137,8 +195,33 @@ static void link_task(void *arg)
                      (unsigned)s_tm.requests, (unsigned)admitted, (unsigned)refused,
                      (unsigned)sent, (unsigned)dropped);
         }
-        tick++;
     }
+}
+
+/* RUN A TIER'S TEST. The only tier this firmware can run is READ, because the
+ * gate's ceiling is never raised -- and READ is three questions that cannot
+ * move him: his battery, his dome's position, his firmware version.
+ *
+ * Every op goes through r2_gate_send like everything else, so a rung above
+ * the ceiling would be refused here even if the ladder offered it. The count
+ * returned is how many the gate admitted AND the link took; the panel needs
+ * that number to know what a pass looks like. */
+static unsigned run_tier_test(int tier)
+{
+    if (tier != (int)R2_TIER_READ) {
+        /* Not reachable from the ladder, which only offers what the gate
+         * would admit. Said out loud rather than assumed. */
+        ESP_LOGE(TAG, "REFUSED: rung %d is not READ, and this build runs only READ",
+                 tier);
+        return 0;
+    }
+    unsigned sent = 0;
+    if (r2_ops_request_battery(next_seq(), r2_link_send, NULL) > 0) sent++;
+    if (r2_ops_request_head(next_seq(), r2_link_send, NULL) > 0)    sent++;
+    if (r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0)   sent++;
+    for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
+    ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
+    return sent;
 }
 
 /* Injected into panel_ui so the UI file stays free of the BSP. */
@@ -211,6 +294,8 @@ static void ui_task(void *arg)
                              set_brightness_pct);
             bsp_display_unlock();
         }
+
+
         /* P1 progress, once a minute (#101). Without this the panel records
          * touch extremes and never says so, which makes the measurement
          * INVISIBLE -- and an operator who has done the corners has no way to
@@ -413,6 +498,38 @@ static void tour_task(void *arg)
 
         if (opened) {
             tour_shot(2 + i, k_tour_name[i], k_tour_row[i]);
+
+            /* THE LADDER GETS RUN, NOT JUST LISTED. Its slot is re-captured
+             * after tapping READ, so the picture shows the verdict rather
+             * than the offer: a ladder that draws RUN proves nothing about
+             * whether tapping it does anything. The pre-run ladder is already
+             * on record from the run before this one. */
+            if (k_tour_row[i] == 3) {          /* HARDWARE TEST */
+                bool asked = false;
+                if (tour_lock("run rung")) {
+                    asked = panel_ui_debug_run_rung(0);   /* READ */
+                    bsp_display_unlock();
+                }
+                if (asked) {
+                    /* Past the probe's own timeout, so the frame shows a
+                     * settled verdict and never the "..." in between. */
+                    vTaskDelay(pdMS_TO_TICKS(PANEL_PROBE_TIMEOUT_MS + 600u));
+                    if (!panel_ui_debug_probe_settled()) {
+                        /* Photographing a "..." and calling it a result is
+                         * the lie this rig exists not to tell. */
+                        ESP_LOGE(TAG, "TOUR: the READ test never settled");
+                        s_tour_ok = false;
+                    } else {
+                        ESP_LOGW(TAG, "TOUR: READ test %s",
+                                 panel_ui_debug_probe_passed() ? "PASSED"
+                                                               : "did NOT pass");
+                        tour_shot(2 + i, "HARDWARE TEST after RUN", k_tour_row[i]);
+                    }
+                } else {
+                    ESP_LOGE(TAG, "TOUR: the READ rung refused the tap");
+                    s_tour_ok = false;
+                }
+            }
         } else {
             /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
              * reports NO FRAME: a missing picture is a finding, while one

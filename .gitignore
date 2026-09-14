@@ -61,6 +61,9 @@ mac-prototype/voice/models/*.tflite
 # Per-arm build dirs for firmware/coex_check
 build-arm*/
 
+# The screenshot-tour build of firmware/panel (-DPANEL_SHOT_TOUR)
+build-tour/
+
 # Wi-Fi credentials for the A1 coexistence arms — never commit
 firmware/**/wifi_creds.h
 
