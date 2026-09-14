@@ -131,8 +131,79 @@ static void test_nulls_and_a_short_buffer(void)
     CHECK(panel_probe_word(&p, NULL, 8)[0] == '\0', "a null buffer returned text");
 }
 
+/* ---- may a tap start a test? ------------------------------------------- */
+
+static void test_a_test_already_under_way_refuses_the_tap(void)
+{
+    /* THE ILLEGAL CASES FIRST, and there are four of them because the test
+     * passes through four states before it is over. Each one was a real
+     * window at some point in this feature's review: a second tap inside it
+     * bought three more ops for one intended test. */
+    CHECK(!panel_probe_may_start(true, false, false, PANEL_PROBE_IDLE),
+          "a queued request did not refuse the tap");
+    CHECK(!panel_probe_may_start(false, true, false, PANEL_PROBE_IDLE),
+          "ops in flight did not refuse the tap");
+    CHECK(!panel_probe_may_start(false, false, true, PANEL_PROBE_IDLE),
+          "a sent-but-unclocked test did not refuse the tap");
+    CHECK(!panel_probe_may_start(false, false, false, PANEL_PROBE_RUNNING),
+          "a running test did not refuse the tap");
+
+    /* And any combination of them, since they overlap in practice. */
+    CHECK(!panel_probe_may_start(true, true, true, PANEL_PROBE_RUNNING),
+          "all four at once did not refuse the tap");
+}
+
+static void test_a_settled_test_lets_the_next_tap_through(void)
+{
+    /* Nothing under way: the tap is admitted. A panel that refused forever
+     * after one test would be worse than one that never ran a test, because
+     * it would look identical to a working one. */
+    CHECK(panel_probe_may_start(false, false, false, PANEL_PROBE_IDLE),
+          "a fresh panel refused the first tap");
+
+    /* EVERY settled verdict must let the operator try again -- including the
+     * failures, which are exactly when they will want to. */
+    const panel_probe_state_t settled[] = {
+        PANEL_PROBE_IDLE, PANEL_PROBE_PASS, PANEL_PROBE_PARTIAL,
+        PANEL_PROBE_NO_REPLY, PANEL_PROBE_LINK_LOST,
+    };
+    for (unsigned i = 0; i < sizeof settled / sizeof settled[0]; i++)
+        CHECK(panel_probe_may_start(false, false, false, settled[i]),
+              "a settled test (%u) refused the next tap", (unsigned)settled[i]);
+}
+
+static void test_the_guard_covers_the_whole_life_of_a_test(void)
+{
+    /* WALK ONE TEST THROUGH, in the order the two tasks actually produce.
+     * The point of this one is that there is no seam between the steps: a tap
+     * is refused continuously from the moment it is accepted until the verdict
+     * settles. Checking the states one at a time cannot show that. */
+    bool queued = false, in_flight = false, pending = false;
+    panel_probe_state_t st = PANEL_PROBE_IDLE;
+
+    CHECK(panel_probe_may_start(queued, in_flight, pending, st), "step 0");
+
+    queued = true;                                   /* the tap lands */
+    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 1");
+
+    queued = false; in_flight = true;                /* the link task takes it */
+    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 2");
+
+    in_flight = false; pending = true;               /* the ops are away */
+    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 3");
+
+    pending = false; st = PANEL_PROBE_RUNNING;       /* the clock starts */
+    CHECK(!panel_probe_may_start(queued, in_flight, pending, st), "step 4");
+
+    st = PANEL_PROBE_PASS;                           /* and it settles */
+    CHECK(panel_probe_may_start(queued, in_flight, pending, st), "step 5");
+}
+
 int main(void)
 {
+    test_a_test_already_under_way_refuses_the_tap();
+    test_a_settled_test_lets_the_next_tap_through();
+    test_the_guard_covers_the_whole_life_of_a_test();
     test_asking_nothing_is_not_running();
     test_a_dead_link_is_not_his_silence();
     test_answers_that_arrive_late_do_not_pass();

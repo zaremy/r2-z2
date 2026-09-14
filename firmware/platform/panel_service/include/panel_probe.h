@@ -56,6 +56,24 @@ typedef struct {
     uint8_t  got;
 } panel_probe_t;
 
+/* MAY A TAP START A TEST? The renderer's guard, lifted out of the renderer so
+ * a test can reach it -- the repo's own rule is to test the guard rather than
+ * the data, and a guard living inside an LVGL callback is a guard with no
+ * test. Every state that means a test is already under way says no:
+ *
+ *   queued     -- tapped, the link task has not picked it up yet
+ *   in_flight  -- picked up; its ops are going out RIGHT NOW
+ *   pending    -- the ops went; the next refresh will start the clock
+ *   RUNNING    -- the clock is running
+ *
+ * `in_flight` is the one that is easy to forget, and it is the window in which
+ * a second tap used to buy six ops for one intended test: between the link
+ * task taking the request and it reporting the send. On READ that is harmless
+ * -- READ cannot move him -- but this is the rate limiter that governs DOME
+ * and STANCE the day the ceiling rises, so it is true now rather than later. */
+bool panel_probe_may_start(bool queued, bool in_flight, bool pending,
+                           panel_probe_state_t state);
+
 void panel_probe_init(panel_probe_t *p);
 
 /* Called once the ops have actually been SENT. `expected` is how many of them

@@ -16,9 +16,12 @@ R2's three answers -> the verdict.
   refuse it too. Two independent refusals.
 - **READ is three questions that cannot move him**: his battery, his dome's
   position, his firmware version.
-- **One test at a time**, counted from the tap rather than from the running
-  probe -- the probe does not start until the link task picks the request up,
-  and a guard on its state alone stood open for the ~140 ms in between.
+- **One test at a time**, and the guard names every state that means one is
+  under way: queued, its ops in flight, sent but not yet clocked, or running.
+  Three review rounds went into that list, because each shorter version left a
+  window in which a second tap bought three more ops -- 2 s wide, then ~140 ms,
+  then the length of three GATT writes. `panel_probe_may_start` is a pure
+  function with host tests, rather than a condition inside an LVGL callback.
 - **The verdict counts answers, not sends.** A send proves only that the gate
   admitted it. It counts the readings that arrived since this test started,
   rather than raw reply totals, which include every reply since boot.
@@ -43,9 +46,15 @@ link task, took the start stamp before the ops leave, and made the tick loop
 start the probe rather than the sender -- all of them on the path between the
 tap and the verdict. The second run's frame is **byte-identical** to this one
 (sha1 `b634553c`), which is the strongest form the answer comes in: not "it
-still passes", but "the panel drew the same pixels". A third run, after a
-second review round moved the one-at-a-time guard to the tap and restored the
-poll cadence to link-up beats, reproduced the same bytes again.
+still passes", but "the panel drew the same pixels".
+
+FOUR RUNS, one per review round, because each round changed the path between
+the tap and the verdict: the send moving to the link task, the poll cadence
+returning to link-up beats, the one-at-a-time guard moving to the tap and then
+being made a tested predicate, and the generation that lets a closed interior
+disown a send already in flight. The ladder frame is byte-identical across all
+four; the frames that differ between runs are the ones carrying live values --
+voltage, dome angle, uptime.
 
 ## Still not proven
 

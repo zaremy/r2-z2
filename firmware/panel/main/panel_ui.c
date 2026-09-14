@@ -378,6 +378,20 @@ static bool     s_probe_pending;
 static unsigned s_probe_gen;
 static unsigned s_probe_pending_gen;
 
+/* TAKEN, AND ITS OPS ARE GOING OUT RIGHT NOW. Nothing represented this: the
+ * request is cleared the moment the link task takes it and `pending` is not
+ * set until after three GATT writes, so for that stretch every guard condition
+ * read clear and a second tap bought three more ops. Closed by name rather
+ * than by timing. */
+static bool     s_probe_in_flight;
+
+/* Which rung the NEXT probe will belong to. Separate from s_probe_rung, which
+ * names the rung whose word is being painted: a tap used to move that one
+ * immediately, so a freshly tapped rung inherited the previous test's green
+ * "3/3 OK" for the ~140 ms before its own clock started -- a pass it had not
+ * earned, rendered in the reassuring direction. */
+static int      s_probe_next_rung = -1;
+
 /* Bumped every time a tap is accepted, so the tour can tell "this tap took"
  * from "a request happens to be queued" -- the request may already have been
  * taken by the link task microseconds later. */
@@ -754,6 +768,8 @@ static void close_interior(void)
     portENTER_CRITICAL(&s_probe_mux);
     s_probe_request = -1;
     s_probe_pending = false;
+    s_probe_in_flight = false;
+    s_probe_next_rung = -1;
     s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
@@ -808,11 +824,13 @@ void panel_ui_tap(int x, int y)
              * anything is written. */
             bool taken;
             portENTER_CRITICAL(&s_probe_mux);
-            taken = (s_probe_request < 0) && !s_probe_pending &&
-                    s_probe.state != PANEL_PROBE_RUNNING;
+            taken = panel_probe_may_start(s_probe_request >= 0,
+                                          s_probe_in_flight,
+                                          s_probe_pending,
+                                          s_probe.state);
             if (taken) {
                 s_probe_request = i;
-                s_probe_rung = i;
+                s_probe_next_rung = i;
                 s_probe_accepted++;
             }
             portEXIT_CRITICAL(&s_probe_mux);
@@ -941,6 +959,7 @@ int panel_ui_take_probe_request(unsigned *gen)
     portENTER_CRITICAL(&s_probe_mux);
     const int t = s_probe_request;
     s_probe_request = -1;
+    if (t >= 0) s_probe_in_flight = true;   /* until the send reports back */
     if (gen) *gen = s_probe_gen;
     portEXIT_CRITICAL(&s_probe_mux);
     return t;
@@ -949,13 +968,16 @@ int panel_ui_take_probe_request(unsigned *gen)
 void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen)
 {
     portENTER_CRITICAL(&s_probe_mux);
-    /* The ops went out; whether anything is left to report them on is the
-     * generation's business. A stale one is dropped here rather than started
-     * against a rung that no longer exists. */
+    s_probe_in_flight = false;      /* they are out; it is the clock's turn */
+    /* Whether anything is left to report them on is the generation's business.
+     * A stale one is dropped here rather than started against a rung that no
+     * longer exists. This is the load-bearing check; the refresh does not
+     * repeat it, because a pending start can only exist with a live
+     * generation. */
     if (gen == s_probe_gen) {
         s_probe_pending_expected = expected;
         s_probe_pending_ms = sent_at_ms;
-        s_probe_pending_gen = gen;
+        s_probe_pending_gen = gen;   /* recorded for a debugger, not re-tested */
         s_probe_pending = true;
     }
     portEXIT_CRITICAL(&s_probe_mux);
@@ -1012,11 +1034,18 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     uint32_t at = 0;
     bool start;
     portENTER_CRITICAL(&s_probe_mux);
-    start = s_probe_pending && s_probe_pending_gen == s_probe_gen;
-    if (s_probe_pending) {
+    /* No generation test here: panel_ui_probe_sent only sets `pending` under a
+     * live generation, and close_interior clears `pending` in the same
+     * critical section that bumps the generation. A pending start therefore
+     * always belongs to this one. Re-testing it here would read like a second
+     * barrier and is a branch that cannot be taken. */
+    start = s_probe_pending;
+    if (start) {
         s_probe_pending = false;
         e = s_probe_pending_expected;
         at = s_probe_pending_ms;
+        /* The rung inherits the verdict only now, when its own clock starts. */
+        s_probe_rung = s_probe_next_rung;
     }
     portEXIT_CRITICAL(&s_probe_mux);
     if (start)

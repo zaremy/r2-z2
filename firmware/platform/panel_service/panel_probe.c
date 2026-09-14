@@ -2,6 +2,12 @@
 
 #include <stdio.h>
 
+bool panel_probe_may_start(bool queued, bool in_flight, bool pending,
+                           panel_probe_state_t state)
+{
+    return !queued && !in_flight && !pending && state != PANEL_PROBE_RUNNING;
+}
+
 void panel_probe_init(panel_probe_t *p)
 {
     if (p == NULL) return;
