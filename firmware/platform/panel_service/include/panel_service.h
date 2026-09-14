@@ -81,7 +81,11 @@ typedef struct {
     uint32_t    keepalive_ms;   /* main.c's keepalive period, not a copy of it */
     int         ceiling;        /* the gate's ceiling, as an r2_tier_t index */
     const char *panel_fw;       /* this app's version string */
-    uint32_t    flash_mb, psram_mb, heap_kb;
+    uint32_t    flash_mb, psram_mb;
+    /* INTERNAL free heap. Total free counts PSRAM, which on this board is 8 MB
+     * -- a number that reads reassuring while the internal heap, the one that
+     * actually runs out, is small. Seen on the glass: FREE HEAP 7203 KB. */
+    uint32_t    heap_kb;
     /* The touch controller's chip id as read at boot from I2C 0x15, or 0
      * when it did not answer. It is the board-revision probe
      * (board-revision.md): an answer at 0x15 IS a V2 board. */

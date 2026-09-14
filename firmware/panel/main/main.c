@@ -46,9 +46,13 @@ static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static uint8_t next_seq(void) { static uint8_t s; return s++; }
 
+/* Asked once per connection, cleared when the link falls. */
+static bool s_version_asked;
+
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
     (void)ctx; (void)reason;
+    if (s != R2_LINK_UP) s_version_asked = false;
     /* The telemetry layer forgets every reading here. That is what keeps a
      * voltage from outliving the link that carried it, and it is why the R2
      * row goes to "--" rather than holding the last good number. */
@@ -88,6 +92,16 @@ static void link_task(void *arg)
          * down is us stopping, and the panel's RELEASE control is the place
          * that gets decided -- not here. */
         r2_gate_send(0x13, 0x0D, next_seq(), NULL, 0, r2_link_send, NULL);
+
+        /* HIS FIRMWARE VERSION, once per connection. It is a read-tier probe
+         * and the telemetry has always had a slot for it; nothing ever asked,
+         * so the R2 LINK interior's R2 FW row could never fill -- honest, and
+         * permanently blank. Seen on the glass, 2026-09-14. */
+        if (!s_version_asked) {
+            r2_telemetry_note_request(&s_tm);
+            r2_ops_probe_version(next_seq(), r2_link_send, NULL);
+            s_version_asked = true;
+        }
 
         if (tick % 5 == 0) {
             r2_telemetry_note_request(&s_tm);
@@ -504,6 +518,11 @@ static void p2_task(void *arg)
 static void p4_task(void *arg)
 {
     (void)arg;
+    /* The flag is set in app_main, BEFORE the host syncs -- setting it here
+     * raced the first scan, which could find him and connect in the 500 ms
+     * below. That race is why an earlier session recorded this build as
+     * unable to produce an offline frame. Set again, harmlessly, so this
+     * task still reads as self-contained. */
     r2_link_set_scan_only(true);
     /* RESTART the scan. The flag is read when ble_gap_disc is called, and
      * on_sync already started one with filter_duplicates=1 -- so without this
@@ -577,6 +596,12 @@ void app_main(void)
              r2_gate_tier_name(r2_gate_get_ceiling()));
 
     r2_telemetry_reset(&s_tm);
+#ifdef PANEL_P4_IDLE
+    /* BEFORE the host syncs: on_sync starts a scan the moment NimBLE is up,
+     * and a scan started without this flag will connect to him. Deciding not
+     * to connect after that has already happened is too late. */
+    r2_link_set_scan_only(true);
+#endif
     const r2_link_cbs_t cbs = { .on_state = on_state, .on_frame = on_frame, .ctx = NULL };
     r2_link_init(&cbs);
 
