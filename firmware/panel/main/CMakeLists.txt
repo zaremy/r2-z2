@@ -41,6 +41,18 @@ if(PANEL_SHOT_WAKE)
     message(STATUS "panel: screenshot ON WAKE FRAME (periodic shots off)")
 endif()
 
+# The screenshot tour (#101 child 6). OFF by default -- it drives the UI
+# itself, which is a measurement rig rather than a panel.
+#   idf.py -DPANEL_SHOT_TOUR=ON build
+option(PANEL_SHOT_TOUR "Walk the face, the SERVICE menu and its interiors, capturing each" OFF)
+if(PANEL_SHOT_TOUR)
+    if(PANEL_SHOT_WAKE)
+        message(FATAL_ERROR "PANEL_SHOT_TOUR and PANEL_SHOT_WAKE both capture; pick one")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SHOT_TOUR=1)
+    message(STATUS "panel: SCREENSHOT TOUR enabled (drives the UI itself)")
+endif()
+
 # P4: watch his advertisement without ever connecting (#101). OFF by default --
 # a panel that refuses to link to the droid is a measurement rig, not a panel.
 #   idf.py -DPANEL_P4_IDLE=ON build

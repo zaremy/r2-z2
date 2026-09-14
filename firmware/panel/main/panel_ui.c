@@ -714,6 +714,33 @@ void panel_ui_tap(int x, int y)
     }
 }
 
+#ifdef PANEL_SHOT_TOUR
+/* THE TOUR SCROLLS A ROW INTO VIEW AND TAPS WHERE IT ENDED UP.
+ *
+ * Exposed only for the screenshot build. The first version scrolled by
+ * `row * SVC_ROW_H` and tapped a FIXED point, which a review caught: eight
+ * 89 px rows in a 359 px list can only scroll 353 px, so rows 5, 6 and 7 all
+ * clamped to the same offset and the tap opened PROVISIONING three times --
+ * three frames that would have been filed as VOICE, CAMERA and ABOUT. A rig
+ * that quietly produces plausible wrong pictures is worse than no rig.
+ *
+ * So: ask LVGL to bring the row into view, re-measure where it landed, tap
+ * its centre through the real hit test, and REPORT whether the interior that
+ * opened is the one that was asked for. The caller logs a failure loudly. */
+bool panel_ui_debug_open_row(int row)
+{
+    if (s_svc_list == NULL || row < 0 || row >= PANEL_SVC_COUNT) return false;
+    lv_obj_scroll_to_view(s_svc_row[row], LV_ANIM_OFF);
+    lv_obj_update_layout(s_svc_list);
+
+    lv_area_t a;
+    lv_obj_get_coords(s_svc_row[row], &a);
+    const int cx = (a.x1 + a.x2) / 2, cy = (a.y1 + a.y2) / 2;
+    panel_ui_tap(cx, cy);
+    return s_int_open == (panel_svc_t)row;
+}
+#endif
+
 void panel_ui_note_press(void)
 {
     /* Compared with the previous tick's sample: if the list moved between

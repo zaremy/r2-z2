@@ -94,6 +94,13 @@ void        panel_ui_tap(int x, int y);
  * it records whether the list was moving at that moment. */
 void        panel_ui_note_press(void);
 
+#ifdef PANEL_SHOT_TOUR
+/* Screenshot-tour build only: scroll a SERVICE row into view and tap its
+ * centre through the real hit test. False if that did not open the row asked
+ * for -- the tour logs that rather than filing a wrong picture. */
+bool        panel_ui_debug_open_row(int row);
+#endif
+
 /* The link task's period, which IS the keepalive: one number, so the
  * R2 LINK interior cannot describe a period the link does not use. */
 #define PANEL_KEEPALIVE_MS 3000u

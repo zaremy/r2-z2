@@ -1,7 +1,7 @@
 #!/bin/bash
 # Grab the panel's current frame as a PNG. No operator, no phone.
 #
-#   tools/grab_shot.sh [port] [out.png]
+#   tools/grab_shot.sh [port] [out.png] [slot]
 #
 # The board writes the frame to the 'storage' partition; this reads it back
 # over the same USB cable with esptool and decodes it. esptool verifies its own
@@ -10,6 +10,9 @@
 set -e
 PORT="${1:-/dev/cu.usbmodem2101}"
 OUT="${2:-panel.png}"
+# The tour build writes one frame per slot; a plain build writes slot 0.
+# The slot size lives in main/panel_shot.h; read it rather than repeat it.
+SLOT="${3:-0}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -21,6 +24,13 @@ OFF=$(python3 "$IDF_PATH/components/partition_table/gen_esp32part.py" \
       | awk -F, '/^storage,/ {print $4}')
 [ -n "$OFF" ] || { echo "could not find the storage partition offset" >&2; exit 1; }
 
+SLOT_BYTES=$(sed -n 's/^#define PANEL_SHOT_SLOT_BYTES  *\(0x[0-9A-Fa-f]*\)u.*/\1/p' "$HERE/../main/panel_shot.h")
+if [ -z "$SLOT_BYTES" ]; then
+    echo "could not read PANEL_SHOT_SLOT_BYTES from main/panel_shot.h" >&2
+    exit 1
+fi
+SLOT_BYTES=$((SLOT_BYTES))
+
 # header (16 B) + 368*448*2
 SIZE=$((16 + 368 * 448 * 2))
 # The default reset behaviour is correct here even though it restarts the app:
@@ -29,5 +39,5 @@ SIZE=$((16 + 368 * 448 * 2))
 # port is the native USB-Serial/JTAG, where a plain serial open drops it into
 # the downloader -- here that is the behaviour we want rather than the trap.)
 python -m esptool --chip esp32s3 -p "$PORT" \
-    read_flash "$OFF" "$SIZE" "$TMP/shot.bin" >/dev/null
+    read_flash $((OFF + SLOT * SLOT_BYTES)) "$SIZE" "$TMP/shot.bin" >/dev/null
 python3 "$HERE/decode_shot.py" "$TMP/shot.bin" "$OUT"
