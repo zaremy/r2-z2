@@ -14,6 +14,14 @@ python3 firmware/panel/tools/seg_touch.py \
     firmware/panel/results/touch-sampling-before-2026-09-14.txt
 ```
 
+**A NEW capture needs the per-point log turned back on.** `note()` is `ESP_LOGD`
+now -- at the 10 ms poll it was flooding a 115200 console from a task above the
+UI -- so a default build emits the per-release `press:` line but no `point`
+lines, and `seg_touch.py` will honestly report zero points. Raise the level for
+the `touch` tag when you want the raw points; the `press:` line alone carries
+the sample count, the endpoints and the verdict, which is what the diagnosis
+actually needed.
+
 ## Read the panel's own verdicts. They were in the log the whole time.
 
 The first pass at this reconstructed gestures from raw points and never looked

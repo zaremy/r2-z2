@@ -109,8 +109,9 @@ static void test_the_swipe_thresholds(void)
     /* One pixel short is NOT a swipe, and is far enough to not be a tap
      * either: the dead gap is deliberate. BOTH directions -- the rightward
      * threshold had no test at all until a mutation battery deleted it and
-     * every check stayed green, which is the same hole the operator's capture
-     * hinted at when not one right swipe appeared in thirteen gestures. */
+     * every check stayed green. (An early write-up also claimed the capture
+     * contained no right swipe. It contained three; that claim came from a
+     * parser blind to x <= 99, which is where a rightward swipe begins.) */
     p = press(200, 300, 200 - (PANEL_SWIPE_PX - 1), 300, 3);
     CHECK(panel_gesture_classify(&p) == PANEL_GESTURE_NONE,
           "one pixel short of the LEFT threshold still fired");

@@ -83,10 +83,12 @@ static volatile bool s_gesture_void;  /* this press must become neither swipe no
 static volatile bool s_tap;           /* a press that barely moved, released */
 static volatile int16_t s_tap_x, s_tap_y;
 static int32_t s_press_max;           /* furthest this press strayed */
-/* HOW MANY POLLS SAW THIS PRESS. The measurement that forced it: 5 of 5
- * gestures with >= 3 samples registered, 0 of 8 with <= 2 did, and a press
- * seen exactly ONCE reported zero travel and fired a tap wherever the finger
- * was caught mid-flight. Counted here, judged in panel_gesture. */
+/* HOW MANY POLLS SAW THIS PRESS. The measurement that forced it: of 22 presses
+ * from a finger, the eight seen EXACTLY ONCE were every one classified a tap --
+ * a press seen once reports zero travel, because its press position is also its
+ * last position, so it fired a tap wherever the finger was caught mid-flight.
+ * Presses seen twice or more produced whatever the geometry allowed, including
+ * a 2-sample swipe of 271 px. Counted here, judged in panel_gesture. */
 static uint32_t s_press_samples;
 static uint8_t s_chip_id;             /* 0 = the controller did not answer */
 static uint8_t s_last_hw_gesture;     /* so the log says it once, not 25x/s */
@@ -414,7 +416,8 @@ void panel_touch_extremes(panel_touch_extremes_t *out)
  * the state panel_touch_poll() already read. One reader of the hardware,
  * still ours, and LVGL gets its events.
  *
- * THREADING: poll() runs on ui_task and this runs on the LVGL timer task, so
+ * THREADING: poll() runs on touch_task -- its own, since the sampling fix --
+ * and this runs on the LVGL timer task, so
  * these scalars are genuinely shared now rather than same-task as before.
  * They are word-sized and volatile; the worst case is one frame of stale
  * coordinate, which is a redraw away from correct and is why a lock would be

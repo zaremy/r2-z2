@@ -100,10 +100,10 @@ _Static_assert(PANEL_KEEPALIVE_MS >= LINK_TICK_MS &&
  *
  * It was polled once per UI tick -- every 40 ms -- and a flick is 40-80 ms of
  * contact, so a flick got one or two looks at the finger. Measured 2026-09-14
- * on an operator's own gestures: every gesture with 3+ samples registered,
- * not one with 2 or fewer did. The UI's frame rate has nothing to do with how
- * fast a finger moves, and tying the two together is what made swipes feel
- * random.
+ * on an operator's own gestures: of 22 presses, the eight seen exactly ONCE
+ * were all misread as taps, three of them opening something nobody asked for.
+ * The UI's frame rate has nothing to do with how fast a finger moves, and
+ * tying the two together is what made swipes feel random.
  *
  * ONE OWNER. panel_touch_poll accumulates a press across calls, so polling it
  * from here AND from ui_task would race two tasks over s_pressing and the
