@@ -85,9 +85,14 @@ bool panel_shot_take_slot(unsigned slot)
      * holding the display lock through it would freeze the panel for every
      * screenshot -- a diagnostic that degrades the thing it diagnoses. */
     lv_draw_buf_t *buf = NULL;
-    if (bsp_display_lock(1000)) {
+    const bool locked = bsp_display_lock(1000);
+    if (locked) {
         buf = lv_snapshot_take(lv_screen_active(), LV_COLOR_FORMAT_RGB565);
         bsp_display_unlock();
+    } else {
+        /* Distinguished from a snapshot failure below: one means the display
+         * is busy, the other that LVGL could not allocate the frame. */
+        ESP_LOGE(TAG, "could not take the display lock for slot %u", slot);
     }
     if (buf == NULL) { ESP_LOGE(TAG, "lv_snapshot_take failed"); return false; }
 

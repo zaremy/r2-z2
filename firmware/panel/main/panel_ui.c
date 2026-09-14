@@ -727,6 +727,36 @@ void panel_ui_tap(int x, int y)
  * So: ask LVGL to bring the row into view, re-measure where it landed, tap
  * its centre through the real hit test, and REPORT whether the interior that
  * opened is the one that was asked for. The caller logs a failure loudly. */
+/* Is the view the tour asked for the one actually showing? PANEL_TOUR_STATUS
+ * and PANEL_TOUR_MENU are the two non-interior views; anything >= 0 is a
+ * SERVICE row. The wake frame counts as "no": it is a real interruption that
+ * can fire mid-tour -- on a bench with no droid the panel goes OFFLINE and
+ * the frame pulls STATUS forward -- and a picture of it filed under an
+ * interior's name is exactly the lie this rig exists not to tell. */
+bool panel_ui_debug_showing(int want)
+{
+    if (panel_ui_wake_showing()) return false;
+    if (want == PANEL_TOUR_STATUS)
+        return s_page_at == PAGE_STATUS && s_int_open == PANEL_SVC_COUNT;
+    if (want == PANEL_TOUR_MENU)
+        return s_page_at == PAGE_SERVICE && s_int_open == PANEL_SVC_COUNT;
+    return s_page_at == PAGE_SERVICE && s_int_open == (panel_svc_t)want;
+}
+
+/* Put `want` back on the glass after something interrupted it. */
+void panel_ui_debug_restore(int want)
+{
+    if (panel_ui_wake_showing()) panel_ui_wake_dismiss();
+    if (want == PANEL_TOUR_STATUS) {
+        panel_ui_show_page(PAGE_STATUS);
+    } else if (want == PANEL_TOUR_MENU) {
+        panel_ui_show_page(PAGE_SERVICE);
+    } else {
+        panel_ui_show_page(PAGE_SERVICE);
+        panel_ui_debug_open_row(want);
+    }
+}
+
 bool panel_ui_debug_open_row(int row)
 {
     if (s_svc_list == NULL || row < 0 || row >= PANEL_SVC_COUNT) return false;

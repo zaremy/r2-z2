@@ -285,9 +285,43 @@ static void shot_task(void *arg)
  * it says nothing about touch. */
 static bool s_tour_ok = true;
 
-static void tour_shot(unsigned slot, const char *what)
+/* Take the display lock or say why not. A silent failure here would capture
+ * whatever was on screen and still print TOUR COMPLETE. */
+static bool tour_lock(const char *step)
+{
+    if (bsp_display_lock(1000)) return true;
+    ESP_LOGE(TAG, "TOUR ABORTED: could not take the display lock at %s", step);
+    s_tour_ok = false;
+    return false;
+}
+
+/* CHECK THE GLASS, THEN SHOOT. The panel is live while the tour runs: on a
+ * bench with no droid it reaches OFFLINE and the wake frame fires, which
+ * brings STATUS forward -- landing, if the timing is unlucky, between opening
+ * an interior and photographing it. That would file the face under an
+ * interior's name and still print TOUR COMPLETE. So each capture asks what is
+ * actually showing, puts it back once if something moved it, and leaves the
+ * slot EMPTY rather than photograph the wrong view. */
+static void tour_shot(unsigned slot, const char *what, int want)
 {
     vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
+
+    if (!tour_lock(what)) return;
+    if (!panel_ui_debug_showing(want)) {
+        ESP_LOGW(TAG, "TOUR: %s was interrupted -- restoring it", what);
+        panel_ui_debug_restore(want);
+    }
+    lv_refr_now(NULL);
+    const bool ready = panel_ui_debug_showing(want);
+    bsp_display_unlock();
+
+    if (!ready) {
+        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- slot left EMPTY",
+                 slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+        s_tour_ok = false;
+        return;
+    }
+
     if (panel_shot_take_slot(slot)) {
         ESP_LOGW(TAG, "TOUR %u/%u: %s", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
     } else {
@@ -307,21 +341,14 @@ static const char *const k_tour_name[] = {
     "VOICE", "CAMERA", "ABOUT",
 };
 
-/* Take the display lock or say why not. A silent failure here would capture
- * whatever was on screen and still print TOUR COMPLETE. */
-static bool tour_lock(const char *step)
-{
-    if (bsp_display_lock(1000)) return true;
-    ESP_LOGE(TAG, "TOUR ABORTED: could not take the display lock at %s", step);
-    s_tour_ok = false;
-    return false;
-}
-
 static void tour_task(void *arg)
 {
     (void)arg;
     /* Long enough for the link to settle: a STATUS frame taken before that is
-     * a picture of WAKING, which is a real state but not the resting one. */
+     * a picture of WAKING, which is a real state but not the resting one. It
+     * is also past the wake frame that fires ~5 s in when no droid answers.
+     * The whole tour finishes well inside the 60 s burn-in drift step, so the
+     * nine frames share one alignment. */
     vTaskDelay(pdMS_TO_TICKS(12000));
 
     /* Blank every slot first, so a tour that dies half way leaves EMPTY slots
@@ -331,13 +358,12 @@ static void tour_task(void *arg)
     if (!tour_lock("STATUS")) vTaskDelete(NULL);
     panel_ui_show_page(0);
     bsp_display_unlock();
-    tour_shot(0, "STATUS face");
+    tour_shot(0, "STATUS face", PANEL_TOUR_STATUS);
 
     if (!tour_lock("SERVICE")) vTaskDelete(NULL);
     panel_ui_show_page(1);
-    lv_refr_now(NULL);
     bsp_display_unlock();
-    tour_shot(1, "SERVICE menu");
+    tour_shot(1, "SERVICE menu", PANEL_TOUR_MENU);
 
     for (unsigned i = 0; i < sizeof k_tour_row / sizeof k_tour_row[0]; i++) {
         bool opened = false;
@@ -349,7 +375,7 @@ static void tour_task(void *arg)
         bsp_display_unlock();
 
         if (opened) {
-            tour_shot(2 + i, k_tour_name[i]);
+            tour_shot(2 + i, k_tour_name[i], k_tour_row[i]);
         } else {
             /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
              * reports NO FRAME: a missing picture is a finding, while one

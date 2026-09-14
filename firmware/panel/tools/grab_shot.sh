@@ -30,6 +30,12 @@ if [ -z "$SLOT_BYTES" ]; then
     exit 1
 fi
 SLOT_BYTES=$((SLOT_BYTES))
+FW_SLOTS=$(sed -n 's/^#define PANEL_SHOT_SLOTS  *\([0-9]*\)u.*/\1/p' \
+           "$HERE/../main/panel_shot.h")
+if [ -n "$FW_SLOTS" ] && [ "$SLOT" -ge "$FW_SLOTS" ]; then
+    echo "slot $SLOT does not exist: the firmware writes $FW_SLOTS" >&2
+    exit 1
+fi
 
 # header (16 B) + 368*448*2
 SIZE=$((16 + 368 * 448 * 2))
