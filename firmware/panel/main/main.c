@@ -91,6 +91,10 @@ static unsigned run_tier_test(int tier);
  * sleeping, so their periods are what they always were. */
 #define LINK_TICK_MS 100u
 #define LINK_TICKS_PER_BEAT (PANEL_KEEPALIVE_MS / LINK_TICK_MS)
+_Static_assert(PANEL_KEEPALIVE_MS >= LINK_TICK_MS &&
+               PANEL_KEEPALIVE_MS % LINK_TICK_MS == 0,
+               "the keepalive must be a whole number of link ticks: a shorter "
+               "one makes the beat `tick % 0`, and a ragged one drifts");
 
 static void link_task(void *arg)
 {
@@ -124,11 +128,16 @@ static void link_task(void *arg)
             /* Carried through the send, so a panel that left the interior
              * while these were in flight can disown the result rather than
              * start a test against a rung that is gone. */
-            /* Sampled HERE, beside the sends, because a tap with him away
-             * fails every one of them and must read LINK LOST rather than
-             * NO REPLY -- our silence, not his. */
+            /* SENT FIRST, THEN ASKED. A tap with him away fails every op and
+             * must read LINK LOST rather than NO REPLY -- our silence, not
+             * his. Reading the link before the sends left a window, however
+             * small, in which it dropped in between and the verdict blamed
+             * him anyway: the answer is about the link the sends actually
+             * met. Argument order is unsequenced in C, so the two are
+             * separate statements rather than one call. */
+            const unsigned sent = run_tier_test(probe_tier);
             const bool up = r2_link_is_up();
-            panel_ui_probe_sent(run_tier_test(probe_tier), at, probe_gen, up);
+            panel_ui_probe_sent(sent, at, probe_gen, up);
         }
 
         if (!r2_link_is_up()) continue;
@@ -283,8 +292,6 @@ static void ui_task(void *arg)
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(), changed || touched || swiped != PANEL_SWIPE_NONE,
                              set_brightness_pct);
-            /* Taken under the lock, sent outside it: a BLE write is not
-             * something to hold the display for. */
             bsp_display_unlock();
         }
 

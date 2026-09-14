@@ -61,14 +61,20 @@ tap and the verdict. The second run's frame is **byte-identical** to this one
 (sha1 `b634553c`), which is the strongest form the answer comes in: not "it
 still passes", but "the panel drew the same pixels".
 
-SIX RUNS, one per review round, because each round changed the path between
+SEVEN RUNS, one per review round, because each round changed the path between
 the tap and the verdict: the send moving to the link task, the poll cadence
 returning to link-up beats, the one-at-a-time guard moving to the tap and then
 being made a tested predicate, and the generation that lets a closed interior
-disown a send already in flight, and the old verdict being cleared when a tap
-is accepted rather than when the next clock starts. The ladder frame is
-byte-identical across all five; the frames that differ between runs are the
-ones carrying live values -- voltage, dome angle, uptime.
+disown a send already in flight, the old verdict being cleared when a tap is
+accepted, and the link being sampled where the ops go out. The ladder frame is
+byte-identical across all seven; the frames that differ between runs are the ones
+carrying live values -- voltage, dome angle, uptime.
+
+AND FOR THE LATER ROUNDS THAT IS WORTH LESS THAN IT LOOKS, for the reason the
+next section gives: changes that live entirely in the ~140 ms before the clock
+starts cannot alter a frame taken after the timeout. The run still proves the
+build boots, links, and settles a verdict on the glass; it does not
+independently confirm the thing that round changed.
 
 ## What this evidence cannot show
 

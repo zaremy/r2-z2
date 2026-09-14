@@ -46,7 +46,9 @@ typedef enum {
     PANEL_PROBE_PASS,       /* every question answered */
     PANEL_PROBE_PARTIAL,    /* some answered, then the clock ran out */
     PANEL_PROBE_NO_REPLY,   /* none answered */
-    PANEL_PROBE_LINK_LOST,  /* the link went while we were waiting */
+    PANEL_PROBE_LINK_LOST,  /* he was away when we asked, or went while we
+                             * waited -- either way the question never
+                             * reached him, and the silence is ours */
 } panel_probe_state_t;
 
 typedef struct {

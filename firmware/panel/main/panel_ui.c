@@ -827,7 +827,15 @@ void panel_ui_tap(int x, int y)
              * armed a request the link task then sent. Anything that means a
              * test is under way -- queued, sent but not yet started, or
              * running -- refuses the tap, and the refusal is decided before
-             * anything is written. */
+             * anything is written.
+             *
+             * IT IS NOT SUFFICIENT FOR A TIER THAT MOVES HIM. This guard
+             * releases when the verdict settles, at 2 s, and D-013 measured a
+             * dome move at 2.0-2.2 s -- so above READ it would release while
+             * he was still travelling. Said here as well as in panel_probe.h
+             * because whoever raises the ceiling may read only one of them,
+             * and a pair of individually honest comments is how this repo has
+             * misled itself before. See #168. */
             bool taken;
             portENTER_CRITICAL(&s_probe_mux);
             taken = panel_probe_may_start((panel_probe_gate_t){
@@ -1085,7 +1093,14 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     /* THE REFUSAL FLASH, before the verdict, so a refused tap on the running
      * rung never overwrites what the test is saying. */
     if (s_refuse_rung >= 0) {
-        if (now_ms - s_refuse_at >= PANEL_REFUSE_FLASH_MS) {
+        if (s_refuse_rung == s_probe_rung) {
+            /* The rung was refused and has since been tapped and accepted, so
+             * the test owns its word now. Dropped rather than expired: the
+             * expiry writes "RUN" back, and the verdict block below happens to
+             * repaint over it in the same pass -- correct only by the order of
+             * two blocks, which is not something to leave load-bearing. */
+            s_refuse_rung = -1;
+        } else if (now_ms - s_refuse_at >= PANEL_REFUSE_FLASH_MS) {
             /* Back to whatever the rung says for itself. */
             if (s_rung_word[s_refuse_rung] != NULL) {
                 lv_label_set_text(s_rung_word[s_refuse_rung],
@@ -1096,8 +1111,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
                                                                : V5_DIM), 0);
             }
             s_refuse_rung = -1;
-        } else if (s_rung_word[s_refuse_rung] != NULL &&
-                   s_refuse_rung != s_probe_rung) {
+        } else if (s_rung_word[s_refuse_rung] != NULL) {
             lv_label_set_text(s_rung_word[s_refuse_rung], "REFUSED");
             lv_obj_set_style_text_color(s_rung_word[s_refuse_rung],
                                         lv_color_hex(PANEL_C_AMBER), 0);
