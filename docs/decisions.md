@@ -2341,3 +2341,86 @@ replies*; it says nothing about the keepalives, whose failures are unobservable
 by construction — a mangled wake is silently dropped and the next one is three
 seconds behind. The keepalive loss rate for A1 is **unmeasurable after the
 fact** and is best estimated as the same 6-in-256, roughly 89 of 3,778.
+
+## D-025 — A ceiling caps how far; the ladder must also enforce the order
+
+**Status:** accepted, 2026-09-14
+**Answers #168 part 1. Supersedes nothing; D-009's tier assignment stands.**
+
+### The decision
+
+`panel_service_ladder` opens a rung only when **both** hold: the gate's ceiling
+admits it, **and** every tier below it has been exercised this session. The set
+of exercised tiers is a bitmask passed in by the caller, and a tier joins it on
+a **PASS**, never on a tap.
+
+The mask is **per session and never persisted.**
+
+### Why the ceiling was not enough
+
+`CLAUDE.md` states bring-up as a sequence:
+
+> Bring-up order is fixed: **read-only → LEDs → audio → small dome → stance →
+> locomotion.** Each actuator test is individually opt-in, never bundled.
+
+The ladder marked every rung `i <= ceiling` allowed. A ceiling caps how far up
+you may reach and says nothing about the order you got there, so at
+`ceiling = STANCE` an operator could tap STANCE having never once run DOME —
+the rule's exact prohibition, implemented as its opposite.
+
+This was invisible for as long as it existed. `r2_gate_set_ceiling` is never
+called in `firmware/panel`, so the ceiling is the `R2_TIER_READ` default and
+the ladder offers exactly one rung; there is no order to get wrong. It had to
+be fixed **before** the first commit that raises the ceiling, because the
+ladder's shape is cheap to change now and load-bearing afterwards.
+
+### Why a PASS and not a tap
+
+A tier that was asked and did not answer has not been exercised. Advancing past
+a DOME that timed out is the thing the order exists to prevent — and #168 part
+4 records that the current 2 s verdict window is *shorter* than D-013's
+measured 2.0–2.2 s dome move, so a moving tier will report PARTIAL for a move
+that worked. Keying the sequence on PASS means that bug blocks bring-up loudly
+instead of waving it through.
+
+### Why per session, and never persisted
+
+A stored "DOME ran fine" unlocks STANCE on a droid nobody has looked at since
+last week. He has no resting posture, parks himself in bipod about a minute
+after the link drops, and an authored animation has already put him on the
+floor once (`CLAUDE.md`). A persisted bit records that a test *once* passed; it
+cannot speak for the droid in front of you. Re-walking the ladder after a boot
+costs one tap per rung and re-proves what the bit only remembers.
+
+### The rung says which barrier it hit
+
+`panel_rung_t` carries `why`: `OPEN`, `CEILING`, or `SEQUENCE`, rendered as
+`RUN`, `LOCKED` and `NOT YET`. They ask different things of the operator — a
+ceiling is a thing they must deliberately raise, a sequence gap is a rung they
+simply have not reached. When both block, **the ceiling is named first**:
+telling someone to run DOME when the ceiling is what stands between them and
+STANCE sends them at the wrong lever.
+
+### Consequences
+
+- Two independent barriers remain, and this adds a third *inside* the panel:
+  the gate's allowlist, the gate's ceiling, and now the ladder's order. The
+  ladder still never decides what is safe — it decides what is *offered*, and
+  `r2_gate` refuses anything above the ceiling regardless.
+- A rung unlocked by a passing probe shows `NOT YET` until the interior is
+  reopened, because the ladder is built on open. Unobservable at the shipped
+  `READ` ceiling (one rung, no sequence) and folded into #168 part 2, which
+  rebuilds these rows for per-op consent.
+- **Three of #168's four findings remain open**: consent is still per *tier*
+  rather than per actuator (`run_tier_test` fires three ops per tap), there is
+  still no abort anywhere, and the 2 s verdict window is still calibrated on
+  read latency. All three bind before the ceiling leaves `READ`.
+
+### What this does not claim
+
+That the order is now enforced end to end. This gates what the **panel offers**.
+`r2_gate` itself has no notion of sequence — a caller that is not the ladder can
+still request any tier the ceiling admits, in any order. Making the order a
+property of the gate rather than of its one UI is a larger change, and it is
+not needed while the panel is the only caller.
+

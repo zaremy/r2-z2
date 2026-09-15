@@ -114,6 +114,13 @@ static void test_a_live_link_says_what_he_said(void)
 
 /* ---- AC6: the ladder ------------------------------------------------------ */
 
+/* Every tier exercised. The tests below this line predate the sequence gate
+ * (#168) and are about the CEILING; they say so explicitly rather than
+ * passing 0 and quietly measuring the new gate instead of the old one. */
+#define ALL_RUN 0x1Fu   /* READ..STANCE. Bit 5 would mark LOCOMOTION run,
+                         * which the product can never reach -- a fixture the
+                         * code under test cannot be handed in life. */
+
 static void test_a_corrupt_ceiling_locks_everything(void)
 {
     /* THE ILLEGAL CASE: clamping a bad ceiling to the nearest rung would draw
@@ -121,7 +128,7 @@ static void test_a_corrupt_ceiling_locks_everything(void)
     const int bad[] = { -1, 5, 6, 99, -2147483647 - 1 };
     for (unsigned b = 0; b < sizeof bad / sizeof bad[0]; b++) {
         panel_rung_t r[PANEL_LADDER_RUNGS];
-        panel_service_ladder(bad[b], r);
+        panel_service_ladder(bad[b], ALL_RUN, r);
         for (int i = 0; i < PANEL_LADDER_RUNGS; i++)
             CHECK(!r[i].allowed, "ceiling %d allowed %s", bad[b], r[i].tier);
         CHECK(panel_service_ceiling_name(bad[b])[0] == '\0',
@@ -133,7 +140,8 @@ static void test_above_the_ceiling_is_locked_and_locomotion_always_is(void)
 {
     for (int c = 0; c < 5; c++) {
         panel_rung_t r[PANEL_LADDER_RUNGS];
-        CHECK(panel_service_ladder(c, r) == PANEL_LADDER_RUNGS, "rung count");
+        CHECK(panel_service_ladder(c, ALL_RUN, r) == PANEL_LADDER_RUNGS,
+              "rung count");
         for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
             const bool expect = (i <= c) && i < 5;
             CHECK(r[i].allowed == expect, "ceiling %d: %s allowed=%d, want %d",
@@ -151,15 +159,112 @@ static void test_the_ladder_is_the_bring_up_order_and_never_bundles(void)
         "READ", "LEDS", "AUDIO", "DOME", "STANCE", "LOCOMOTION",
     };
     panel_rung_t r[PANEL_LADDER_RUNGS];
-    panel_service_ladder(4, r);
+    panel_service_ladder(4, ALL_RUN, r);
     for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
         CHECK(strcmp(r[i].tier, order[i]) == 0, "rung %d is %s, want %s",
               i, r[i].tier, order[i]);
     }
     /* AC6's "no run-all" is this: exactly six rungs, each one tier, in the
      * order above. A seventh rung that bundled them would fail the count. */
-    CHECK(panel_service_ladder(4, r) == 6, "the ladder is not six single-tier rungs");
-    CHECK(panel_service_ladder(0, NULL) == 0, "null ladder accepted");
+    CHECK(panel_service_ladder(4, ALL_RUN, r) == 6,
+          "the ladder is not six single-tier rungs");
+    CHECK(panel_service_ladder(0, ALL_RUN, NULL) == 0, "null ladder accepted");
+}
+
+
+/* ---- #168: the ceiling caps, the sequence orders ------------------------- */
+
+static void test_a_high_ceiling_alone_does_not_open_a_rung(void)
+{
+    /* THE ILLEGAL CASE, and the whole point of #168: ceiling = STANCE with
+     * NOTHING run. The old ladder marked all five allowed here, so an operator
+     * could tap STANCE having never once moved the dome -- "bring-up order is
+     * fixed" says they may not. Only READ may open: the sequence starts
+     * somewhere, and READ has nothing beneath it. */
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    panel_service_ladder(4, 0u, r);
+    CHECK(r[0].allowed, "READ shut with a STANCE ceiling and nothing run");
+    for (int i = 1; i < PANEL_LADDER_RUNGS; i++) {
+        CHECK(!r[i].allowed, "%s opened on a ceiling alone, nothing run",
+              r[i].tier);
+        const panel_rung_block_t want = (i >= 5) ? PANEL_RUNG_UNLISTED
+                                                : PANEL_RUNG_SEQUENCE;
+        CHECK(r[i].why == want, "%s blocked for the wrong reason (%d, want %d)",
+              r[i].tier, (int)r[i].why, (int)want);
+    }
+}
+
+static void test_the_sequence_opens_exactly_one_rung_at_a_time(void)
+{
+    /* Walk it the way an operator would, and assert the NEXT rung opens and
+     * the one after does not. A gate that opened everything below the ceiling
+     * once any tier ran would pass a test that only checked the next one. */
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    uint32_t done = 0u;
+    for (int step = 0; step < 5; step++) {
+        panel_service_ladder(4, done, r);
+        CHECK(r[step].allowed, "step %d: %s shut when it is next",
+              step, r[step].tier);
+        for (int i = step + 1; i < PANEL_LADDER_RUNGS; i++)
+            CHECK(!r[i].allowed, "step %d: %s opened early", step, r[i].tier);
+        done |= PANEL_RUNG_BIT(step);
+    }
+}
+
+static void test_a_gap_in_the_sequence_shuts_everything_above_it(void)
+{
+    /* READ, LEDS and DOME run; AUDIO skipped. DOME having run does not excuse
+     * the gap -- STANCE stays shut, because the tier it was meant to follow
+     * was never exercised. A mask test that asked "is the tier below me done"
+     * instead of "is EVERY tier below me done" would pass STANCE here. */
+    const uint32_t done = PANEL_RUNG_BIT(0) | PANEL_RUNG_BIT(1) |
+                          PANEL_RUNG_BIT(3);
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    panel_service_ladder(4, done, r);
+    CHECK(r[2].allowed, "AUDIO shut when READ and LEDS have run");
+    CHECK(!r[3].allowed, "DOME opened across a skipped AUDIO");
+    CHECK(!r[4].allowed, "STANCE opened across a skipped AUDIO");
+    CHECK(r[4].why == PANEL_RUNG_SEQUENCE, "STANCE blamed the ceiling");
+}
+
+static void test_the_ceiling_is_named_before_the_sequence(void)
+{
+    /* Both block STANCE here: the ceiling is DOME and nothing has run. The
+     * operator needs the CEILING, because no amount of walking the ladder
+     * reaches a rung the gate will not admit. */
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    panel_service_ladder(3, 0u, r);
+    CHECK(r[4].why == PANEL_RUNG_CEILING, "STANCE blamed the sequence");
+    CHECK(r[1].why == PANEL_RUNG_SEQUENCE, "LEDS blamed the ceiling");
+    CHECK(r[0].why == PANEL_RUNG_OPEN, "READ is not open");
+}
+
+static void test_why_and_allowed_never_disagree(void)
+{
+    /* Two fields describing one fact is two chances to be wrong. Sweep every
+     * ceiling against every reachable `done` and pin them together. */
+    for (int c = -1; c <= 6; c++) {
+        for (uint32_t done = 0; done < 64u; done++) {
+            panel_rung_t r[PANEL_LADDER_RUNGS];
+            panel_service_ladder(c, done, r);
+            for (int i = 0; i < PANEL_LADDER_RUNGS; i++)
+                CHECK(r[i].allowed == (r[i].why == PANEL_RUNG_OPEN),
+                      "ceiling %d done 0x%X %s: allowed=%d why=%d",
+                      c, done, r[i].tier, (int)r[i].allowed, (int)r[i].why);
+        }
+    }
+}
+
+static void test_locomotion_is_shut_even_with_everything_run(void)
+{
+    /* It is not a rung of the gate at all. A sequence gate that reasoned only
+     * about "is everything below me done" would open it at the top. */
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    panel_service_ladder(4, ALL_RUN, r);
+    CHECK(!r[5].allowed, "LOCOMOTION opened with the whole ladder walked");
+    /* UNLISTED, not CEILING. No ceiling admits it, so "raise the ceiling" is
+     * advice that cannot work -- the wrong-lever mislead, in a test. */
+    CHECK(r[5].why == PANEL_RUNG_UNLISTED, "LOCOMOTION told to raise a ceiling");
 }
 
 /* ---- the menu ------------------------------------------------------------- */
@@ -455,6 +560,12 @@ int main(void)
     test_a_corrupt_ceiling_locks_everything();
     test_above_the_ceiling_is_locked_and_locomotion_always_is();
     test_the_ladder_is_the_bring_up_order_and_never_bundles();
+    test_a_high_ceiling_alone_does_not_open_a_rung();
+    test_the_sequence_opens_exactly_one_rung_at_a_time();
+    test_a_gap_in_the_sequence_shuts_everything_above_it();
+    test_the_ceiling_is_named_before_the_sequence();
+    test_why_and_allowed_never_disagree();
+    test_locomotion_is_shut_even_with_everything_run();
     test_every_row_has_a_title_and_the_right_kind();
     test_only_lists_have_rows_and_only_notes_have_lines();
     test_rows_respect_max();

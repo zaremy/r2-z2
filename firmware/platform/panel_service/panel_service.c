@@ -297,7 +297,18 @@ const char *panel_service_ceiling_name(int ceiling)
     return (ceiling >= 0 && ceiling < GATE_TIERS) ? k_rung[ceiling] : "";
 }
 
-int panel_service_ladder(int ceiling, panel_rung_t out[PANEL_LADDER_RUNGS])
+/* Every tier below `i` exercised? The mask of those tiers is (1<<i)-1, and
+ * they are all done exactly when `done` covers it. i == 0 gives an empty mask,
+ * which every `done` covers -- READ is the sequence's starting point and is
+ * gated by the ceiling alone. */
+static bool lower_tiers_done(int i, uint32_t done)
+{
+    const uint32_t below = (1u << i) - 1u;   /* i == 0 -> 0: READ is first */
+    return (done & below) == below;
+}
+
+int panel_service_ladder(int ceiling, uint32_t done,
+                         panel_rung_t out[PANEL_LADDER_RUNGS])
 {
     if (out == NULL) return 0;
     /* An out-of-range ceiling locks EVERYTHING rather than being clamped: a
@@ -305,7 +316,20 @@ int panel_service_ladder(int ceiling, panel_rung_t out[PANEL_LADDER_RUNGS])
     const bool sane = ceiling >= 0 && ceiling < GATE_TIERS;
     for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
         out[i].tier = k_rung[i];
-        out[i].allowed = sane && i < GATE_TIERS && i <= ceiling;
+        const bool under_ceiling = sane && i < GATE_TIERS && i <= ceiling;
+        const bool in_order      = lower_tiers_done(i, done);
+        out[i].allowed = under_ceiling && in_order;
+        /* THE CEILING IS REPORTED FIRST when both block. A rung out of reach
+         * of the gate is not "not yet" -- telling the operator to run DOME
+         * when raising the ceiling is what actually stands between them and
+         * STANCE would send them at the wrong lever. */
+        /* LOCOMOTION IS NOT "ABOVE THE CEILING" -- it has no allowlist entry
+         * and no ceiling admits it, so telling the operator to raise one sends
+         * them at a lever that does nothing. It gets its own reason. */
+        out[i].why = out[i].allowed      ? PANEL_RUNG_OPEN
+                   : i >= GATE_TIERS     ? PANEL_RUNG_UNLISTED
+                   : !under_ceiling      ? PANEL_RUNG_CEILING
+                                         : PANEL_RUNG_SEQUENCE;
     }
     return PANEL_LADDER_RUNGS;
 }
