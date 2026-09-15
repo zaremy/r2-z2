@@ -267,6 +267,59 @@ static void test_locomotion_is_shut_even_with_everything_run(void)
     CHECK(r[5].why == PANEL_RUNG_UNLISTED, "LOCOMOTION told to raise a ceiling");
 }
 
+/* ---- #168 part 2: only a tier that moves nothing may bundle ------------- */
+
+static void test_no_tier_that_moves_him_may_bundle(void)
+{
+    /* THE ILLEGAL CASE. "Each ACTUATOR test is individually opt-in, never
+     * bundled" -- so every rung that makes him do something in the room fires
+     * one op per tap. A STANCE tap that fires whatever STANCE contains is the
+     * exact thing the rule exists to prevent, and D-010 put animations at that
+     * tier because their contents cannot be inspected first. */
+    static const struct { int tier; const char *name; } MOVES[] = {
+        { 1, "LEDS" }, { 2, "AUDIO" }, { 3, "DOME" },
+        { 4, "STANCE" }, { 5, "LOCOMOTION" },
+    };
+    for (unsigned i = 0; i < sizeof MOVES / sizeof MOVES[0]; i++) {
+        CHECK(panel_service_tier_is_actuator(MOVES[i].tier),
+              "%s is not counted as an actuator", MOVES[i].name);
+        CHECK(!panel_service_tier_may_bundle(MOVES[i].tier),
+              "%s is allowed to bundle", MOVES[i].name);
+    }
+}
+
+static void test_read_may_bundle_because_it_moves_nothing(void)
+{
+    /* The one exception, and it is earned rather than special-cased: READ asks
+     * his battery, his dome position and his firmware version. Three
+     * questions, no actuator. */
+    CHECK(!panel_service_tier_is_actuator(0), "READ counted as an actuator");
+    CHECK(panel_service_tier_may_bundle(0), "READ cannot bundle three reads");
+}
+
+static void test_an_unknown_tier_is_assumed_to_move_him(void)
+{
+    /* A corrupt or future index that answered "no actuator" would be handed
+     * the bundle, and that is the one answer that must never be a default.
+     * Same shape as the ladder's out-of-range ceiling locking everything. */
+    const int bad[] = { -1, 6, 7, 99, -2147483647 - 1 };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        CHECK(panel_service_tier_is_actuator(bad[i]),
+              "tier %d was assumed harmless", bad[i]);
+        CHECK(!panel_service_tier_may_bundle(bad[i]),
+              "tier %d was granted the bundle", bad[i]);
+    }
+}
+
+static void test_bundling_and_actuator_are_one_fact(void)
+{
+    /* Two functions describing one property is two chances to disagree. */
+    for (int t = -2; t <= 8; t++)
+        CHECK(panel_service_tier_may_bundle(t) ==
+              !panel_service_tier_is_actuator(t),
+              "tier %d: may_bundle and is_actuator disagree", t);
+}
+
 /* ---- the menu ------------------------------------------------------------- */
 
 static void test_every_row_has_a_title_and_the_right_kind(void)
@@ -518,6 +571,10 @@ int main(void)
     test_the_ceiling_is_named_before_the_sequence();
     test_why_and_allowed_never_disagree();
     test_locomotion_is_shut_even_with_everything_run();
+    test_no_tier_that_moves_him_may_bundle();
+    test_read_may_bundle_because_it_moves_nothing();
+    test_an_unknown_tier_is_assumed_to_move_him();
+    test_bundling_and_actuator_are_one_fact();
     test_every_row_has_a_title_and_the_right_kind();
     test_only_lists_have_rows_and_only_notes_have_lines();
     test_rows_respect_max();

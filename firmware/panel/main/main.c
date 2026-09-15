@@ -31,6 +31,7 @@
 #include "nvs_flash.h"
 
 #include "panel_probe.h"
+#include "panel_service.h"
 #include "panel_shot.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
@@ -329,11 +330,33 @@ static unsigned run_tier_test(int tier)
     panel_ledger_reset(&s_ledger);
     portEXIT_CRITICAL(&s_ledger_mux);
 
+    /* HOW MANY OPS THIS TAP MAY FIRE (#168 part 2). READ asks three
+     * questions and moves nothing, so one tap for three reads breaks no rule
+     * -- "each ACTUATOR test is individually opt-in" is about actuators.
+     *
+     * WHERE THIS IS, AND WHAT IT IS NOT. An earlier version of this comment
+     * called run_tier_test "the line every op crosses". It is not: this file
+     * emits ops from six places, and the line every op really crosses is
+     * r2_gate_send -- as the paragraph twenty lines above already says. This
+     * is the line every TEST crosses, which is the right place for a rule
+     * about what one tap may fire and the wrong place to claim universality.
+     *
+     * IT CANNOT FIRE TODAY. The refusal at the top of this function means
+     * `tier` is provably R2_TIER_READ by the time we get here, so the budget
+     * is constant 3 and the warning below is dead code. It is kept as a
+     * MARKER: whoever makes a moving tier runnable edits this function, and
+     * finds a named predicate telling them their tap may fire one op --
+     * before they discover the three-op version was legal. It is not
+     * protection that exists; it is a note left where they will stand. */
+    const unsigned budget = panel_service_tier_may_bundle(tier) ? 3u : 1u;
+    if (budget < 3u)
+        ESP_LOGW(TAG, "tier %d drives an actuator: one op per tap", tier);
+
     /* THE SEQ IS TAKEN ONCE AND USED TWICE: sent on the wire and written down
      * here. Calling next_seq() again for the ledger would record a number
      * nothing will ever answer, and the test could never pass. */
     unsigned sent = 0;
-    for (unsigned k = 0; k < 3; k++) {
+    for (unsigned k = 0; k < budget; k++) {
         const uint8_t sq = next_seq();
         /* WRITTEN DOWN BEFORE IT GOES OUT. r2_link_send hands the frame to the
          * stack and returns; the reply lands on the NimBLE host task. Record
@@ -354,7 +377,7 @@ static unsigned run_tier_test(int tier)
         sent++;
     }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
-    ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
+    ESP_LOGW(TAG, "tier %d test: %u of %u ops away", tier, sent, budget);
     return sent;
 }
 

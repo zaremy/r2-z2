@@ -271,6 +271,58 @@ static const char *const k_rung[PANEL_LADDER_RUNGS] = {
 };
 #define GATE_TIERS 5        /* READ..STANCE: the rungs the gate can admit */
 
+/* THE LADDER IS THE GATE'S TIERS PLUS LOCOMOTION, which is not a gate tier at
+ * all. panel_ui.c pins this against r2_gate.h's enum where both headers are
+ * visible -- but the host tests never compile panel_ui.c, so that assertion
+ * does not run here. This one does, and it is what stops k_rung_actuator[]
+ * drifting out of step with the rungs it is indexed by. */
+_Static_assert(PANEL_LADDER_RUNGS == GATE_TIERS + 1,
+               "the ladder is the gate's tiers plus LOCOMOTION");
+
+/* WHAT EACH RUNG DRIVES. Indexed like k_rung. The question is not "is this
+ * tier dangerous" -- it is "does a tap here make the droid do something in the
+ * room", because that is what an operator is consenting to one item at a time.
+ *
+ * LEDS counts. It cannot fell him, but it is still a thing he DOES, and a
+ * carve-out for "harmless" actuators is how the list of harmless ones grows. */
+static const bool k_rung_actuator[PANEL_LADDER_RUNGS] = {
+    /* READ. Not "the three ops run_tier_test happens to send" -- this table is
+     * indexed by TIER, so the claim has to hold for everything the gate admits
+     * at READ. It does, but not because they are all questions: `wake` resets
+     * his inactivity timer and is why he has no idle timeout in practice, and
+     * `stop_animation` halts something in flight. Neither COMMANDS motion,
+     * light or sound, which is the property that matters here. The next person
+     * to add a READ op inherits this row, so it says the rule and not the
+     * roster. */
+    false,   /* READ       -- contains no op that commands an actuator */
+    true,    /* LEDS       -- he lights up */
+    true,    /* AUDIO      -- he makes a noise */
+    true,    /* DOME       -- he turns his head */
+    true,    /* STANCE     -- legs. D-010: an animation is a stance command */
+    true,    /* LOCOMOTION -- he drives away */
+};
+
+bool panel_service_tier_is_actuator(int tier)
+{
+    /* AN UNKNOWN RUNG MOVES HIM. A corrupt or future index that answered
+     * "false" would be handed the bundle, which is the one answer that cannot
+     * be given by default. */
+    if (tier < 0 || tier >= PANEL_LADDER_RUNGS) return true;
+    return k_rung_actuator[tier];
+}
+
+/* DERIVED, never re-stated. A mutation to `return tier == 0;` survives the
+ * suite and always will while READ is the only non-actuator rung -- an
+ * equivalent mutant, not a test gap. Worth knowing which way it would
+ * diverge if a second read-only tier ever arrived: the hardcoded form
+ * would refuse that tier the bundle, which is the fail-SAFE direction.
+ * Deriving it anyway, so the table stays the single place the answer
+ * lives. */
+bool panel_service_tier_may_bundle(int tier)
+{
+    return !panel_service_tier_is_actuator(tier);
+}
+
 const char *panel_service_ceiling_name(int ceiling)
 {
     return (ceiling >= 0 && ceiling < GATE_TIERS) ? k_rung[ceiling] : "";

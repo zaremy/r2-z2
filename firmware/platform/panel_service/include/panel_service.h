@@ -161,6 +161,54 @@ _Static_assert(PANEL_LADDER_RUNGS <= 32,
 int panel_service_ladder(int ceiling, uint32_t done,
                          panel_rung_t out[PANEL_LADDER_RUNGS]);
 
+/* MAY THIS TIER'S TAP FIRE MORE THAN ONE OP? (#168 part 2)
+ *
+ * CLAUDE.md: "Each ACTUATOR test is individually opt-in, never bundled." The
+ * word doing the work is ACTUATOR. READ asks him three questions -- battery,
+ * dome position, firmware version -- and moves nothing, so one tap for three
+ * reads breaks no rule.
+ *
+ * What it does do is establish TIER-AS-BUNDLE as the shape of the control,
+ * and one rung up that shape is the prohibition: a STANCE tap that fires
+ * whatever STANCE contains is exactly what the rule exists to prevent, and
+ * D-010 put animations at that tier precisely because their contents cannot be
+ * inspected first.
+ *
+ * So the bundle is not banned, it is CONDITIONAL, and the condition is a
+ * property of the tier rather than of whoever writes the next one: a TEST of a
+ * tier containing anything that commands motion, light or sound fires one op
+ * per tap.
+ *
+ * A HALT IS EXEMPT, and the word TEST above is carrying that. r2_ops_stop_all
+ * fires three ops on one tap -- two of them ANIMATRONIC -- and must, because a
+ * partial stop is not a stop (D-026). Without this sentence the rule as
+ * written makes the panel's own STOP button illegal, which is how a rule stops
+ * being believed. The unit being rationed is CONSENT TO MAKE HIM ACT; a
+ * command to stop acting is not more of it.
+ *
+ * READ is the only tier this returns true for, and it says why in the table
+ * rather than by being special-cased at the top.
+ *
+ * WHAT THIS IS NOT. It is not per-op consent. The rule's words are
+ * "individually OPT-IN", and opting in means the operator sees a named thing
+ * and chooses it; this only caps how many unnamed things one tap may fire. A
+ * moving tier still needs its ops drawn as rows -- D-025's consequence list
+ * calls that "rebuilds these rows for per-op consent" and it is not done here.
+ * What is done is that the bundle cannot be the default when that work lands.
+ *
+ * AND THE FALSE BRANCH IS UNREACHABLE IN THIS BUILD. run_tier_test refuses
+ * every tier but READ before it reaches the budget, so `may_bundle` is
+ * constant-true there today and a compiler may fold the whole thing away.
+ * This is a marker for whoever raises the ceiling, not a control that is
+ * currently protecting anything -- said plainly because a guard that cannot
+ * fire reads exactly like one that can. */
+bool panel_service_tier_may_bundle(int tier);
+
+/* Does this tier drive anything physical? An out-of-range tier answers TRUE --
+ * an unknown rung is treated as if it moves him, because the safe default for
+ * a question about actuators is yes. */
+bool panel_service_tier_is_actuator(int tier);
+
 
 /* The ceiling's name for the ladder header, "" when out of range. */
 const char *panel_service_ceiling_name(int ceiling);
