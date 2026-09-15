@@ -104,7 +104,7 @@ int         panel_ui_take_probe_request(unsigned *gen);
  * comes back the other way. `sent` is how many of the three halts reached the
  * transport -- 3 is the only complete stop. */
 bool        panel_ui_take_stop_request(void);
-void        panel_ui_stop_sent(unsigned sent, bool link_up);
+void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);
 

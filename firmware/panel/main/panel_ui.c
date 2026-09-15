@@ -324,7 +324,7 @@ _Static_assert(R2_TIER_READ == 0 && R2_TIER_LEDS == 1 && R2_TIER_AUDIO == 2 &&
                "r2_tier_t was reordered: panel_service's rung order must follow");
 
 static lv_obj_t *s_svc_list, *s_svc_row[PANEL_SVC_COUNT], *s_svc_link_sq;
-static lv_obj_t *s_int, *s_int_back, *s_int_right, *s_int_body, *s_int_foot;
+static lv_obj_t *s_int, *s_int_back, *s_int_right, *s_int_body;
 static lv_obj_t *s_int_val[PANEL_SVC_MAX_ROWS];
 static const char *s_int_key[PANEL_SVC_MAX_ROWS];
 /* What was last SET on each value label, and in what tone. Compared against
@@ -377,9 +377,24 @@ static int         s_probe_request = -1;   /* a tier main.c has yet to send */
  * useless at the only moment it matters, and "Default to STOP" (CLAUDE.md)
  * does not carve out "unless busy". Tapping it repeatedly sends it repeatedly,
  * which is the correct behaviour for a halt. */
-static bool        s_stop_request;
+/* ALL OF THIS IS UNDER s_probe_mux, and the label is written ONLY on
+ * ui_task. The first draft called lv_label_set_text from link_task, which is
+ * the rule three lines above broken by the function that quotes it: two
+ * concurrent lv_label_set_text on one label lv_free the same text buffer
+ * twice, and that corrupts LVGL's heap POOL rather than one object. It was
+ * reachable exactly as advertised -- tap twice, and tap two on ui_task races
+ * tap one's report on link_task.
+ *
+ * The probe had already solved this: stage it, render it on the next refresh.
+ * The take is under the lock for the other half of the same reason -- a plain
+ * read-modify-write can drop a tap that lands between the load and the store,
+ * and a dropped tap here means the droid keeps moving. */
+static bool        s_stop_request;        /* tapped; link_task has not taken it */
+static bool        s_stop_reported;       /* a verdict is waiting to be drawn */
+static unsigned    s_stop_sent;           /* how many halts got out */
+static bool        s_stop_link;           /* was he there */
 static uint32_t    s_stop_at;             /* when the verdict was reported */
-static char        s_stop_word[16] = "STOP";
+static char        s_stop_word[16] = "STOP";   /* ui_task only */
 static lv_obj_t   *s_stop_row, *s_stop_label;
 
 /* How long the outcome stays on the button before it says STOP again. Long
@@ -603,10 +618,6 @@ static void build_interior(lv_obj_t *pg)
     scroller(s_int_body);
     lv_obj_set_pos(s_int_body, SVC_X, INT_BODY_Y);
 
-    /* 14 px, the no-claim grey. Baseline 424; line 14, base 3 -> 413. */
-    s_int_foot = text(s_int, &techmono_14, 1, V5_DIM, SVC_X, 413,
-                      "EACH TIER OPT-IN \xC2\xB7 NEVER BUNDLED");
-
     /* THE STOP, on the ladder and nowhere else for now -- the ladder is the
      * only place this panel arms anything. It sits ON the footer band because
      * a control the operator may need in a hurry does not belong below the
@@ -750,7 +761,6 @@ static void open_interior(panel_svc_t s)
              s == PANEL_SVC_HW_TEST ? "HW TEST" : panel_service_title(s));
     lv_label_set_text(s_int_back, head);
     lv_label_set_text(s_int_right, "");
-    lv_obj_add_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(s_int_body, 334, PANEL_H - INT_BODY_Y);
 
@@ -796,10 +806,17 @@ static void open_interior(panel_svc_t s)
          * one rung whose lock matters most. 53 px rungs and a body that runs
          * to the footer fit all six; each is still far above the 44 pt tap
          * target for when RUN arrives. */
-        lv_obj_set_size(s_int_body, 334, 398 - INT_BODY_Y);   /* STOP below */
+        /* 404, NOT 398, AND THE RUNGS START AT 0. Six rungs are 6*54 = 324 px
+         * and the body is 404-76 = 328, so the ladder still does not scroll --
+         * the same 4 px of slack it had before the STOP took the footer band.
+         * At 398 with a 6 px inset the content was 330 against 322 and the
+         * ladder became scrollable for the first time, which would have put
+         * LOCOMOTION's LOCKED under a scroll on the one screen that arms
+         * actuators -- and neither the moving-list guard nor the bounding-box
+         * check that protect the service list has a ladder equivalent. */
+        lv_obj_set_size(s_int_body, 334, 404 - INT_BODY_Y);   /* STOP below */
         /* THE CAPTION GIVES UP ITS BAND TO THE STOP. Both cannot have it, and
          * a rule the rungs already state loses to a control that halts him. */
-        lv_obj_add_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_stop_label, s_stop_word);
 
@@ -809,7 +826,7 @@ static void open_interior(panel_svc_t s)
             lv_obj_t *row = lv_obj_create(s_int_body);
             bare(row);
             lv_obj_set_size(row, SVC_W, INT_RUNG_H);
-            lv_obj_set_pos(row, 0, 6 + i * INT_RUNG_H);
+            lv_obj_set_pos(row, 0, i * INT_RUNG_H);
             if (i < n - 1) {
                 lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
                 lv_obj_set_style_border_width(row, 1, 0);
@@ -895,16 +912,31 @@ void panel_ui_tap(int x, int y)
          * silently would leave them guessing which. */
         if (panel_service_kind(s_int_open) != PANEL_SVC_LADDER) return;
 
-        /* THE STOP IS TESTED FIRST, and is never refused. It is the one
-         * control on this panel with no precondition: not the ceiling, not a
-         * running test, not the link. Sending a halt with him away costs three
-         * refused frames and tells the operator the link is down, which is
-         * strictly better than a button that does nothing while he moves. */
+        /* THE STOP IS TESTED FIRST, ahead of every rung. It ignores the
+         * ceiling (all three halts are admitted at any -- D-026), ignores a
+         * running test, and ignores the link: sending with him away costs
+         * three refused frames and tells the operator the link is down, which
+         * beats a button that does nothing while he moves.
+         *
+         * IT IS NOT UNCONDITIONAL, and an earlier version of this comment
+         * claimed it was. A wake frame swallows the press before it reaches
+         * here (main.c), so at the moment a state worth interrupting someone
+         * for has just fired -- which is when this button exists -- the stop
+         * takes two taps. D-017 gated the wake frame to stop a glance ARMING
+         * something; a halt is the inverse and arguably belongs outside that
+         * gate, but changing it is a D-017 decision and not this slice's.
+         * Filed rather than quietly carved out. */
         if (s_stop_row != NULL && !lv_obj_has_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN) &&
             hit(s_stop_row, x, y)) {
+            portENTER_CRITICAL(&s_probe_mux);
             s_stop_request = true;
+            portEXIT_CRITICAL(&s_probe_mux);
             ESP_LOGW("panel", "STOP requested");
-            lv_label_set_text(s_stop_label, "...");
+            /* The WORD as well as the label: open_interior repaints from
+             * s_stop_word, so closing and reopening before the report landed
+             * would otherwise show the PREVIOUS stop's verdict. */
+            snprintf(s_stop_word, sizeof s_stop_word, "...");
+            lv_label_set_text(s_stop_label, s_stop_word);
             return;
         }
 
@@ -1086,24 +1118,30 @@ bool panel_ui_debug_open_row(int row)
 
 bool panel_ui_take_stop_request(void)
 {
+    /* ATOMIC TAKE-AND-CLEAR. Unlocked, link_task can load false, ui_task can
+     * store true, and link_task's store of false then erases a tap nobody
+     * will ever hear about -- on the one control whose whole job is to be
+     * heard. The button would sit reading "..." forever, because no report
+     * arrives and the decay's sentinel is never set either. */
+    portENTER_CRITICAL(&s_probe_mux);
     const bool want = s_stop_request;
     s_stop_request = false;
+    portEXIT_CRITICAL(&s_probe_mux);
     return want;
 }
 
-void panel_ui_stop_sent(unsigned sent, bool link_up)
+void panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms)
 {
-    /* WHAT THE BUTTON SAYS AFTER. "A rejected stop and a successful one were
-     * indistinguishable, on the path where nobody is watching" is the
-     * prototype's own note about its shutdown epilogue, and it is the reason
-     * this reports a COUNT rather than a tick.
-     *
-     * 3/3 is the only complete stop. Anything less names itself. */
-    if (!link_up)        snprintf(s_stop_word, sizeof s_stop_word, "NO LINK");
-    else if (sent >= 3u) snprintf(s_stop_word, sizeof s_stop_word, "STOPPED");
-    else                 snprintf(s_stop_word, sizeof s_stop_word, "%u/3 SENT", sent);
-    s_stop_at = s_last_now;
-    if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
+    /* STAGED, NOT DRAWN. This runs on link_task, which holds no display lock;
+     * the word is formatted and the label written on ui_task in svc_refresh.
+     * The clock comes from the caller, stamped where the halts went, rather
+     * than read off a ui_task variable from the wrong task. */
+    portENTER_CRITICAL(&s_probe_mux);
+    s_stop_sent     = sent;
+    s_stop_link     = link_up;
+    s_stop_reported = true;
+    s_stop_at       = now_ms ? now_ms : 1u;   /* 0 would defeat the decay */
+    portEXIT_CRITICAL(&s_probe_mux);
 }
 
 int panel_ui_take_probe_request(unsigned *gen)
@@ -1241,11 +1279,42 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         }
     }
 
+    /* THE STAGED VERDICT, DRAWN HERE -- on ui_task, under the display lock,
+     * which is the only place this file writes an LVGL object.
+     *
+     * "A rejected stop and a successful one were indistinguishable, on the
+     * path where nobody is watching" is the prototype's note about its own
+     * shutdown epilogue, and it is why this reports a COUNT rather than a
+     * tick. 3/3 is the only complete stop; anything less names itself. */
+    bool draw_stop = false;
+    unsigned st_sent = 0;
+    bool st_link = false;
+    portENTER_CRITICAL(&s_probe_mux);
+    if (s_stop_reported) {
+        s_stop_reported = false;
+        st_sent = s_stop_sent;
+        st_link = s_stop_link;
+        draw_stop = true;
+    }
+    portEXIT_CRITICAL(&s_probe_mux);
+    if (draw_stop) {
+        if (!st_link)         snprintf(s_stop_word, sizeof s_stop_word, "NO LINK");
+        else if (st_sent >= 3u) snprintf(s_stop_word, sizeof s_stop_word, "STOPPED");
+        else snprintf(s_stop_word, sizeof s_stop_word, "%u/3 SENT", st_sent);
+        if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
+    }
+
     /* The stop's verdict decays, so the control goes back to being a
      * control. Nothing else on this panel is time-limited; this is, because a
      * button stuck reading STOPPED is a button that looks spent. */
-    if (s_stop_at != 0u && (now_ms - s_stop_at) >= PANEL_STOP_SHOW_MS) {
+    uint32_t stop_at;
+    portENTER_CRITICAL(&s_probe_mux);
+    stop_at = s_stop_at;
+    portEXIT_CRITICAL(&s_probe_mux);
+    if (stop_at != 0u && (now_ms - stop_at) >= PANEL_STOP_SHOW_MS) {
+        portENTER_CRITICAL(&s_probe_mux);
         s_stop_at = 0u;
+        portEXIT_CRITICAL(&s_probe_mux);
         snprintf(s_stop_word, sizeof s_stop_word, "STOP");
         if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
     }

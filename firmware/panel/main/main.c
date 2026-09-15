@@ -242,7 +242,9 @@ static void link_task(void *arg)
                 r2_ops_stop_all(next_seq, r2_link_send, NULL);
             ESP_LOGW(TAG, "STOP: %u of 3 away (anim=%d audio=%d legs=%d)",
                      st.sent, (int)st.animation, (int)st.audio, (int)st.legs);
-            panel_ui_stop_sent(st.sent, r2_link_is_up());
+            /* STAMPED HERE, where the halts went -- panel_ui_stop_sent
+             * runs on this task and must not read ui_task's clock. */
+            panel_ui_stop_sent(st.sent, r2_link_is_up(), now_ms());
         }
 
         if (!r2_link_is_up()) continue;

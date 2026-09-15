@@ -512,6 +512,42 @@ static int stop_tx_broken(const uint8_t *f, size_t n, void *ctx)
     return -1;
 }
 
+/* Fails call N only. A transport that fails ALL or NONE never exercises the
+ * report's arithmetic -- `r.sent = r.animation ? 3u : 0u` survived a suite
+ * that had both. The subset is the only regime `sent` exists for. */
+static unsigned stop_tx_fail_on;
+static int stop_tx_flaky(const uint8_t *f, size_t n, void *ctx)
+{
+    (void)f; (void)n; (void)ctx;
+    stop_tx_calls++;
+    return (stop_tx_calls == stop_tx_fail_on) ? -1 : 0;
+}
+
+static void test_the_count_matches_which_halts_got_out(void)
+{
+    /* Fail exactly one of the three, each in turn, and assert the report names
+     * the right one. This is the field the button prints as "%u/3 SENT"; a
+     * count that rounds up tells the operator he has stopped when he has not. */
+    r2_gate_set_ceiling(R2_TIER_READ);
+    for (unsigned bad = 1u; bad <= 3u; bad++) {
+        stop_seq_n = 0; stop_tx_calls = 0; stop_tx_fail_on = bad;
+        const r2_stop_report_t r =
+            r2_ops_stop_all(stop_seq_next, stop_tx_flaky, NULL);
+
+        CHECK(r.sent == 2u, "one send failed but the report says %u of 3", r.sent);
+        CHECK(!r2_stop_is_complete(r), "two of three reported as complete");
+        /* All three still ATTEMPTED: a failure must not short-circuit. */
+        CHECK(stop_tx_calls == 3u, "only %u of 3 attempted when #%u failed",
+              stop_tx_calls, bad);
+
+        /* And the flag that is false is the one that failed. Order is
+         * animation, audio, legs. */
+        CHECK(r.animation == (bad != 1u), "animation flag wrong for bad=%u", bad);
+        CHECK(r.audio     == (bad != 2u), "audio flag wrong for bad=%u", bad);
+        CHECK(r.legs      == (bad != 3u), "legs flag wrong for bad=%u", bad);
+    }
+}
+
 static void test_a_partial_stop_never_reports_complete(void)
 {
     /* THE ILLEGAL CASE. "A rejected stop and a successful one were
@@ -597,6 +633,7 @@ static void test_a_stop_with_no_transport_sends_nothing_and_says_so(void)
 int main(void)
 {
     test_a_partial_stop_never_reports_complete();
+    test_the_count_matches_which_halts_got_out();
     test_the_stop_fires_all_three_at_a_read_ceiling();
     test_one_failing_send_does_not_skip_the_others();
     test_a_stop_with_no_transport_sends_nothing_and_says_so();
