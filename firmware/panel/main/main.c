@@ -31,6 +31,7 @@
 #include "nvs_flash.h"
 
 #include "panel_probe.h"
+#include "panel_service.h"
 #include "panel_shot.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
@@ -329,11 +330,25 @@ static unsigned run_tier_test(int tier)
     panel_ledger_reset(&s_ledger);
     portEXIT_CRITICAL(&s_ledger_mux);
 
+    /* HOW MANY OPS THIS TAP MAY FIRE (#168 part 2). READ asks three
+     * questions and moves nothing, so one tap for three reads breaks no rule
+     * -- "each ACTUATOR test is individually opt-in" is about actuators.
+     *
+     * THE GUARD IS HERE, AT THE SENDS, not at the UI. A rule enforced where
+     * the rungs are drawn is a rule the next caller can route around; this is
+     * the line every op crosses. The moment a tier that moves him becomes
+     * runnable, its tap fires ONE op whatever the loop below says, and
+     * whoever adds that tier has to add the per-op control rather than
+     * discovering later that their three-op tap was legal. */
+    const unsigned budget = panel_service_tier_may_bundle(tier) ? 3u : 1u;
+    if (budget < 3u)
+        ESP_LOGW(TAG, "tier %d drives an actuator: one op per tap", tier);
+
     /* THE SEQ IS TAKEN ONCE AND USED TWICE: sent on the wire and written down
      * here. Calling next_seq() again for the ledger would record a number
      * nothing will ever answer, and the test could never pass. */
     unsigned sent = 0;
-    for (unsigned k = 0; k < 3; k++) {
+    for (unsigned k = 0; k < budget; k++) {
         const uint8_t sq = next_seq();
         /* WRITTEN DOWN BEFORE IT GOES OUT. r2_link_send hands the frame to the
          * stack and returns; the reply lands on the NimBLE host task. Record
@@ -354,7 +369,7 @@ static unsigned run_tier_test(int tier)
         sent++;
     }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
-    ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
+    ESP_LOGW(TAG, "READ test: %u of %u ops away", sent, budget);
     return sent;
 }
 

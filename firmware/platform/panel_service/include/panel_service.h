@@ -161,6 +161,33 @@ _Static_assert(PANEL_LADDER_RUNGS <= 32,
 int panel_service_ladder(int ceiling, uint32_t done,
                          panel_rung_t out[PANEL_LADDER_RUNGS]);
 
+/* MAY THIS TIER'S TAP FIRE MORE THAN ONE OP? (#168 part 2)
+ *
+ * CLAUDE.md: "Each ACTUATOR test is individually opt-in, never bundled." The
+ * word doing the work is ACTUATOR. READ asks him three questions -- battery,
+ * dome position, firmware version -- and moves nothing, so one tap for three
+ * reads breaks no rule.
+ *
+ * What it does do is establish TIER-AS-BUNDLE as the shape of the control,
+ * and one rung up that shape is the prohibition: a STANCE tap that fires
+ * whatever STANCE contains is exactly what the rule exists to prevent, and
+ * D-010 put animations at that tier precisely because their contents cannot be
+ * inspected first.
+ *
+ * So the bundle is not banned, it is CONDITIONAL, and the condition is a
+ * property of the tier rather than of whoever writes the next one: a tier
+ * containing anything that makes him move, light up or make a sound fires one
+ * op per tap, and no amount of convenience at the call site can change that.
+ *
+ * READ is the only tier this returns true for, and it says why in the table
+ * rather than by being special-cased at the top. */
+bool panel_service_tier_may_bundle(int tier);
+
+/* Does this tier drive anything physical? An out-of-range tier answers TRUE --
+ * an unknown rung is treated as if it moves him, because the safe default for
+ * a question about actuators is yes. */
+bool panel_service_tier_is_actuator(int tier);
+
 
 /* The ceiling's name for the ladder header, "" when out of range. */
 const char *panel_service_ceiling_name(int ceiling);
