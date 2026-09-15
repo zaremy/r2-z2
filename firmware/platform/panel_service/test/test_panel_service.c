@@ -501,56 +501,8 @@ static void test_ages_and_a_corrupt_ceiling(void)
     CHECK(c && strcmp(c->val, "----") == 0, "a corrupt ceiling reads '%s'", c ? c->val : "(missing)");
 }
 
-/* ---- what a hardware test may count as its own answer ------------------- */
-
-static void test_only_readings_since_the_test_began_count(void)
-{
-    /* THE ILLEGAL CASE: readings that were already there. A test counting
-     * those would pass on answers it never asked for -- the panel polls his
-     * battery every 15 s on its own, so one is nearly always waiting. */
-    r2_telemetry_t t;
-    r2_telemetry_reset(&t);
-    r2_telemetry_link(&t, R2_TM_UP, 1000);
-    r2_telemetry_battery(&t, 442, 2000);          /* long before the test */
-
-    CHECK(panel_service_fresh_readings(&t, 5000, 6000) == 0,
-          "an older reading counted as this test's: %u",
-          panel_service_fresh_readings(&t, 5000, 6000));
-
-    /* One that arrives after it began does count. */
-    r2_telemetry_dome(&t, 40.0f, 5500);
-    CHECK(panel_service_fresh_readings(&t, 5000, 6000) == 1,
-          "a reading during the test was not counted");
-    r2_telemetry_version(&t, 7, 0, 101, 5800);
-    r2_telemetry_battery(&t, 443, 5900);
-    CHECK(panel_service_fresh_readings(&t, 5000, 6000) == 3, "all three not counted");
-
-    /* A link that went takes every answer with it -- the same rule as every
-     * other reading on this panel. */
-    r2_telemetry_link(&t, R2_TM_SCANNING, 6000);
-    CHECK(panel_service_fresh_readings(&t, 5000, 6000) == 0,
-          "readings survived the link");
-    CHECK(panel_service_fresh_readings(NULL, 0, 1) == 0, "null telemetry counted");
-}
-
-static void test_fresh_readings_across_the_clock_wrap(void)
-{
-    r2_telemetry_t t;
-    r2_telemetry_reset(&t);
-    const uint32_t before = 0xFFFFF000u;
-    r2_telemetry_link(&t, R2_TM_UP, before);
-    r2_telemetry_battery(&t, 442, before + 100u);     /* just before the wrap */
-    const uint32_t after = 0x00001000u;               /* now, wrapped */
-    CHECK(panel_service_fresh_readings(&t, before, after) == 1,
-          "a reading across the wrap was lost");
-    CHECK(panel_service_fresh_readings(&t, after - 10u, after) == 0,
-          "a reading from before the window counted across the wrap");
-}
-
 int main(void)
 {
-    test_only_readings_since_the_test_began_count();
-    test_fresh_readings_across_the_clock_wrap();
     test_an_unprobed_board_is_not_called_v2();
     test_the_rows_are_the_same_rows_at_every_link_state();
     test_ages_and_a_corrupt_ceiling();

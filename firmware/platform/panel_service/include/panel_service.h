@@ -161,17 +161,6 @@ _Static_assert(PANEL_LADDER_RUNGS <= 32,
 int panel_service_ladder(int ceiling, uint32_t done,
                          panel_rung_t out[PANEL_LADDER_RUNGS]);
 
-/* How many of R2's three readings -- battery, dome, version -- have arrived
- * SINCE `since_ms`, on a link that is still up. This is what a hardware test
- * counts, instead of raw reply totals, which include every reply since boot.
- *
- * IT NARROWS THE WINDOW; IT DOES NOT CLOSE IT. The panel's own periodic polls
- * land in these same three stamps, so a reply the test did not ask for can
- * still count toward it. Closing that needs per-request accounting the
- * telemetry layer does not carry -- see panel_probe.h, which says what a PASS
- * is therefore worth. Wrap-safe. */
-unsigned panel_service_fresh_readings(const r2_telemetry_t *tm, uint32_t since_ms,
-                                      uint32_t now_ms);
 
 /* The ceiling's name for the ladder header, "" when out of range. */
 const char *panel_service_ceiling_name(int ceiling);

@@ -249,8 +249,117 @@ static void test_a_test_sent_with_the_link_down_blames_the_link(void)
     CHECK(!panel_probe_passed(&p), "NO REPLY passed");
 }
 
+/* ---- #168 part 4: a PASS that means R2 answered THESE questions ---------- */
+
+static void test_a_poll_reply_cannot_answer_a_question_nobody_asked(void)
+{
+    /* THE ILLEGAL CASE, and the whole reason the ledger exists. The panel
+     * polls battery every 15 s and dome every 30 s on their own seqs. Under
+     * the old count-what-arrived rule those replies counted toward a running
+     * test; with the sequence gate (D-025) keying on a PASS, that meant STANCE
+     * could open on a battery poll with the dome never having moved. */
+    panel_ledger_t l;
+    panel_ledger_reset(&l);
+    CHECK(panel_ledger_add(&l, 10), "seq 10 refused");
+    CHECK(panel_ledger_add(&l, 11), "seq 11 refused");
+
+    CHECK(!panel_ledger_note(&l, 200), "a poll on seq 200 answered our test");
+    CHECK(!panel_ledger_note(&l, 12),  "an unasked seq answered our test");
+    CHECK(panel_ledger_answered(&l) == 0,
+          "%u answers from replies we never asked for", panel_ledger_answered(&l));
+
+    CHECK(panel_ledger_note(&l, 11), "our own reply on seq 11 did not count");
+    CHECK(panel_ledger_answered(&l) == 1, "our own reply was not counted");
+}
+
+static void test_a_duplicate_reply_is_not_a_second_answer(void)
+{
+    /* R2 can repeat, and a retry can echo. Striking a seq twice would let a
+     * three-question test pass on two answers and one duplicate. */
+    panel_ledger_t l;
+    panel_ledger_reset(&l);
+    panel_ledger_add(&l, 7);
+    panel_ledger_add(&l, 8);
+    panel_ledger_add(&l, 9);
+
+    CHECK(panel_ledger_note(&l, 8), "first reply on 8 did not count");
+    CHECK(!panel_ledger_note(&l, 8), "a duplicate reply on 8 counted again");
+    CHECK(!panel_ledger_note(&l, 8), "and again");
+    CHECK(panel_ledger_answered(&l) == 1,
+          "%u answers from one reply", panel_ledger_answered(&l));
+    CHECK(panel_ledger_asked(&l) == 3, "asked count drifted");
+}
+
+static void test_a_seq_already_outstanding_is_refused(void)
+{
+    /* Two open slots on one seq means one reply strikes both. The ledger must
+     * refuse to get into that state rather than mis-count its way out. */
+    panel_ledger_t l;
+    panel_ledger_reset(&l);
+    CHECK(panel_ledger_add(&l, 5), "first add refused");
+    CHECK(!panel_ledger_add(&l, 5), "a duplicate outstanding seq was accepted");
+    CHECK(panel_ledger_asked(&l) == 1, "the refused add still counted");
+
+    /* Once struck, the seq is free again -- it is no longer outstanding. */
+    CHECK(panel_ledger_note(&l, 5), "reply did not strike");
+    CHECK(panel_ledger_add(&l, 5), "a closed seq could not be reused");
+}
+
+static void test_the_ledger_refuses_to_overflow(void)
+{
+    panel_ledger_t l;
+    panel_ledger_reset(&l);
+    for (unsigned i = 0; i < PANEL_LEDGER_MAX; i++)
+        CHECK(panel_ledger_add(&l, (uint8_t)i), "add %u refused early", i);
+    CHECK(!panel_ledger_add(&l, 99), "the ledger accepted a ninth request");
+    CHECK(panel_ledger_asked(&l) == PANEL_LEDGER_MAX, "asked count overflowed");
+}
+
+static void test_a_null_ledger_answers_nothing(void)
+{
+    CHECK(!panel_ledger_add(NULL, 1), "NULL ledger accepted a request");
+    CHECK(!panel_ledger_note(NULL, 1), "NULL ledger struck a request");
+    CHECK(panel_ledger_asked(NULL) == 0, "NULL ledger asked something");
+    CHECK(panel_ledger_answered(NULL) == 0, "NULL ledger answered something");
+    panel_ledger_reset(NULL);       /* must not crash */
+}
+
+static void test_only_measured_tiers_have_a_timeout(void)
+{
+    /* THE GUARD IS THE ZERO. READ and DOME have numbers because someone
+     * measured them; every other tier returns 0 so the caller refuses to run
+     * it. A guessed constant would read exactly like a measured one later. */
+    CHECK(panel_probe_timeout_ms(0) == PANEL_PROBE_TIMEOUT_MS,
+          "READ lost its measured 2 s");
+    CHECK(panel_probe_timeout_ms(3) == PANEL_PROBE_DOME_TIMEOUT_MS,
+          "DOME lost its D-013 window");
+
+    /* D-013 measured 2.0-2.2 s REGARDLESS of distance. A window that does not
+     * clear the move calls a working move PARTIAL -- the bug this replaces. */
+    CHECK(panel_probe_timeout_ms(3) > 2200u,
+          "the DOME window (%u ms) does not clear a 2.2 s move",
+          (unsigned)panel_probe_timeout_ms(3));
+
+    const int unmeasured[] = { 1, 2, 4 };          /* LEDS, AUDIO, STANCE */
+    for (unsigned i = 0; i < sizeof unmeasured / sizeof unmeasured[0]; i++)
+        CHECK(panel_probe_timeout_ms(unmeasured[i]) == 0u,
+              "tier %d has a timeout nobody measured", unmeasured[i]);
+
+    const int bad[] = { -1, 5, 6, 99, -2147483647 - 1 };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++)
+        CHECK(panel_probe_timeout_ms(bad[i]) == 0u,
+              "out-of-range tier %d got a timeout", bad[i]);
+}
+
 int main(void)
 {
+    test_a_poll_reply_cannot_answer_a_question_nobody_asked();
+    test_a_duplicate_reply_is_not_a_second_answer();
+    test_a_seq_already_outstanding_is_refused();
+    test_the_ledger_refuses_to_overflow();
+    test_a_null_ledger_answers_nothing();
+    test_only_measured_tiers_have_a_timeout();
+
     test_a_test_sent_with_the_link_down_blames_the_link();
     test_a_test_already_under_way_refuses_the_tap();
     test_a_settled_test_lets_the_next_tap_through();

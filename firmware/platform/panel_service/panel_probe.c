@@ -8,6 +8,77 @@ bool panel_probe_may_start(panel_probe_gate_t g)
            g.state != PANEL_PROBE_RUNNING;
 }
 
+/* ---- the ledger: which of THIS test's questions have been answered ------- */
+
+void panel_ledger_reset(panel_ledger_t *l)
+{
+    if (l == NULL) return;
+    for (unsigned i = 0; i < PANEL_LEDGER_MAX; i++) {
+        l->seq[i]  = 0;
+        l->open[i] = false;
+    }
+    l->asked = 0;
+    l->answered = 0;
+}
+
+bool panel_ledger_add(panel_ledger_t *l, uint8_t seq)
+{
+    if (l == NULL) return false;
+    if (l->asked >= PANEL_LEDGER_MAX) return false;
+    /* A SEQ ALREADY OUTSTANDING IS REFUSED. Two open slots on one seq would
+     * let a single reply strike both, and a three-question test would pass on
+     * two answers -- the exact overcounting this ledger exists to end. */
+    for (unsigned i = 0; i < l->asked; i++)
+        if (l->open[i] && l->seq[i] == seq) return false;
+    l->seq[l->asked]  = seq;
+    l->open[l->asked] = true;
+    l->asked++;
+    return true;
+}
+
+bool panel_ledger_note(panel_ledger_t *l, uint8_t seq)
+{
+    if (l == NULL) return false;
+    for (unsigned i = 0; i < l->asked; i++) {
+        if (l->open[i] && l->seq[i] == seq) {
+            l->open[i] = false;     /* struck ONCE: a duplicate reply is not a
+                                     * second answer */
+            l->answered++;
+            return true;
+        }
+    }
+    return false;                   /* a poll, a keepalive, or an echo */
+}
+
+unsigned panel_ledger_asked(const panel_ledger_t *l)
+{
+    return l ? l->asked : 0u;
+}
+
+unsigned panel_ledger_answered(const panel_ledger_t *l)
+{
+    return l ? l->answered : 0u;
+}
+
+/* ---- how long a tier may take ------------------------------------------- */
+
+uint32_t panel_probe_timeout_ms(int tier)
+{
+    /* Indices are the gate's tier order, the same one the ladder walks:
+     * 0 READ, 1 LEDS, 2 AUDIO, 3 DOME, 4 STANCE. Not the enum, to keep this
+     * component free of r2_gate -- the order is asserted by the ladder's own
+     * test, which writes the names out longhand. */
+    switch (tier) {
+    case 0: return PANEL_PROBE_TIMEOUT_MS;        /* measured: 138/138 sub-second */
+    case 3: return PANEL_PROBE_DOME_TIMEOUT_MS;   /* measured: D-013, 2.0-2.2 s */
+    default: break;
+    }
+    /* LEDS, AUDIO, STANCE -- and anything out of range. UNMEASURED, and a
+     * guessed number would be indistinguishable from the two above in six
+     * months. The caller refuses a 0. */
+    return 0u;
+}
+
 void panel_probe_init(panel_probe_t *p)
 {
     if (p == NULL) return;

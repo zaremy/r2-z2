@@ -381,6 +381,12 @@ static int         s_probe_request = -1;   /* a tier main.c has yet to send */
  * out left three ops away with the rung still reading a cheerful green RUN. A
  * flag the tick loop cannot miss is the difference between "nothing happened"
  * and "nothing was SHOWN to have happened". */
+/* Defined in main.c, which owns the radio and therefore the ledger: how many
+ * of the RUNNING test's own questions R2 has answered. Declared here rather
+ * than in a header because it is one function across one seam, and the seam is
+ * the same one panel_ui_probe_sent already crosses in the other direction. */
+unsigned panel_main_test_answered(void);
+
 static portMUX_TYPE s_probe_mux = portMUX_INITIALIZER_UNLOCKED;
 static unsigned s_probe_pending_expected;
 static uint32_t s_probe_pending_ms;
@@ -1158,9 +1164,16 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     if (s_int_open != PANEL_SVC_COUNT &&
         panel_service_kind(s_int_open) == PANEL_SVC_LADDER &&
         s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {
-        const uint32_t since = panel_probe_started_ms(&s_probe);
-        const unsigned answered =
-            since ? panel_service_fresh_readings(t, since, now_ms) : 0u;
+        /* THE LEDGER, NOT THE CLOCK (#168). This used to count READINGS that
+         * had arrived since the test started, which the panel's own battery
+         * and dome polls also land in -- so a PASS meant "three readings
+         * arrived", not "R2 answered these three questions". With the
+         * sequence gate keying on a PASS (D-025), that gap let a background
+         * poll advance the ladder past a tier that never ran.
+         *
+         * panel_main_test_answered() counts only replies whose seq matches one
+         * this test sent. A poll matches nothing and counts nothing. */
+        const unsigned answered = panel_main_test_answered();
         panel_probe_step(&s_probe, now_ms, answered, t->link == R2_TM_UP);
 
         char word[16];

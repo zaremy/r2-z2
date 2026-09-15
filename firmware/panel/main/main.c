@@ -32,6 +32,7 @@
 
 #include "panel_probe.h"
 #include "panel_shot.h"
+#include "panel_probe.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
 #include "r2_gate.h"
@@ -52,6 +53,38 @@ static uint8_t next_seq(void) { static uint8_t s; return s++; }
  * interleaving costs one duplicate probe, never a missed one. */
 static volatile bool s_version_asked;
 
+/* WHAT THE RUNNING TEST ASKED, STRUCK OFF AS ITS OWN REPLIES ARRIVE (#168).
+ *
+ * THREE TASKS TOUCH THIS, which is why it takes a real lock and not the
+ * `volatile` above. `link_task` fills it when a test's ops go out; the NimBLE
+ * host task strikes entries in on_frame(); ui_task reads the count to decide
+ * the verdict. It is an array plus two counters -- a torn read here is not one
+ * stale value for one frame, it is a verdict computed from half an update.
+ *
+ * The critical sections are a handful of byte compares over at most eight
+ * entries, taken on the radio's own callback. That is short enough to sit in a
+ * spinlock and nowhere near long enough to hold off a higher-priority task. */
+static portMUX_TYPE s_ledger_mux = portMUX_INITIALIZER_UNLOCKED;
+static panel_ledger_t s_ledger;
+
+/* Every reply carries back the seq it answers. Returns whether it struck one
+ * of the running test's questions -- a poll, a keepalive or an echo does not.*/
+static bool ledger_note(uint8_t seq)
+{
+    portENTER_CRITICAL(&s_ledger_mux);
+    const bool mine = panel_ledger_note(&s_ledger, seq);
+    portEXIT_CRITICAL(&s_ledger_mux);
+    return mine;
+}
+
+unsigned panel_main_test_answered(void)
+{
+    portENTER_CRITICAL(&s_ledger_mux);
+    const unsigned n = panel_ledger_answered(&s_ledger);
+    portEXIT_CRITICAL(&s_ledger_mux);
+    return n;
+}
+
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
     (void)ctx; (void)reason;
@@ -69,6 +102,11 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
     uint8_t scratch[64];
     r2_response_t r;
     if (r2_packet_decode(frame, len, scratch, sizeof scratch, &r) != R2_OK) return;
+
+    /* STRUCK BEFORE IT IS PARSED, and struck for every reply -- the ledger
+     * only knows seqs it was told to wait for, so a poll's reply matches
+     * nothing here and changes nothing. */
+    (void)ledger_note(r.seq);
 
     r2_battery_t b;
     r2_head_t    h;
@@ -242,10 +280,31 @@ static unsigned run_tier_test(int tier)
                  tier);
         return 0;
     }
+    /* A FRESH LEDGER PER TEST. Anything outstanding from a previous run is
+     * this run's noise -- counting a late reply to the last test as an answer
+     * to this one is the same overcounting by another route. */
+    portENTER_CRITICAL(&s_ledger_mux);
+    panel_ledger_reset(&s_ledger);
+    portEXIT_CRITICAL(&s_ledger_mux);
+
+    /* THE SEQ IS TAKEN ONCE AND USED TWICE: sent on the wire and written down
+     * here. Calling next_seq() again for the ledger would record a number
+     * nothing will ever answer, and the test could never pass. */
     unsigned sent = 0;
-    if (r2_ops_request_battery(next_seq(), r2_link_send, NULL) > 0) sent++;
-    if (r2_ops_request_head(next_seq(), r2_link_send, NULL) > 0)    sent++;
-    if (r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0)   sent++;
+    for (unsigned k = 0; k < 3; k++) {
+        const uint8_t sq = next_seq();
+        int ok;
+        switch (k) {
+        case 0:  ok = r2_ops_request_battery(sq, r2_link_send, NULL); break;
+        case 1:  ok = r2_ops_request_head(sq, r2_link_send, NULL);    break;
+        default: ok = r2_ops_probe_version(sq, r2_link_send, NULL);   break;
+        }
+        if (ok <= 0) continue;          /* the gate refused it: never asked */
+        sent++;
+        portENTER_CRITICAL(&s_ledger_mux);
+        panel_ledger_add(&s_ledger, sq);
+        portEXIT_CRITICAL(&s_ledger_mux);
+    }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
     ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
     return sent;
