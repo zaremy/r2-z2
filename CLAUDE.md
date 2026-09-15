@@ -238,6 +238,42 @@ little entity is continuously present in the household.
   known-good code. Before believing any negative from an instrument, run the
   known-good case through it. `#103` A3 was answered within minutes of doing so.
 
+- **An instrument can lie by dropping PART of its input, and that failure
+  invents findings rather than hiding them.** Diagnosing inconsistent swipes,
+  the log parser matched `\((\d+),(\d+)\)` while the firmware pads
+  coordinates to three characters — so `(  1,326)` never matched and every
+  point with **x <= 99 was silently dropped**. That is the left third of the
+  panel, which is exactly where a rightward swipe BEGINS. It ate 48 of 79
+  points, reported 13 gestures where there were 22, and the write-up published
+  *"not one right swipe registered"* as a finding while `panel: swipe right`
+  appeared three times in the log shipped beside it.
+
+  A total failure is loud; a partial one is silent AND biased, because what
+  drops is usually systematic — one region of the input space — not random. So:
+  **print coverage before conclusions**, parsed against the producer's own
+  sequence numbers, with a loud warning when they disagree (and account for the
+  offset when a counter is cumulative and the capture starts mid-stream, or the
+  warning cries wolf and gets ignored). The same shape bit a mutation harness
+  the same day: it classified on `grep "0 failures"`, which matches
+  `10 failures`, so mutants the tests really killed were reported as survivors.
+  Anchor the match.
+
+- **Read the system's OWN verdict before reconstructing it.** The same capture
+  contained `panel: swipe left` and `panel: tap -> DIAGNOSTICS` — the panel's
+  decisions, ground truth, never grepped for. Reconstruction feels like rigour
+  and silently substitutes your model of the system for the system. Grep for
+  what it SAID first; use that as the expectation in fixtures; reconstruct only
+  to EXPLAIN a verdict, never instead of reading one. If a diagnosis needs
+  reconstruction at all, that is the signal to add the missing decision log —
+  the panel now logs every gesture's verdict with the numbers behind it.
+
+- **An analysis script whose numbers get published must be committed.** The
+  first swipe write-up cited a segmenter that lived only in a scratch directory,
+  so the one piece of evidence the whole design rested on could not be re-run —
+  and when it turned out to be wrong, nobody could have caught it from the repo.
+  It lives in `firmware/panel/tools/` now. Same rule as *if it cites code, it
+  goes in the repo*.
+
   **And the tail of that same mistake: once the real cause was found, a second
   plausible mechanism was written up beside it as though it were also a cause.**
   The console-routing story above was reasoned from a config diff, never
@@ -370,6 +406,25 @@ Two rules that cost something to learn:
 Clean the shared tree only after proving your edits are byte-identical to what
 merged, and `git stash` rather than discard — `git checkout <file>` is guarded
 for a reason.
+
+## Reach for the skill that already exists
+
+Two procedures got hand-rolled in one session that skills already cover, and
+both improvisations cost something:
+
+- **Mutation testing → `/mutation-battery`.** A hand-written battery shipped a
+  classifier that matched `"0 failures"` inside `"10 failures"`, so mutants the
+  tests really killed came back as survivors. It was caught by a contradiction,
+  not by checking.
+- **Adversarial review to convergence → `/grill`.** Seven rounds were driven by
+  hand, re-deriving the dispatch-apply-reverify loop each time.
+- **Human-as-instrument hardware work → `/survey-session`**, which is already
+  documented above and was invoked correctly.
+
+The tell is improvising a multi-step procedure you would run the same way next
+time. Before hand-rolling one, check the skill list — and note that the work
+arrives in words that match no skill's triggers ("check log", "swipes
+inconsistent"), which is exactly why the check has to be deliberate.
 
 ## Working agreements
 
