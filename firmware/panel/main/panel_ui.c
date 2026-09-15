@@ -1127,12 +1127,17 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     }
     portEXIT_CRITICAL(&s_probe_mux);
     if (start)
-        panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e, was_up);
+        /* THE RUNG INDEX IS THE TIER INDEX -- the ladder walks the gate's own
+         * order. It picks the window, and refuses a tier nobody has timed.
+         * s_probe_rung is written on tap-accept and read here, both on
+         * ui_task, so it needs no lock; it is -1 only when no test is
+         * running, and `start` cannot be true then. */
+        panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e, was_up,
+                          s_probe_rung);
 
-    /* THE RUNNING TEST'S VERDICT. Counted as the readings this test asked for
-     * that arrived since it started, which NARROWS but does not eliminate the
-     * panel's own periodic polls: they land in the same three stamps, so a
-     * reply the test did not ask for can still count toward it. */
+    /* THE RUNNING TEST'S VERDICT, counted from the ledger: only replies that
+     * struck one of this test's own requests. The panel's periodic polls ask
+     * on their own seqs and match nothing. See below, and #168 part 4. */
     /* THE REFUSAL FLASH, before the verdict, so a refused tap on the running
      * rung never overwrites what the test is saying. */
     if (s_refuse_rung >= 0) {

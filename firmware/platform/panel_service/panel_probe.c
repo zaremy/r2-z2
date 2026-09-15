@@ -89,9 +89,20 @@ void panel_probe_init(panel_probe_t *p)
 }
 
 void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
-                       bool link_up)
+                       bool link_up, int tier)
 {
     if (p == NULL) return;
+    p->tier = tier;
+    if (panel_probe_timeout_ms(tier) == 0u) {
+        /* NOBODY HAS MEASURED THIS TIER. Running it on a borrowed constant is
+         * how the single 2 s window came to call a 2.0-2.2 s dome move
+         * PARTIAL. Refuse, and make whoever raises the ceiling measure. */
+        p->state = PANEL_PROBE_NO_REPLY;
+        p->started_ms = now_ms;
+        p->expected = expected;
+        p->got = 0;
+        return;
+    }
     if (!link_up) {
         /* THE LINK IS ITS OWN ANSWER, at the start as well as during. Every
          * op fails to send when he is away, which used to arrive here as
@@ -136,7 +147,7 @@ panel_probe_state_t panel_probe_step(panel_probe_t *p, uint32_t now_ms,
         /* THE LINK IS ITS OWN ANSWER. Saying NO REPLY here would blame him
          * for a silence that is ours: the question never reached him. */
         p->state = PANEL_PROBE_LINK_LOST;
-    } else if (now_ms - p->started_ms >= PANEL_PROBE_TIMEOUT_MS) {
+    } else if (now_ms - p->started_ms >= panel_probe_timeout_ms(p->tier)) {
         p->state = p->got > 0 ? PANEL_PROBE_PARTIAL : PANEL_PROBE_NO_REPLY;
     }
     return p->state;
@@ -165,11 +176,6 @@ bool panel_probe_settled(const panel_probe_t *p)
 {
     return p != NULL && p->state != PANEL_PROBE_IDLE &&
            p->state != PANEL_PROBE_RUNNING;
-}
-
-uint32_t panel_probe_started_ms(const panel_probe_t *p)
-{
-    return (p != NULL && p->state == PANEL_PROBE_RUNNING) ? p->started_ms : 0u;
 }
 
 bool panel_probe_passed(const panel_probe_t *p)

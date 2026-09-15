@@ -66,6 +66,7 @@ typedef struct {
     uint32_t started_ms;
     uint8_t  expected;      /* how many answers a pass needs */
     uint8_t  got;
+    int      tier;          /* which rung, for its own timeout */
 } panel_probe_t;
 
 /* WHAT THIS TEST ASKED, AND WHAT HAS COME BACK.
@@ -117,7 +118,10 @@ unsigned panel_ledger_answered(const panel_ledger_t *l);
  * one six months from now, and the repo's rule is that an INFERRED claim must
  * not silently graduate to OBSERVED. The commit that raises the ceiling to one
  * of those tiers has to go and measure it first -- which is the correct amount
- * of friction for a rung that moves him. */
+ * of friction for a rung that moves him.
+ *
+ * panel_probe_start REFUSES a tier whose window is 0: it settles NO REPLY
+ * without asking anything, rather than running on a number nobody measured. */
 uint32_t panel_probe_timeout_ms(int tier);
 
 /* MAY A TAP START A TEST? The renderer's guard, lifted out of the renderer so
@@ -171,8 +175,10 @@ void panel_probe_init(panel_probe_t *p);
 /* `link_up` is sampled WHERE THE OPS WERE SENT, not here. With him away every
  * send fails and `expected` is 0, which is indistinguishable at this layer
  * from a gate that refused -- and the two deserve opposite answers. */
+/* `tier` picks the window. A tier with no measured window is REFUSED here
+ * rather than given a default -- see panel_probe_timeout_ms. */
 void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
-                       bool link_up);
+                       bool link_up, int tier);
 
 /* Feed every tick while RUNNING. `answered` is how many of the readings this
  * test asked for have arrived since it started. Returns the state, which
@@ -189,9 +195,6 @@ const char *panel_probe_word(const panel_probe_t *p, char *buf, unsigned n);
 bool panel_probe_settled(const panel_probe_t *p);
 bool panel_probe_passed(const panel_probe_t *p);
 
-/* When the running test started, for the caller counting what has arrived
- * since. Zero when nothing is running. */
-uint32_t panel_probe_started_ms(const panel_probe_t *p);
 
 #ifdef __cplusplus
 }

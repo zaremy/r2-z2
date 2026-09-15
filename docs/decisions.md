@@ -2411,10 +2411,17 @@ STANCE sends them at the wrong lever.
   reopened, because the ladder is built on open. Unobservable at the shipped
   `READ` ceiling (one rung, no sequence) and folded into #168 part 2, which
   rebuilds these rows for per-op consent.
-- **Three of #168's four findings remain open**: consent is still per *tier*
-  rather than per actuator (`run_tier_test` fires three ops per tap), there is
-  still no abort anywhere, and the 2 s verdict window is still calibrated on
-  read latency. All three bind before the ceiling leaves `READ`.
+- **Two of #168's four findings remain open**: consent is still per *tier*
+  rather than per actuator (`run_tier_test` fires three ops per tap), and there
+  is still no abort anywhere. Both bind before the ceiling leaves `READ`.
+- The verdict window is **no longer** calibrated on read latency. #168 part 4
+  gave each tier its own window (READ 2 s, DOME 4 s from D-013), refuses a tier
+  nobody has measured rather than defaulting it, and replaced the reading count
+  with a per-seq ledger — so a PASS now means R2 answered *these* questions
+  rather than "three readings arrived". **That correction was load-bearing for
+  this ADR**: keyed on the old PASS, this gate could have advanced to STANCE on
+  a background battery poll with the dome never having moved, which is the
+  prohibition it exists to enforce.
 
 ### What this does not claim
 

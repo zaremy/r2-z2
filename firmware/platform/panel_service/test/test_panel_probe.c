@@ -30,7 +30,7 @@ static void test_asking_nothing_is_not_running(void)
     /* The gate refused every op, or the link went before they left. The rung
      * must not sit there looking busy, and must never settle as a pass. */
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 0, true);
+    panel_probe_start(&p, 1000, 0, true, 0);
     CHECK(p.state == PANEL_PROBE_NO_REPLY, "expected NO REPLY, got %d", (int)p.state);
     CHECK(strcmp(word(&p), "NO REPLY") == 0, "reads '%s'", word(&p));
     CHECK(!panel_probe_passed(&p), "a probe that asked nothing passed");
@@ -46,7 +46,7 @@ static void test_asking_nothing_is_not_running(void)
 static void test_a_dead_link_is_not_his_silence(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3, true);
+    panel_probe_start(&p, 1000, 3, true, 0);
     CHECK(panel_probe_step(&p, 1100, 0, false) == PANEL_PROBE_LINK_LOST,
           "a dropped link read as %d", (int)p.state);
     CHECK(strcmp(word(&p), "LINK LOST") == 0, "reads '%s'", word(&p));
@@ -59,7 +59,7 @@ static void test_a_dead_link_is_not_his_silence(void)
 static void test_answers_that_arrive_late_do_not_pass(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3, true);
+    panel_probe_start(&p, 1000, 3, true, 0);
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS - 1, 0, true)
               == PANEL_PROBE_RUNNING, "gave up early");
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS, 0, true)
@@ -74,7 +74,7 @@ static void test_every_answer_is_a_pass(void)
 {
     panel_probe_t p; panel_probe_init(&p);
     CHECK(strcmp(word(&p), "RUN") == 0, "idle reads '%s'", word(&p));
-    panel_probe_start(&p, 1000, 3, true);
+    panel_probe_start(&p, 1000, 3, true, 0);
     CHECK(strcmp(word(&p), "...") == 0, "running reads '%s'", word(&p));
     CHECK(panel_probe_step(&p, 1100, 1, true) == PANEL_PROBE_RUNNING, "one reply ended it");
     CHECK(panel_probe_step(&p, 1200, 3, true) == PANEL_PROBE_PASS, "three replies did not pass");
@@ -85,7 +85,7 @@ static void test_every_answer_is_a_pass(void)
 static void test_some_answers_is_partial(void)
 {
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3, true);
+    panel_probe_start(&p, 1000, 3, true, 0);
     panel_probe_step(&p, 1100, 2, true);
     CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_TIMEOUT_MS, 2, true)
               == PANEL_PROBE_PARTIAL, "two of three was not partial");
@@ -99,7 +99,7 @@ static void test_the_clock_wrapping_does_not_break_it(void)
      * still time out on time rather than never. */
     panel_probe_t p; panel_probe_init(&p);
     const uint32_t t0 = 0xFFFFF000u;          /* 4096 ms before the wrap */
-    panel_probe_start(&p, t0, 3, true);
+    panel_probe_start(&p, t0, 3, true, 0);
     CHECK(panel_probe_step(&p, t0 + 100u, 0, true) == PANEL_PROBE_RUNNING,
           "gave up before the wrap");
     CHECK(panel_probe_step(&p, t0 + PANEL_PROBE_TIMEOUT_MS, 0, true)
@@ -112,7 +112,7 @@ static void test_more_answers_than_asked_still_passes(void)
      * battery poll lands in the same three stamps. More than asked is a pass,
      * not a fault; what matters is that FEWER never is. */
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3, true);
+    panel_probe_start(&p, 1000, 3, true, 0);
     CHECK(panel_probe_step(&p, 1100, 9, true) == PANEL_PROBE_PASS, "extra replies failed");
 }
 
@@ -124,7 +124,7 @@ static void test_nulls_and_a_short_buffer(void)
     CHECK(!panel_probe_passed(NULL) && !panel_probe_settled(NULL), "null passed");
     CHECK(panel_probe_word(NULL, buf, sizeof buf)[0] == '\0', "null wrote a word");
     panel_probe_t p; panel_probe_init(&p);
-    panel_probe_start(&p, 0, 3, true);
+    panel_probe_start(&p, 0, 3, true, 0);
     panel_probe_step(&p, 9999, 0, true);
     panel_probe_word(&p, buf, 4);
     CHECK(buf[3] == '\0', "a short buffer was overrun");
@@ -226,7 +226,7 @@ static void test_a_test_sent_with_the_link_down_blames_the_link(void)
      * that one was ever handled. */
     panel_probe_t p;
     panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 0, false);
+    panel_probe_start(&p, 1000, 0, false, 0);
     CHECK(p.state == PANEL_PROBE_LINK_LOST,
           "a test sent with the link down did not read LINK LOST (%d)", (int)p.state);
     CHECK(panel_probe_settled(&p), "LINK LOST did not settle");
@@ -235,7 +235,7 @@ static void test_a_test_sent_with_the_link_down_blames_the_link(void)
     /* Even if ops somehow reported away, the link was down when they went:
      * the verdict is about the link, not the count. */
     panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 3, false);
+    panel_probe_start(&p, 1000, 3, false, 0);
     CHECK(p.state == PANEL_PROBE_LINK_LOST,
           "a down link with ops away did not read LINK LOST");
 
@@ -243,7 +243,7 @@ static void test_a_test_sent_with_the_link_down_blames_the_link(void)
      * refusing, which is also our doing and not his silence -- but it is not
      * the link's doing either, and must not say so. */
     panel_probe_init(&p);
-    panel_probe_start(&p, 1000, 0, true);
+    panel_probe_start(&p, 1000, 0, true, 0);
     CHECK(p.state == PANEL_PROBE_NO_REPLY,
           "a live link that sent nothing did not read NO REPLY");
     CHECK(!panel_probe_passed(&p), "NO REPLY passed");
@@ -334,11 +334,23 @@ static void test_only_measured_tiers_have_a_timeout(void)
     CHECK(panel_probe_timeout_ms(3) == PANEL_PROBE_DOME_TIMEOUT_MS,
           "DOME lost its D-013 window");
 
-    /* D-013 measured 2.0-2.2 s REGARDLESS of distance. A window that does not
-     * clear the move calls a working move PARTIAL -- the bug this replaces. */
-    CHECK(panel_probe_timeout_ms(3) > 2200u,
-          "the DOME window (%u ms) does not clear a 2.2 s move",
+    /* LITERAL MILLISECONDS, because the line above pins the function to the
+     * macro and leaves the MACRO free: a mutation battery set the DOME window
+     * to 2201 ms -- one millisecond for a reply after a 2.2 s move -- and the
+     * whole suite stayed green. These are the numbers a dome actually meets.
+     *
+     * D-013 measured 2.0-2.2 s REGARDLESS of distance, so the window must
+     * clear the move AND leave room for the answer. A second of slack is the
+     * floor; anything tighter is the old bug with a bigger number. */
+    CHECK(panel_probe_timeout_ms(3) >= 3200u,
+          "the DOME window (%u ms) leaves under a second for the reply after "
+          "D-013's 2.2 s move", (unsigned)panel_probe_timeout_ms(3));
+    CHECK(panel_probe_timeout_ms(3) == 4000u,
+          "the DOME window is no longer 4000 ms (%u)",
           (unsigned)panel_probe_timeout_ms(3));
+    CHECK(panel_probe_timeout_ms(0) == 2000u,
+          "the READ window is no longer 2000 ms (%u)",
+          (unsigned)panel_probe_timeout_ms(0));
 
     const int unmeasured[] = { 1, 2, 4 };          /* LEDS, AUDIO, STANCE */
     for (unsigned i = 0; i < sizeof unmeasured / sizeof unmeasured[0]; i++)
@@ -351,8 +363,56 @@ static void test_only_measured_tiers_have_a_timeout(void)
               "out-of-range tier %d got a timeout", bad[i]);
 }
 
+static void test_an_unmeasured_tier_is_refused_not_defaulted(void)
+{
+    /* THE GUARD THAT MAKES THE ZERO MEAN SOMETHING. Without a caller that
+     * refuses it, panel_probe_timeout_ms is a table nobody reads -- the
+     * repo's own "a layer with no caller passes every check a live one
+     * passes". A tier with no measured window must not run at all. */
+    for (int tier = 0; tier < 6; tier++) {
+        panel_probe_t p;
+        panel_probe_init(&p);
+        panel_probe_start(&p, 1000, 3, true, tier);
+        if (panel_probe_timeout_ms(tier) == 0u) {
+            CHECK(p.state == PANEL_PROBE_NO_REPLY,
+                  "tier %d has no measured window but started anyway (state %d)",
+                  tier, (int)p.state);
+            CHECK(!panel_probe_passed(&p), "an unmeasured tier passed");
+        } else {
+            CHECK(p.state == PANEL_PROBE_RUNNING,
+                  "tier %d has a window but did not run (state %d)",
+                  tier, (int)p.state);
+        }
+    }
+}
+
+static void test_each_tier_times_out_on_its_own_window(void)
+{
+    /* THE WHOLE POINT OF THE TABLE. A DOME test must still be RUNNING at the
+     * moment a READ test would already have given up -- that is the 2 s
+     * window calling a 2.0-2.2 s move PARTIAL, which is the bug. */
+    panel_probe_t read, dome;
+    panel_probe_init(&read);
+    panel_probe_init(&dome);
+    panel_probe_start(&read, 0, 3, true, 0);
+    panel_probe_start(&dome, 0, 3, true, 3);
+
+    /* 2.5 s in: past READ's window, and past D-013's longest measured move. */
+    CHECK(panel_probe_step(&read, 2500, 0, true) == PANEL_PROBE_NO_REPLY,
+          "READ did not give up at 2.5 s");
+    CHECK(panel_probe_step(&dome, 2500, 0, true) == PANEL_PROBE_RUNNING,
+          "DOME gave up while a measured move could still be travelling");
+
+    /* And it does eventually give up -- a longer window, not an absent one. */
+    CHECK(panel_probe_step(&dome, 60000, 0, true) == PANEL_PROBE_NO_REPLY,
+          "DOME never times out at all");
+}
+
 int main(void)
 {
+    test_an_unmeasured_tier_is_refused_not_defaulted();
+    test_each_tier_times_out_on_its_own_window();
+
     test_a_poll_reply_cannot_answer_a_question_nobody_asked();
     test_a_duplicate_reply_is_not_a_second_answer();
     test_a_seq_already_outstanding_is_refused();
