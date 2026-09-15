@@ -113,12 +113,47 @@ panel_tone_t panel_service_link_tone(const r2_telemetry_t *tm);
  * it is locked, an out-of-range ceiling locks everything, and LOCOMOTION is
  * locked at every ceiling because it is not a rung of the gate at all -- it
  * has no allowlist entry and is refused as unlisted. Returns the rung count. */
+/* A CEILING IS NOT AN ORDER, WHICH IS WHAT THE RULE ACTUALLY SAYS (#168).
+ * CLAUDE.md states bring-up as a SEQUENCE -- "read-only -> LEDs -> audio ->
+ * small dome -> stance -> locomotion" -- and a ceiling only caps how far up
+ * you may reach. At ceiling = STANCE the old ladder marked all five allowed,
+ * so an operator could tap STANCE having never once run DOME: the rule's exact
+ * prohibition. It was invisible while the ceiling sat at READ and only one
+ * rung was tappable, which is why it had to be fixed before the first commit
+ * that raises it.
+ *
+ * `done` is the set of tiers already exercised this session, bit i for tier i.
+ * A rung opens only when the ceiling admits it AND every tier below it is in
+ * that set. READ has nothing below it, so it opens whenever the ceiling
+ * allows -- the sequence has to start somewhere.
+ *
+ * PER SESSION, NOT PERSISTED, and that is the safety-relevant half. A stored
+ * "DOME ran fine" would unlock STANCE on a droid nobody has looked at since
+ * last week -- and he has no resting posture, parks himself in bipod a minute
+ * after the link drops, and an animation has put him on the floor once already
+ * (CLAUDE.md). Re-walking the ladder after a boot costs one tap per rung and
+ * re-proves what a stored bit only remembers.
+ *
+ * The rung says WHY it is shut, because "locked" and "not yet" ask different
+ * things of the operator: one is a ceiling they must deliberately raise, the
+ * other is a rung they have simply not reached. */
 #define PANEL_LADDER_RUNGS 6
+typedef enum {
+    PANEL_RUNG_OPEN = 0,     /* tappable */
+    PANEL_RUNG_CEILING,      /* above the gate's ceiling */
+    PANEL_RUNG_SEQUENCE,     /* within the ceiling, but a lower tier is unrun */
+} panel_rung_block_t;
 typedef struct {
-    const char *tier;
-    bool        allowed;
+    const char        *tier;
+    bool               allowed;
+    panel_rung_block_t why;      /* PANEL_RUNG_OPEN exactly when allowed */
 } panel_rung_t;
-int panel_service_ladder(int ceiling, panel_rung_t out[PANEL_LADDER_RUNGS]);
+
+/* Bit i marks tier i as exercised; `done` is a mask of these. */
+#define PANEL_RUNG_BIT(tier) (1u << (tier))
+
+int panel_service_ladder(int ceiling, uint32_t done,
+                         panel_rung_t out[PANEL_LADDER_RUNGS]);
 
 /* How many of R2's three readings -- battery, dome, version -- have arrived
  * SINCE `since_ms`, on a link that is still up. This is what a hardware test

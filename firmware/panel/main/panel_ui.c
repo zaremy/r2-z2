@@ -345,6 +345,17 @@ static panel_svc_t s_int_open = PANEL_SVC_COUNT;       /* none */
 static lv_obj_t   *s_rung_row[PANEL_LADDER_RUNGS];
 static lv_obj_t   *s_rung_word[PANEL_LADDER_RUNGS];
 static bool        s_rung_allowed[PANEL_LADDER_RUNGS];
+
+/* WHICH TIERS HAVE BEEN EXERCISED THIS SESSION (#168). Bit i for tier i; the
+ * ladder opens a rung only when every tier below it is set. Deliberately a
+ * plain static and not NVS: persisting it would unlock STANCE on a droid
+ * nobody has looked at since last week. A reboot re-walks the ladder, which is
+ * the point -- see panel_service.h.
+ *
+ * SET ON A PASS, NOT ON A TAP. A tier that was asked and did not answer has
+ * not been exercised; advancing past a DOME that timed out is exactly the
+ * thing bring-up order exists to prevent. */
+static uint32_t    s_tiers_run;
 static panel_probe_t s_probe;
 static int         s_probe_rung = -1;      /* which rung the verdict belongs to */
 static int         s_probe_request = -1;   /* a tier main.c has yet to send */
@@ -720,7 +731,7 @@ static void open_interior(panel_svc_t s)
         lv_obj_remove_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
 
         panel_rung_t r[PANEL_LADDER_RUNGS];
-        const int n = panel_service_ladder(ceiling, r);
+        const int n = panel_service_ladder(ceiling, s_tiers_run, r);
         for (int i = 0; i < n; i++) {
             lv_obj_t *row = lv_obj_create(s_int_body);
             bare(row);
@@ -739,9 +750,16 @@ static void open_interior(panel_svc_t s)
             /* RUN in green on a rung the gate would admit -- it is a control
              * now, and the reference greens it. LOCKED stays the no-claim
              * grey. */
+            /* LOCKED and NOT YET ask different things of the operator: one
+             * is a ceiling they must deliberately raise, the other is a rung
+             * they have not reached yet and can. Both stay the no-claim grey
+             * -- neither is a control. */
+            const char *word = r[i].allowed              ? "RUN"
+                             : r[i].why == PANEL_RUNG_SEQUENCE ? "NOT YET"
+                                                          : "LOCKED";
             s_rung_word[i] = text_r(row, &techmono_18, 1,
                                     r[i].allowed ? PANEL_C_GREEN : V5_DIM,
-                                    SVC_W, 120, 16, r[i].allowed ? "RUN" : "LOCKED");
+                                    SVC_W, 120, 16, word);
             s_rung_row[i] = row;
             s_rung_allowed[i] = r[i].allowed;
         }
@@ -1127,6 +1145,18 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         if (!panel_probe_settled(&s_probe))  colour = V5_TEXT;      /* running */
         else if (!panel_probe_passed(&s_probe)) colour = PANEL_C_AMBER;
         lv_obj_set_style_text_color(lbl, lv_color_hex(colour), 0);
+
+        /* THE TIER IS EXERCISED ONLY ON A PASS (#168). Idempotent: this runs
+         * every tick while the verdict stands, and setting a set bit is free.
+         *
+         * The ladder is rebuilt when the interior reopens, so a rung unlocked
+         * by this pass shows NOT YET until then. Unobservable in this build --
+         * the ceiling is READ, so there is exactly one rung and no sequence to
+         * walk -- and it belongs with the per-op consent work (#168 part 2),
+         * which rebuilds these rows anyway. Stated rather than left to be
+         * discovered. */
+        if (panel_probe_settled(&s_probe) && panel_probe_passed(&s_probe))
+            s_tiers_run |= PANEL_RUNG_BIT(s_probe_rung);
     }
 }
 
