@@ -186,9 +186,9 @@ static void test_requests_route_through_the_gate(void)
     CHECK(r2_gate_op_name(0x11, 0x00) != NULL, "version op is not in the gate's tables");
 
     /* And none of the three may be a FORBIDDEN entry the gate knows by name. */
-    CHECK(r2_gate_check(0x13, 0x03) == R2_GATE_ALLOW, "battery is not allowed at READ");
-    CHECK(r2_gate_check(0x17, 0x14) == R2_GATE_ALLOW, "head is not allowed at READ");
-    CHECK(r2_gate_check(0x11, 0x00) == R2_GATE_ALLOW, "version is not allowed at READ");
+    CHECK(r2_gate_check(0x13, 0x03, NULL, 0) == R2_GATE_ALLOW, "battery is not allowed at READ");
+    CHECK(r2_gate_check(0x17, 0x14, NULL, 0) == R2_GATE_ALLOW, "head is not allowed at READ");
+    CHECK(r2_gate_check(0x11, 0x00, NULL, 0) == R2_GATE_ALLOW, "version is not allowed at READ");
 }
 
 /* The hard proof. Comparing return codes is not one -- a module that

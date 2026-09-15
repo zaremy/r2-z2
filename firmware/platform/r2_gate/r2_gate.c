@@ -1,3 +1,6 @@
+#include <stdbool.h>
+#include <string.h>
+
 #include "r2_gate.h"
 #include "r2_packet.h"
 
@@ -59,6 +62,71 @@ static const op_t FORBIDDEN[] = {
 };
 #define FORBIDDEN_N (sizeof FORBIDDEN / sizeof FORBIDDEN[0])
 
+/* ---- HALTS, admitted at EVERY ceiling, checked BEFORE everything else. ----
+ *
+ * "Default to STOP. Disconnect or failure must result in stop, not
+ * last-command" (CLAUDE.md). A panel that cannot send a stop does not satisfy
+ * that at any ceiling, and until now it could not send a complete one: the
+ * legs halt was FORBIDDEN outright and the audio halt sat behind the AUDIO
+ * ceiling, so the stop got weaker exactly as the tiers got more dangerous.
+ *
+ * The Mac prototype learned the shape the hard way and says so at
+ * `stop_everything`: the legs halt was "added after #11 -- an animation drives
+ * LEG actions, and stop_animation is not documented to halt one already in
+ * flight. A stop that leaves the legs moving is not a stop -- and a leg action
+ * in flight is the state that put R2 on the floor."
+ *
+ * WHY THIS DOES NOT REOPEN WHAT FORBIDDEN CLOSED. `perform_leg_action` is
+ * forbidden because "an animation is a stance command whose contents cannot be
+ * inspected first" (D-010). That objection is about contents -- and here the
+ * contents are pinned: this entry admits DID 0x17 / CID 0x0D only when the
+ * payload is EXACTLY one byte, LEG_ACTION_STOP. Any other leg action, of any
+ * length, falls through to FORBIDDEN and is refused as before. The gate could
+ * not previously express that distinction because it only ever saw did+cid,
+ * which is why the halt had to be banned along with the motion.
+ *
+ * Each entry pins its exact bytes. That is the property that makes this list
+ * safe to check first: it cannot widen anything by accident, because nothing
+ * matches it approximately. */
+#define LEG_ACTION_STOP 0x00u
+
+typedef struct {
+    uint8_t     did, cid;
+    const uint8_t *data;      /* the ONLY payload this admits */
+    size_t      data_len;
+    const char *name;
+} halt_t;
+
+static const uint8_t LEG_STOP_PAYLOAD[] = { LEG_ACTION_STOP };
+
+static const halt_t HALTS[] = {
+    /* Halts an animation already playing. No payload: nothing to constrain. */
+    { DID_ANIMATRONIC, 0x2B, NULL, 0, "stop_animation" },
+    /* Halts audio. Was allowlisted at the AUDIO tier, which meant the panel
+     * could not silence him from READ -- a stop you have to raise a ceiling to
+     * reach is not a stop. It stays in ALLOWED too; this is the always-path. */
+    { DID_IO,          0x0A, NULL, 0, "stop_audio" },
+    /* THE ONE WITH A PINNED PAYLOAD. Legs stop, and only legs stop. */
+    { DID_ANIMATRONIC, 0x0D, LEG_STOP_PAYLOAD, sizeof LEG_STOP_PAYLOAD,
+      "perform_leg_action(STOP)" },
+};
+#define HALTS_N (sizeof HALTS / sizeof HALTS[0])
+
+/* EXACT BYTES, not a prefix. A longer payload whose first byte happens to be
+ * LEG_ACTION_STOP is a different command and is not a halt. */
+static bool is_halt(uint8_t did, uint8_t cid,
+                    const uint8_t *data, size_t data_len)
+{
+    for (size_t i = 0; i < HALTS_N; i++) {
+        if (HALTS[i].did != did || HALTS[i].cid != cid) continue;
+        if (HALTS[i].data_len != data_len) continue;
+        if (data_len == 0) return true;
+        if (data == NULL) continue;
+        if (memcmp(data, HALTS[i].data, data_len) == 0) return true;
+    }
+    return false;
+}
+
 static r2_tier_t s_ceiling = R2_TIER_READ;   /* lowest rung by default */
 
 static uint32_t s_admitted = 0, s_refused = 0;
@@ -88,8 +156,12 @@ static const op_t *find(const op_t *tbl, size_t n, uint8_t did, uint8_t cid)
     return NULL;
 }
 
-r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid)
+r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid,
+                                const uint8_t *data, size_t data_len)
 {
+    /* FIRST, and above FORBIDDEN. A halt is the one thing that must never be
+     * refused for being too dangerous: refusing it leaves him moving. */
+    if (is_halt(did, cid, data, data_len)) return R2_GATE_ALLOW;
     if (find(FORBIDDEN, FORBIDDEN_N, did, cid)) return R2_GATE_FORBIDDEN;
     const op_t *op = find(ALLOWED, ALLOWED_N, did, cid);
     if (op == NULL) return R2_GATE_NOT_ALLOWLISTED;
@@ -104,7 +176,7 @@ int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
     /* Refuse BEFORE encoding. Nothing should build a frame it may not send --
      * a half-built forbidden command is a thing waiting to be transmitted by
      * the next person who adds a shortcut. */
-    const r2_gate_verdict_t v = r2_gate_check(did, cid);
+    const r2_gate_verdict_t v = r2_gate_check(did, cid, data, data_len);
     if (v != R2_GATE_ALLOW) { s_refused++; return (int)v; }
     if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
 

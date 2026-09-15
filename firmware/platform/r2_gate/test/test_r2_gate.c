@@ -59,7 +59,7 @@ static void test_forbidden_at_every_ceiling(void)
     for (int c = 0; c < R2_TIER__COUNT; c++) {
         s_ceiling_touched = 1; r2_gate_set_ceiling((r2_tier_t)c);
         for (size_t i = 0; i < FORBIDDEN_N; i++) {
-            CHECK(r2_gate_check(FORBIDDEN[i].did, FORBIDDEN[i].cid) == R2_GATE_FORBIDDEN,
+            CHECK(r2_gate_check(FORBIDDEN[i].did, FORBIDDEN[i].cid, NULL, 0) == R2_GATE_FORBIDDEN,
                   "%s must be FORBIDDEN at ceiling %s",
                   FORBIDDEN[i].name, r2_gate_tier_name((r2_tier_t)c));
             tx_reset();
@@ -80,7 +80,8 @@ static void test_unknown_ops_refused(void)
     int refused = 0, total = 0;
     for (unsigned did = 0; did < 0x40; did++) {
         for (unsigned cid = 0; cid < 0x40; cid++) {
-            r2_gate_verdict_t v = r2_gate_check((uint8_t)did, (uint8_t)cid);
+            r2_gate_verdict_t v = r2_gate_check((uint8_t)did, (uint8_t)cid,
+                                               NULL, 0);
             total++;
             if (v == R2_GATE_NOT_ALLOWLISTED) refused++;
             else CHECK(v == R2_GATE_ALLOW || v == R2_GATE_FORBIDDEN,
@@ -104,11 +105,20 @@ static void test_above_ceiling_refused(void)
         { 0x1A, 0x0E, "set_leds_16bit" },
         { 0x1A, 0x07, "play_audio" },
         { 0x1A, 0x08, "set_volume" },
-        { 0x1A, 0x0A, "stop_audio" },
+        /* stop_audio WAS here. Its removal is the RULE changing, not a test
+         * being weakened to fit the code (#168 part 3): it is a HALT, and a
+         * halt is admitted at every ceiling, because a stop you have to raise
+         * a ceiling to reach is not a stop -- and the panel's ceiling is READ.
+         *
+         * The ladder property this test exists for is untouched and still
+         * asserted by every remaining row. play_audio and set_volume, the two
+         * AUDIO-tier ops that make him DO something, are still refused here;
+         * only the one that makes him stop moved. Its new behaviour is pinned
+         * in test_every_halt_is_admitted_at_every_ceiling. */
         { 0x17, 0x0F, "set_head_position" },
     };
     for (size_t i = 0; i < sizeof higher / sizeof higher[0]; i++) {
-        CHECK(r2_gate_check(higher[i].did, higher[i].cid) == R2_GATE_ABOVE_CEILING,
+        CHECK(r2_gate_check(higher[i].did, higher[i].cid, NULL, 0) == R2_GATE_ABOVE_CEILING,
               "%s must be above a read ceiling", higher[i].name);
         tx_reset();
         int rc = r2_gate_send(higher[i].did, higher[i].cid, 0, NULL, 0, fake_tx, NULL);
@@ -118,9 +128,9 @@ static void test_above_ceiling_refused(void)
     }
     /* LEDs allowed at leds, audio still refused: the ladder is a ladder. */
     s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_LEDS);
-    CHECK(r2_gate_check(0x1A, 0x0E) == R2_GATE_ALLOW, "leds allowed at the leds rung");
-    CHECK(r2_gate_check(0x1A, 0x07) == R2_GATE_ABOVE_CEILING, "audio still refused at leds");
-    CHECK(r2_gate_check(0x17, 0x0F) == R2_GATE_ABOVE_CEILING, "dome still refused at leds");
+    CHECK(r2_gate_check(0x1A, 0x0E, NULL, 0) == R2_GATE_ALLOW, "leds allowed at the leds rung");
+    CHECK(r2_gate_check(0x1A, 0x07, NULL, 0) == R2_GATE_ABOVE_CEILING, "audio still refused at leds");
+    CHECK(r2_gate_check(0x17, 0x0F, NULL, 0) == R2_GATE_ABOVE_CEILING, "dome still refused at leds");
 }
 
 /* MUST RUN FIRST, and the ordering is load-bearing rather than stylistic.
@@ -137,9 +147,9 @@ static void test_untouched_default(void)
           "this test must run before anything calls set_ceiling, or it proves nothing");
     CHECK(r2_gate_get_ceiling() == R2_TIER_READ,
           "a firmware that never sets a ceiling must default to read");
-    CHECK(r2_gate_check(0x1A, 0x0E) == R2_GATE_ABOVE_CEILING,
+    CHECK(r2_gate_check(0x1A, 0x0E, NULL, 0) == R2_GATE_ABOVE_CEILING,
           "with no ceiling set, an LED write must already be refused");
-    CHECK(r2_gate_check(0x17, 0x0F) == R2_GATE_ABOVE_CEILING,
+    CHECK(r2_gate_check(0x17, 0x0F, NULL, 0) == R2_GATE_ABOVE_CEILING,
           "with no ceiling set, a dome move must already be refused");
 }
 
@@ -149,7 +159,7 @@ static void test_clamping(void)
     s_ceiling_touched = 1; r2_gate_set_ceiling((r2_tier_t)99);
     CHECK(r2_gate_get_ceiling() == R2_TIER_READ,
           "an out-of-range ceiling must clamp DOWN, never up");
-    CHECK(r2_gate_check(0x17, 0x0F) == R2_GATE_ABOVE_CEILING,
+    CHECK(r2_gate_check(0x17, 0x0F, NULL, 0) == R2_GATE_ABOVE_CEILING,
           "a bad ceiling value must not become a privilege escalation");
 }
 
@@ -191,8 +201,123 @@ static void test_no_tx_is_refused_not_crashed(void)
           "forbidden must beat the missing-tx error: the gate decides first");
 }
 
+/* ---- #168 part 3: a halt is admissible at every tier -------------------- */
+
+static void test_a_leg_action_that_is_not_stop_is_still_forbidden(void)
+{
+    /* THE ILLEGAL CASE, and the one this change could get catastrophically
+     * wrong. perform_leg_action is forbidden because an animation's contents
+     * cannot be inspected first (D-010) -- WADDLE is what put him on the
+     * floor. The halt entry pins the payload to exactly {STOP}; everything
+     * else about that op must be refused exactly as before. */
+    r2_gate_set_ceiling(R2_TIER_STANCE);          /* the most permissive */
+
+    const uint8_t waddle[]   = { 3 };             /* LEG_ACTION_WADDLE */
+    const uint8_t three[]    = { 1 };
+    const uint8_t two[]      = { 2 };
+    const uint8_t stop_plus[] = { 0, 0 };         /* STOP, then something else */
+    const uint8_t empty[]    = { 0 };
+
+    CHECK(r2_gate_check(0x17, 0x0D, waddle, 1) == R2_GATE_FORBIDDEN,
+          "WADDLE got through the halt list");
+    CHECK(r2_gate_check(0x17, 0x0D, three, 1) == R2_GATE_FORBIDDEN,
+          "THREE_LEGS got through the halt list");
+    CHECK(r2_gate_check(0x17, 0x0D, two, 1) == R2_GATE_FORBIDDEN,
+          "TWO_LEGS got through the halt list");
+    /* A LONGER PAYLOAD STARTING WITH STOP IS A DIFFERENT COMMAND. A prefix
+     * match here would admit an arbitrary tail. */
+    CHECK(r2_gate_check(0x17, 0x0D, stop_plus, 2) == R2_GATE_FORBIDDEN,
+          "a two-byte payload beginning with STOP was treated as a halt");
+    /* And no payload at all is not the halt either -- the halt is one byte. */
+    CHECK(r2_gate_check(0x17, 0x0D, NULL, 0) == R2_GATE_FORBIDDEN,
+          "an empty perform_leg_action was treated as a halt");
+
+    /* A LENGTH WITH NO BYTES IS NOT A HALT. A caller that passes NULL and
+     * claims one byte is malformed, and the gate must refuse rather than
+     * believe the length -- a mutation battery flipped this guard to `return
+     * true` and nothing noticed, which is a halt entry that admits an op
+     * whose payload was never actually read. */
+    CHECK(r2_gate_check(0x17, 0x0D, NULL, 1) == R2_GATE_FORBIDDEN,
+          "a NULL payload claiming one byte was treated as the legs STOP");
+
+    CHECK(r2_gate_check(0x17, 0x0D, empty, 1) == R2_GATE_ALLOW,
+          "the legs STOP is refused");
+
+    r2_gate_set_ceiling(R2_TIER_READ);
+}
+
+static void test_every_halt_is_admitted_at_every_ceiling(void)
+{
+    /* THE WHOLE POINT. A stop you have to raise a ceiling to reach is not a
+     * stop, and the panel's ceiling is READ. */
+    const uint8_t stop[] = { 0 };
+    for (int c = R2_TIER_READ; c < R2_TIER__COUNT; c++) {
+        r2_gate_set_ceiling((r2_tier_t)c);
+        CHECK(r2_gate_check(0x17, 0x2B, NULL, 0) == R2_GATE_ALLOW,
+              "stop_animation refused at ceiling %d", c);
+        CHECK(r2_gate_check(0x1A, 0x0A, NULL, 0) == R2_GATE_ALLOW,
+              "stop_audio refused at ceiling %d", c);
+        CHECK(r2_gate_check(0x17, 0x0D, stop, 1) == R2_GATE_ALLOW,
+              "the legs STOP refused at ceiling %d", c);
+    }
+    r2_gate_set_ceiling(R2_TIER_READ);
+}
+
+static void test_the_halt_list_widens_nothing_else(void)
+{
+    /* A list checked BEFORE forbidden is the most dangerous kind of list.
+     * Sweep the whole did/cid space at the most permissive ceiling and assert
+     * that the ONLY verdicts that changed are the three halts. Anything else
+     * newly allowed would be this change leaking. */
+    r2_gate_set_ceiling(R2_TIER_STANCE);
+    for (unsigned did = 0; did < 256u; did++) {
+        for (unsigned cid = 0; cid < 256u; cid++) {
+            const int is_stop_anim  = (did == 0x17 && cid == 0x2B);
+            const int is_stop_audio = (did == 0x1A && cid == 0x0A);
+            /* Empty payload: the legs halt needs one byte, so it is not in
+             * play here and every other op must answer as it always did. */
+            const r2_gate_verdict_t v =
+                r2_gate_check((uint8_t)did, (uint8_t)cid, NULL, 0);
+            if (is_stop_anim || is_stop_audio) {
+                CHECK(v == R2_GATE_ALLOW, "halt %02x/%02x refused", did, cid);
+            } else if (v == R2_GATE_ALLOW) {
+                /* Allowed for its own reasons -- it must be on the allowlist,
+                 * not on the halt list. */
+                CHECK(!(did == 0x17 && cid == 0x0D),
+                      "perform_leg_action allowed with no payload");
+            }
+        }
+    }
+    r2_gate_set_ceiling(R2_TIER_READ);
+}
+
+static void test_a_halt_actually_reaches_the_transport(void)
+{
+    /* PROVE THE GATE AT THE EFFECTOR. A verdict function that says ALLOW
+     * proves nothing about what r2_gate_send does with it -- this repo's own
+     * rule. Drive the real send and count the bytes that reach tx. */
+    r2_gate_set_ceiling(R2_TIER_READ);
+    const uint8_t stop[] = { 0 };
+    tx_reset();
+    const int n = r2_gate_send(0x17, 0x0D, 1, stop, 1, fake_tx, NULL);
+    CHECK(n > 0, "the legs STOP did not send (%d)", n);
+    CHECK(tx_calls == 1, "the legs STOP reached tx %d times", tx_calls);
+
+    /* And the motion still does not. */
+    const uint8_t waddle[] = { 3 };
+    tx_reset();
+    const int m = r2_gate_send(0x17, 0x0D, 2, waddle, 1, fake_tx, NULL);
+    CHECK(m == R2_GATE_FORBIDDEN, "WADDLE was not refused by send (%d)", m);
+    CHECK(tx_calls == 0, "WADDLE reached the transport %d times", tx_calls);
+}
+
 int main(void)
 {
+    test_a_leg_action_that_is_not_stop_is_still_forbidden();
+    test_every_halt_is_admitted_at_every_ceiling();
+    test_the_halt_list_widens_nothing_else();
+    test_a_halt_actually_reaches_the_transport();
+
     printf("r2_gate host tests\n==================\n");
     test_untouched_default();          /* FIRST: the default is only observable now */
     test_forbidden_at_every_ceiling();

@@ -65,7 +65,14 @@ void      r2_gate_set_ceiling(r2_tier_t ceiling);
 r2_tier_t r2_gate_get_ceiling(void);
 
 /* Verdict for one op, without sending. Exposed for diagnostics and tests. */
-r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid);
+/* THE PAYLOAD IS PART OF THE VERDICT. `perform_leg_action` is forbidden as a
+ * motion and admitted as a halt, and the only thing that tells those apart is
+ * the byte it carries -- so a check that cannot see the payload cannot answer
+ * correctly. There is deliberately no did+cid-only variant: two checks that can
+ * disagree about one op is how a gate gets bypassed by the more convenient
+ * one. Pass NULL/0 for an op that carries nothing. */
+r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid,
+                                const uint8_t *data, size_t data_len);
 
 /* THE ONLY SANCTIONED WAY OUT. Checks, encodes, transmits. Returns the encoded
  * length on success, or a negative r2_gate_verdict_t. */
