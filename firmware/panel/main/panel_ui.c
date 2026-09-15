@@ -346,6 +346,14 @@ static lv_obj_t   *s_rung_row[PANEL_LADDER_RUNGS];
 static lv_obj_t   *s_rung_word[PANEL_LADDER_RUNGS];
 static bool        s_rung_allowed[PANEL_LADDER_RUNGS];
 
+/* AND WHY EACH SHUT RUNG IS SHUT. The word is written in two places -- when the
+ * ladder is built, and again when a REFUSED flash expires and the rung has to
+ * go back to saying what it says for itself. The second only knew `allowed`,
+ * so tapping a NOT YET rung relabelled it LOCKED for the life of the interior:
+ * the operator is told to raise a ceiling that was never the obstacle. Keeping
+ * the reason beside the verdict is what makes the two renderers agree. */
+static panel_rung_block_t s_rung_why[PANEL_LADDER_RUNGS];
+
 /* WHICH TIERS HAVE BEEN EXERCISED THIS SESSION (#168). Bit i for tier i; the
  * ladder opens a rung only when every tier below it is set. Deliberately a
  * plain static and not NVS: persisting it would unlock STANCE on a droid
@@ -675,6 +683,21 @@ static void fill_list(bool build)
     if (build) s_int_rows = n;
 }
 
+/* THE ONE PLACE A RUNG'S WORD IS DECIDED. Both renderers call it, so the
+ * ladder and the post-REFUSED restore cannot drift apart. LOCKED and NOT YET
+ * ask different things of the operator: a ceiling is a thing they must
+ * deliberately raise, a sequence gap is a rung they have not reached yet. */
+static const char *rung_word(panel_rung_block_t why)
+{
+    switch (why) {
+    case PANEL_RUNG_OPEN:     return "RUN";
+    case PANEL_RUNG_SEQUENCE: return "NOT YET";
+    case PANEL_RUNG_CEILING:
+    case PANEL_RUNG_UNLISTED: break;
+    }
+    return "LOCKED";            /* and anything unrecognised: shut, not open */
+}
+
 static void open_interior(panel_svc_t s)
 {
     const panel_svc_kind_t kind = panel_service_kind(s);
@@ -714,6 +737,11 @@ static void open_interior(panel_svc_t s)
             s_rung_row[i] = NULL;
             s_rung_word[i] = NULL;
             s_rung_allowed[i] = false;
+            /* THE ZERO VALUE OF panel_rung_block_t IS _OPEN. Leaving it unset
+             * here means a shut rung defaults to the reason that says it is
+             * tappable -- fail-open on the one field the operator reads to
+             * decide what to do next. Reset it with its siblings. */
+            s_rung_why[i] = PANEL_RUNG_CEILING;
         }
         panel_probe_init(&s_probe);
         s_probe_rung = -1;
@@ -748,20 +776,18 @@ static void open_interior(panel_svc_t s)
              * would admit, and green would read as armed. */
             text(row, &techmono_24, 1, r[i].allowed ? V5_TEXT : V5_DIM, 0, 6, r[i].tier);
             /* RUN in green on a rung the gate would admit -- it is a control
-             * now, and the reference greens it. LOCKED stays the no-claim
-             * grey. */
+             * now, and the reference greens it. Every shut word (LOCKED, NOT
+             * YET) stays the no-claim grey: none of them is a control. */
             /* LOCKED and NOT YET ask different things of the operator: one
              * is a ceiling they must deliberately raise, the other is a rung
              * they have not reached yet and can. Both stay the no-claim grey
              * -- neither is a control. */
-            const char *word = r[i].allowed              ? "RUN"
-                             : r[i].why == PANEL_RUNG_SEQUENCE ? "NOT YET"
-                                                          : "LOCKED";
             s_rung_word[i] = text_r(row, &techmono_18, 1,
                                     r[i].allowed ? PANEL_C_GREEN : V5_DIM,
-                                    SVC_W, 120, 16, word);
+                                    SVC_W, 120, 16, rung_word(r[i].why));
             s_rung_row[i] = row;
             s_rung_allowed[i] = r[i].allowed;
+            s_rung_why[i]     = r[i].why;
         }
     }
 
@@ -780,6 +806,7 @@ static void close_interior(void)
         s_rung_row[i] = NULL;
         s_rung_word[i] = NULL;
         s_rung_allowed[i] = false;
+        s_rung_why[i] = PANEL_RUNG_CEILING;    /* zero value is _OPEN */
     }
     s_probe_rung = -1;
     /* AND THE HANDOVER, both halves. A request left behind sends three ops
@@ -1114,7 +1141,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
             /* Back to whatever the rung says for itself. */
             if (s_rung_word[s_refuse_rung] != NULL) {
                 lv_label_set_text(s_rung_word[s_refuse_rung],
-                                  s_rung_allowed[s_refuse_rung] ? "RUN" : "LOCKED");
+                                  rung_word(s_rung_why[s_refuse_rung]));
                 lv_obj_set_style_text_color(
                     s_rung_word[s_refuse_rung],
                     lv_color_hex(s_rung_allowed[s_refuse_rung] ? PANEL_C_GREEN

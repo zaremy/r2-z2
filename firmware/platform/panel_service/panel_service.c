@@ -323,9 +323,13 @@ int panel_service_ladder(int ceiling, uint32_t done,
          * of the gate is not "not yet" -- telling the operator to run DOME
          * when raising the ceiling is what actually stands between them and
          * STANCE would send them at the wrong lever. */
-        out[i].why = out[i].allowed  ? PANEL_RUNG_OPEN
-                   : !under_ceiling  ? PANEL_RUNG_CEILING
-                                     : PANEL_RUNG_SEQUENCE;
+        /* LOCOMOTION IS NOT "ABOVE THE CEILING" -- it has no allowlist entry
+         * and no ceiling admits it, so telling the operator to raise one sends
+         * them at a lever that does nothing. It gets its own reason. */
+        out[i].why = out[i].allowed      ? PANEL_RUNG_OPEN
+                   : i >= GATE_TIERS     ? PANEL_RUNG_UNLISTED
+                   : !under_ceiling      ? PANEL_RUNG_CEILING
+                                         : PANEL_RUNG_SEQUENCE;
     }
     return PANEL_LADDER_RUNGS;
 }

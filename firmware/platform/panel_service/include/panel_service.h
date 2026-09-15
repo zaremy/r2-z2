@@ -140,8 +140,9 @@ panel_tone_t panel_service_link_tone(const r2_telemetry_t *tm);
 #define PANEL_LADDER_RUNGS 6
 typedef enum {
     PANEL_RUNG_OPEN = 0,     /* tappable */
-    PANEL_RUNG_CEILING,      /* above the gate's ceiling */
+    PANEL_RUNG_CEILING,      /* above the gate's ceiling: raise it to reach this */
     PANEL_RUNG_SEQUENCE,     /* within the ceiling, but a lower tier is unrun */
+    PANEL_RUNG_UNLISTED,     /* not a rung of the gate at all -- no ceiling admits it */
 } panel_rung_block_t;
 typedef struct {
     const char        *tier;
@@ -149,7 +150,12 @@ typedef struct {
     panel_rung_block_t why;      /* PANEL_RUNG_OPEN exactly when allowed */
 } panel_rung_t;
 
-/* Bit i marks tier i as exercised; `done` is a mask of these. */
+/* Bit i marks tier i as exercised; `done` is a mask of these. The caller is
+ * responsible for the range: this is a SHIFT, and `1u << -1` is undefined
+ * behaviour, not a benign no-op. The one live call site passes a rung index
+ * that is -1 at rest. */
+_Static_assert(PANEL_LADDER_RUNGS <= 32,
+               "a rung index wider than the mask would shift off the end");
 #define PANEL_RUNG_BIT(tier) (1u << (tier))
 
 int panel_service_ladder(int ceiling, uint32_t done,

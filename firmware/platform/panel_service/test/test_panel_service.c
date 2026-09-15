@@ -117,7 +117,9 @@ static void test_a_live_link_says_what_he_said(void)
 /* Every tier exercised. The tests below this line predate the sequence gate
  * (#168) and are about the CEILING; they say so explicitly rather than
  * passing 0 and quietly measuring the new gate instead of the old one. */
-#define ALL_RUN 0x3Fu
+#define ALL_RUN 0x1Fu   /* READ..STANCE. Bit 5 would mark LOCOMOTION run,
+                         * which the product can never reach -- a fixture the
+                         * code under test cannot be handed in life. */
 
 static void test_a_corrupt_ceiling_locks_everything(void)
 {
@@ -185,8 +187,10 @@ static void test_a_high_ceiling_alone_does_not_open_a_rung(void)
     for (int i = 1; i < PANEL_LADDER_RUNGS; i++) {
         CHECK(!r[i].allowed, "%s opened on a ceiling alone, nothing run",
               r[i].tier);
-        CHECK(r[i].why == PANEL_RUNG_SEQUENCE || i >= 5,
-              "%s blocked for the wrong reason (%d)", r[i].tier, (int)r[i].why);
+        const panel_rung_block_t want = (i >= 5) ? PANEL_RUNG_UNLISTED
+                                                : PANEL_RUNG_SEQUENCE;
+        CHECK(r[i].why == want, "%s blocked for the wrong reason (%d, want %d)",
+              r[i].tier, (int)r[i].why, (int)want);
     }
 }
 
@@ -258,7 +262,9 @@ static void test_locomotion_is_shut_even_with_everything_run(void)
     panel_rung_t r[PANEL_LADDER_RUNGS];
     panel_service_ladder(4, ALL_RUN, r);
     CHECK(!r[5].allowed, "LOCOMOTION opened with the whole ladder walked");
-    CHECK(r[5].why == PANEL_RUNG_CEILING, "LOCOMOTION blamed the sequence");
+    /* UNLISTED, not CEILING. No ceiling admits it, so "raise the ceiling" is
+     * advice that cannot work -- the wrong-lever mislead, in a test. */
+    CHECK(r[5].why == PANEL_RUNG_UNLISTED, "LOCOMOTION told to raise a ceiling");
 }
 
 /* ---- the menu ------------------------------------------------------------- */
