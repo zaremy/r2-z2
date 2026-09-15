@@ -13,6 +13,42 @@
 #define DID_IO          0x1A
 #define CID_LEDS_16BIT  0x0E
 
+#define CID_ANIM_STOP   0x2B
+#define CID_LEG_ACTION  0x0D
+#define CID_STOP_AUDIO  0x0A
+#define LEG_ACTION_STOP 0x00
+
+r2_stop_report_t r2_ops_stop_all(r2_seq_fn next_seq, r2_tx_fn tx, void *ctx)
+{
+    r2_stop_report_t r = { false, false, false, 0u };
+    if (next_seq == NULL || tx == NULL) return r;   /* nothing was sent */
+
+    /* EACH ON ITS OWN LINE, deliberately un-chained. A && or an early return
+     * here would make the second and third halts conditional on the first --
+     * which is the exact bug the prototype's comment records, where the
+     * "always attempts both" guarantee was false precisely when it mattered.
+     *
+     * The seq is drawn per command: three sends sharing one seq would let a
+     * single reply resolve all three. */
+    static const uint8_t legs_stop[1] = { LEG_ACTION_STOP };
+
+    r.animation = r2_gate_send(DID_ANIMATRONIC, CID_ANIM_STOP, next_seq(),
+                               NULL, 0, tx, ctx) > 0;
+    r.audio     = r2_gate_send(DID_IO, CID_STOP_AUDIO, next_seq(),
+                               NULL, 0, tx, ctx) > 0;
+    /* The one the gate admits only because its payload is pinned (D-026). */
+    r.legs      = r2_gate_send(DID_ANIMATRONIC, CID_LEG_ACTION, next_seq(),
+                               legs_stop, sizeof legs_stop, tx, ctx) > 0;
+
+    r.sent = (unsigned)r.animation + (unsigned)r.audio + (unsigned)r.legs;
+    return r;
+}
+
+bool r2_stop_is_complete(r2_stop_report_t r)
+{
+    return r.animation && r.audio && r.legs;
+}
+
 int r2_ops_request_battery(uint8_t seq, r2_tx_fn tx, void *ctx)
 { return r2_gate_send(DID_POWER, CID_BATTERY, seq, NULL, 0, tx, ctx); }
 

@@ -2528,14 +2528,26 @@ never been payload-aware.
 - `stop_audio` is no longer above a `READ` ceiling. The test that asserted it
   was has been **amended with this reasoning rather than deleted**; the two
   AUDIO ops that make him *do* something still are.
-- This is half of #168 part 3. The gate can now carry a stop; **the panel still
-  has no control that sends one**. A halt list with no STOP button is a layer
-  with no caller, and that is the next slice, not a finished job.
+- ~~This is half of #168 part 3. The gate can now carry a stop; **the panel
+  still has no control that sends one**.~~ **Closed 2026-09-15**: the panel has
+  a STOP in the ladder interior, and `r2_ops_stop_all` fires all three halts
+  independently and reports which got out. The layer has its caller.
+- **It is still reachable from one screen only** — SERVICE, then the HARDWARE
+  TEST row, then the button. This ADR's own line generalises against that: a
+  stop you have to navigate two levels to reach is not much better than one you
+  have to raise a ceiling for. Defensible while the ceiling is `READ` and
+  nothing can move; it needs revisiting before anything can.
+- **A wake frame swallows the first tap.** D-017 gates presses under the frame
+  so a glance cannot ARM something; a halt is the inverse of arming, so the
+  stop needs two taps at exactly the moment the frame fires — which is the
+  moment something has gone wrong. Carving STOP out of that gate is a D-017
+  decision and is not taken here.
 
 ### What this does not claim
 
 That the halts work on hardware. All three are admitted by the gate and proven
-to reach the transport in a host test; none has been fired at the droid from
-this firmware. The prototype has fired all three, which is why they are the
+to reach the transport in a host test; **none has been fired at the droid from
+this firmware**, and that is still true now the button exists — the panel's most
+prominent control has zero hardware evidence behind it. The prototype has fired all three, which is why they are the
 three — but that is evidence from a different program on a different host.
 

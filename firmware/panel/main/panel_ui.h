@@ -99,6 +99,12 @@ void        panel_ui_note_press(void);
  * tier's ops through the gate like everything else, and reports how many the
  * gate admitted. Returns -1 when nothing was asked for. */
 int         panel_ui_take_probe_request(unsigned *gen);
+
+/* THE STOP, across the same seam. Read-and-clear on the link task; the report
+ * comes back the other way. `sent` is how many of the three halts reached the
+ * transport -- 3 is the only complete stop. */
+bool        panel_ui_take_stop_request(void);
+void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);
 
