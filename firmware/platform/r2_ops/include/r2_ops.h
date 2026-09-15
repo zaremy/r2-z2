@@ -135,6 +135,48 @@ int r2_ops_set_rgb(uint8_t r, uint8_t g, uint8_t b,
  * that gets skipped. */
 int r2_ops_leds_off(uint8_t seq, r2_tx_fn tx, void *ctx);
 
+/* ---- STOP ---------------------------------------------------------------
+ *
+ * THE SINGLE STOP IMPLEMENTATION, and there must only ever be one. The Mac
+ * prototype's `stop_everything` is the source of every rule below; each was
+ * learned from something going wrong.
+ *
+ * THREE COMMANDS, NOT ONE. Halting the animation does not halt a leg action
+ * it already started -- the prototype added the legs halt after #11 with the
+ * note "a stop that leaves the legs moving is not a stop, and a leg action in
+ * flight is the state that put R2 on the floor". Audio is the third because a
+ * droid that has stopped moving and is still shouting has not stopped.
+ *
+ * EVERY ONE IS ATTEMPTED, INDEPENDENTLY. The prototype's version built both
+ * coroutines up front, so a failure at call time skipped the other half
+ * entirely -- "the 'always attempts both' guarantee was exactly false in the
+ * case it existed for". Here each send stands alone and a refusal cannot
+ * short-circuit the rest.
+ *
+ * THE REPORT IS PER-COMMAND. The same prototype "used to print 'stop sent'
+ * while discarding both Response objects -- a rejected stop and a successful
+ * one were indistinguishable, on the path where nobody is watching." The
+ * caller gets which of the three got out, so a partial stop can say so.
+ *
+ * All three are on the gate's HALT list (D-026), admitted at every ceiling.
+ * A stop you have to raise a ceiling to reach is not a stop. */
+typedef uint8_t (*r2_seq_fn)(void);
+
+typedef struct {
+    bool     animation;     /* the halt reached the transport */
+    bool     audio;
+    bool     legs;
+    unsigned sent;          /* how many of the three: 3 is a full stop */
+} r2_stop_report_t;
+
+/* Fires all three. `next_seq` is called once per command -- never reuse one
+ * seq for three sends, or a single reply resolves all of them. */
+r2_stop_report_t r2_ops_stop_all(r2_seq_fn next_seq, r2_tx_fn tx, void *ctx);
+
+/* True only when all three got out. Reading `sent == 3` at every call site is
+ * the kind of thing that gets written `>= 2` by someone in a hurry. */
+bool r2_stop_is_complete(r2_stop_report_t r);
+
 const char *r2_ops_err_name(r2_ops_err_t e);
 /* R2's own error codes, r2_probe.py Response.ERRORS. */
 const char *r2_ops_device_error_name(uint8_t err);

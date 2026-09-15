@@ -482,8 +482,125 @@ static void test_leds_once_the_operator_raises_the_ceiling(void)
     r2_gate_set_ceiling(R2_TIER_READ);
 }
 
+/* ---- #168 part 3: the stop --------------------------------------------- */
+
+static uint8_t stop_seqs[8];
+static unsigned stop_seq_n;
+static uint8_t stop_seq_next(void)
+{
+    const uint8_t v = (uint8_t)(100u + stop_seq_n);
+    if (stop_seq_n < sizeof stop_seqs / sizeof stop_seqs[0])
+        stop_seqs[stop_seq_n] = v;
+    stop_seq_n++;
+    return v;
+}
+
+static unsigned stop_tx_calls;
+static int stop_tx(const uint8_t *f, size_t n, void *ctx)
+{
+    (void)f; (void)n; (void)ctx;
+    stop_tx_calls++;
+    return 0;
+}
+
+/* A transport that FAILS. A send whose tx returns < 0 must be reported as not
+ * sent -- but must not stop the other two being attempted. */
+static int stop_tx_broken(const uint8_t *f, size_t n, void *ctx)
+{
+    (void)f; (void)n; (void)ctx;
+    stop_tx_calls++;
+    return -1;
+}
+
+static void test_a_partial_stop_never_reports_complete(void)
+{
+    /* THE ILLEGAL CASE. "A rejected stop and a successful one were
+     * indistinguishable, on the path where nobody is watching" -- the
+     * prototype's own note. A report that rounds up is worse than no report:
+     * it tells the operator he has stopped when he has not. */
+    r2_stop_report_t r = { true, true, false, 2u };
+    CHECK(!r2_stop_is_complete(r), "two of three reported as a complete stop");
+    r = (r2_stop_report_t){ true, false, true, 2u };
+    CHECK(!r2_stop_is_complete(r), "a missing audio halt reported complete");
+    r = (r2_stop_report_t){ false, true, true, 2u };
+    CHECK(!r2_stop_is_complete(r), "a missing animation halt reported complete");
+    r = (r2_stop_report_t){ false, false, false, 0u };
+    CHECK(!r2_stop_is_complete(r), "a stop that sent nothing reported complete");
+    r = (r2_stop_report_t){ true, true, true, 3u };
+    CHECK(r2_stop_is_complete(r), "all three sent was not reported complete");
+}
+
+static void test_the_stop_fires_all_three_at_a_read_ceiling(void)
+{
+    /* The panel's ceiling. All three are HALTS (D-026), so all three go. */
+    r2_gate_set_ceiling(R2_TIER_READ);
+    stop_seq_n = 0; stop_tx_calls = 0;
+    const r2_stop_report_t r = r2_ops_stop_all(stop_seq_next, stop_tx, NULL);
+
+    CHECK(r.animation, "the animation halt did not go");
+    CHECK(r.audio, "the audio halt did not go at a READ ceiling");
+    CHECK(r.legs, "the legs halt did not go -- it is the one that was banned");
+    CHECK(r.sent == 3u, "sent %u of 3", r.sent);
+    CHECK(r2_stop_is_complete(r), "a full stop did not report complete");
+    CHECK(stop_tx_calls == 3u, "%u frames reached the transport", stop_tx_calls);
+
+    /* THREE DISTINCT SEQS. One seq across three sends lets a single reply
+     * resolve all of them. */
+    CHECK(stop_seq_n == 3u, "next_seq was called %u times", stop_seq_n);
+    CHECK(stop_seqs[0] != stop_seqs[1] && stop_seqs[1] != stop_seqs[2] &&
+          stop_seqs[0] != stop_seqs[2], "the three halts shared a seq");
+}
+
+static void test_one_failing_send_does_not_skip_the_others(void)
+{
+    /* The prototype's scar: building the sends up front meant a failure at
+     * call time skipped the rest, so "always attempts all" was false exactly
+     * when it mattered. Every one must still be ATTEMPTED. */
+    r2_gate_set_ceiling(R2_TIER_READ);
+    stop_seq_n = 0; stop_tx_calls = 0;
+    const r2_stop_report_t r = r2_ops_stop_all(stop_seq_next, stop_tx_broken, NULL);
+
+    CHECK(stop_tx_calls == 3u,
+          "a failing transport stopped the stop after %u of 3", stop_tx_calls);
+    CHECK(stop_seq_n == 3u, "only %u of 3 halts were attempted", stop_seq_n);
+    CHECK(!r2_stop_is_complete(r), "a stop whose sends all failed read complete");
+
+    /* `sent` IS WHAT THE BUTTON SHOWS. A mutation that set it to 3
+     * unconditionally survived a suite that only ever read it on the happy
+     * path -- which is the prototype's "a rejected stop and a successful one
+     * were indistinguishable", reintroduced in the one field the operator
+     * reads. Every flag false means every count zero. */
+    CHECK(r.sent == 0u, "nothing sent, but the report says %u", r.sent);
+    CHECK(!r.animation && !r.audio && !r.legs,
+          "a failing transport still reported a halt away");
+}
+
+static void test_a_stop_with_no_transport_sends_nothing_and_says_so(void)
+{
+    stop_seq_n = 0; stop_tx_calls = 0;
+    r2_stop_report_t r = r2_ops_stop_all(stop_seq_next, NULL, NULL);
+    CHECK(r.sent == 0u, "a stop with no transport reported %u sent", r.sent);
+    CHECK(!r2_stop_is_complete(r), "a stop with no transport reported complete");
+    CHECK(stop_tx_calls == 0u, "something transmitted without a transport");
+    /* AND IT BURNS NO SEQUENCE NUMBERS. Without the early return the gate
+     * still refuses each send, so the report is right by accident while three
+     * seqs are consumed for nothing -- and a seq issued but never used is one
+     * a later reply can alias onto. The guard is what makes it deliberate. */
+    CHECK(stop_seq_n == 0u,
+          "a stop with no transport still drew %u sequence numbers", stop_seq_n);
+
+    r = r2_ops_stop_all(NULL, stop_tx, NULL);
+    CHECK(r.sent == 0u, "a stop with no seq source reported %u sent", r.sent);
+    CHECK(stop_tx_calls == 0u, "a stop with no seq source still transmitted");
+}
+
 int main(void)
 {
+    test_a_partial_stop_never_reports_complete();
+    test_the_stop_fires_all_three_at_a_read_ceiling();
+    test_one_failing_send_does_not_skip_the_others();
+    test_a_stop_with_no_transport_sends_nothing_and_says_so();
+
     printf("r2_ops host tests\n");
     printf("  refusals\n");
     test_parser_refuses_another_ops_response();

@@ -368,6 +368,24 @@ static panel_probe_t s_probe;
 static int         s_probe_rung = -1;      /* which rung the verdict belongs to */
 static int         s_probe_request = -1;   /* a tier main.c has yet to send */
 
+/* THE STOP. Requested on ui_task, sent on link_task, reported back -- the same
+ * one-way handoff the probe uses, for the same reason: the UI must not touch
+ * the radio and the radio must not touch LVGL.
+ *
+ * NO GUARD, DELIBERATELY. Every other control on this panel refuses while
+ * something is in flight. A stop that refuses because a test is running is
+ * useless at the only moment it matters, and "Default to STOP" (CLAUDE.md)
+ * does not carve out "unless busy". Tapping it repeatedly sends it repeatedly,
+ * which is the correct behaviour for a halt. */
+static bool        s_stop_request;
+static uint32_t    s_stop_at;             /* when the verdict was reported */
+static char        s_stop_word[16] = "STOP";
+static lv_obj_t   *s_stop_row, *s_stop_label;
+
+/* How long the outcome stays on the button before it says STOP again. Long
+ * enough to read at arm's length, short enough that the control is back. */
+#define PANEL_STOP_SHOW_MS 3000u
+
 /* THE HANDOVER, and it crosses tasks on two cores: the touch tap and the
  * renderer live in ui_task, the send in link_task. Three words that must be
  * read together are not made safe by `volatile`, which orders the compiler and
@@ -588,6 +606,22 @@ static void build_interior(lv_obj_t *pg)
     /* 14 px, the no-claim grey. Baseline 424; line 14, base 3 -> 413. */
     s_int_foot = text(s_int, &techmono_14, 1, V5_DIM, SVC_X, 413,
                       "EACH TIER OPT-IN \xC2\xB7 NEVER BUNDLED");
+
+    /* THE STOP, on the ladder and nowhere else for now -- the ladder is the
+     * only place this panel arms anything. It sits ON the footer band because
+     * a control the operator may need in a hurry does not belong below the
+     * fold, and a caption restating a rule the rungs already show is the
+     * cheapest thing on this screen to give up for it.
+     *
+     * 44 px tall: the tap target the rest of this file measures itself
+     * against, and the one a thumb finds without aiming. */
+    s_stop_row = lv_obj_create(s_int);
+    bare(s_stop_row);
+    lv_obj_set_size(s_stop_row, SVC_W, 44);
+    lv_obj_set_pos(s_stop_row, SVC_X, 404);
+    lv_obj_add_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
+    s_stop_label = text(s_stop_row, &techmono_24, 1, PANEL_C_AMBER, 0, 10,
+                        "STOP");
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -717,6 +751,7 @@ static void open_interior(panel_svc_t s)
     lv_label_set_text(s_int_back, head);
     lv_label_set_text(s_int_right, "");
     lv_obj_add_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(s_int_body, 334, PANEL_H - INT_BODY_Y);
 
     if (kind == PANEL_SVC_LIST) {
@@ -761,8 +796,12 @@ static void open_interior(panel_svc_t s)
          * one rung whose lock matters most. 53 px rungs and a body that runs
          * to the footer fit all six; each is still far above the 44 pt tap
          * target for when RUN arrives. */
-        lv_obj_set_size(s_int_body, 334, 410 - INT_BODY_Y);   /* footer below */
-        lv_obj_remove_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(s_int_body, 334, 398 - INT_BODY_Y);   /* STOP below */
+        /* THE CAPTION GIVES UP ITS BAND TO THE STOP. Both cannot have it, and
+         * a rule the rungs already state loses to a control that halts him. */
+        lv_obj_add_flag(s_int_foot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_stop_label, s_stop_word);
 
         panel_rung_t r[PANEL_LADDER_RUNGS];
         const int n = panel_service_ladder(ceiling, s_tiers_run, r);
@@ -855,6 +894,20 @@ void panel_ui_tap(int x, int y)
          * the same one the gate would give, and a tap that "did nothing"
          * silently would leave them guessing which. */
         if (panel_service_kind(s_int_open) != PANEL_SVC_LADDER) return;
+
+        /* THE STOP IS TESTED FIRST, and is never refused. It is the one
+         * control on this panel with no precondition: not the ceiling, not a
+         * running test, not the link. Sending a halt with him away costs three
+         * refused frames and tells the operator the link is down, which is
+         * strictly better than a button that does nothing while he moves. */
+        if (s_stop_row != NULL && !lv_obj_has_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN) &&
+            hit(s_stop_row, x, y)) {
+            s_stop_request = true;
+            ESP_LOGW("panel", "STOP requested");
+            lv_label_set_text(s_stop_label, "...");
+            return;
+        }
+
         for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
             if (s_rung_row[i] == NULL || !hit(s_rung_row[i], x, y)) continue;
             if (!s_rung_allowed[i]) {
@@ -1031,6 +1084,28 @@ bool panel_ui_debug_open_row(int row)
 }
 #endif
 
+bool panel_ui_take_stop_request(void)
+{
+    const bool want = s_stop_request;
+    s_stop_request = false;
+    return want;
+}
+
+void panel_ui_stop_sent(unsigned sent, bool link_up)
+{
+    /* WHAT THE BUTTON SAYS AFTER. "A rejected stop and a successful one were
+     * indistinguishable, on the path where nobody is watching" is the
+     * prototype's own note about its shutdown epilogue, and it is the reason
+     * this reports a COUNT rather than a tick.
+     *
+     * 3/3 is the only complete stop. Anything less names itself. */
+    if (!link_up)        snprintf(s_stop_word, sizeof s_stop_word, "NO LINK");
+    else if (sent >= 3u) snprintf(s_stop_word, sizeof s_stop_word, "STOPPED");
+    else                 snprintf(s_stop_word, sizeof s_stop_word, "%u/3 SENT", sent);
+    s_stop_at = s_last_now;
+    if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
+}
+
 int panel_ui_take_probe_request(unsigned *gen)
 {
     portENTER_CRITICAL(&s_probe_mux);
@@ -1164,6 +1239,15 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
             lv_obj_set_style_text_color(s_rung_word[s_refuse_rung],
                                         lv_color_hex(PANEL_C_AMBER), 0);
         }
+    }
+
+    /* The stop's verdict decays, so the control goes back to being a
+     * control. Nothing else on this panel is time-limited; this is, because a
+     * button stuck reading STOPPED is a button that looks spent. */
+    if (s_stop_at != 0u && (now_ms - s_stop_at) >= PANEL_STOP_SHOW_MS) {
+        s_stop_at = 0u;
+        snprintf(s_stop_word, sizeof s_stop_word, "STOP");
+        if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
     }
 
     if (s_int_open != PANEL_SVC_COUNT &&

@@ -233,6 +233,18 @@ static void link_task(void *arg)
             panel_ui_probe_sent(sent, at, probe_gen, up);
         }
 
+        /* THE STOP, BEFORE THE KEEPALIVE GUARD BELOW. Everything after this
+         * point is skipped when the link is down -- which is exactly the
+         * moment a stop must still be attempted and its failure reported,
+         * rather than the button sitting silent. */
+        if (panel_ui_take_stop_request()) {
+            const r2_stop_report_t st =
+                r2_ops_stop_all(next_seq, r2_link_send, NULL);
+            ESP_LOGW(TAG, "STOP: %u of 3 away (anim=%d audio=%d legs=%d)",
+                     st.sent, (int)st.animation, (int)st.audio, (int)st.legs);
+            panel_ui_stop_sent(st.sent, r2_link_is_up());
+        }
+
         if (!r2_link_is_up()) continue;
         if (tick % LINK_TICKS_PER_BEAT != 0) continue;
 
