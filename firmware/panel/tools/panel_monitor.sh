@@ -33,7 +33,23 @@ PORT="$1"
 SECS="${2:-25}"
 OUT="${3:-/tmp/panel.txt}"
 
-script -q /dev/null python -m esp_idf_monitor --no-reset --port "$PORT" \
+# 4. `python` is not on PATH unless an IDF environment is activated, and the
+#    failure is silent in the worst way: `script` reports "python: No such file
+#    or directory" INTO THE CAPTURE FILE, so the run looks like a board that
+#    said nothing. Resolve the interpreter here instead of assuming a shell.
+PYBIN="${IDF_PYTHON:-}"
+if [ -z "$PYBIN" ]; then
+    for c in "$HOME"/.espressif/python_env/*/bin/python; do
+        [ -x "$c" ] && PYBIN="$c" && break
+    done
+fi
+[ -z "$PYBIN" ] && command -v python >/dev/null 2>&1 && PYBIN=python
+if [ -z "$PYBIN" ] || ! "$PYBIN" -c 'import esp_idf_monitor' 2>/dev/null; then
+    echo "no python with esp_idf_monitor (set IDF_PYTHON=/path/to/python)" >&2
+    exit 3
+fi
+
+script -q /dev/null "$PYBIN" -m esp_idf_monitor --no-reset --port "$PORT" \
     --print_filter "*:V" --timestamps > "$OUT" 2>&1 &
 WRAPPER=$!
 
