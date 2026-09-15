@@ -284,6 +284,11 @@ the ladder honest about what exists today; it does not add the missing rungs.
 
 ## D-010 — Excitement is choreographed by us; authored animations are not a behavior library
 **2026-08-17** · *survey complete, 56/56*
+**Amended by D-026 (2026-09-15):** the blanket ban on `perform_leg_action`
+now carries one exception — a payload of exactly `LEG_ACTION_STOP`, which
+HALTS the legs rather than moving them. The reasoning below is unchanged and
+is what the exception is shaped around: the objection is to contents that
+cannot be inspected, and that one payload is inspected and pinned.
 
 `architecture.md` assumed semantic behaviors could delegate to authored
 animations — `celebrate()` plays `EMOTE_LAUGH`, `express_curious()` plays
@@ -2430,4 +2435,107 @@ That the order is now enforced end to end. This gates what the **panel offers**.
 still request any tier the ceiling admits, in any order. Making the order a
 property of the gate rather than of its one UI is a larger change, and it is
 not needed while the panel is the only caller.
+
+## D-026 — A halt outranks the gate, because refusing one leaves him moving
+
+**Status:** accepted, 2026-09-15
+**Answers #168 part 3 (first half). Amends D-010's blanket ban on
+`perform_leg_action`; does not overturn its reasoning.**
+
+### The decision
+
+Three ops are admitted at **every** ceiling, checked **before** the forbidden
+list:
+
+| op | DID/CID | payload |
+|---|---|---|
+| `stop_animation` | 0x17 / 0x2B | none |
+| `stop_audio` | 0x1A / 0x0A | none |
+| `perform_leg_action(STOP)` | 0x17 / 0x0D | **exactly** `{0x00}` |
+
+Each entry pins its exact bytes. `r2_gate_check` takes the payload, and there
+is deliberately no did+cid-only variant.
+
+### Why the panel could not stop him
+
+`CLAUDE.md`: **"Default to STOP. Disconnect or failure must result in stop, not
+last-command."** The panel satisfied that at no ceiling:
+
+- the legs halt was on the **FORBIDDEN** list, refused outright;
+- the audio halt sat behind the **AUDIO** ceiling, and the panel's ceiling is
+  `READ`.
+
+So the stop got *weaker* exactly as the tiers got more dangerous — the opposite
+of the rule. A stop you have to raise a ceiling to reach is not a stop.
+
+### Why this does not reopen D-010
+
+D-010 forbids `perform_leg_action` because **"an animation is a stance command
+whose contents cannot be inspected first"** — `EMOTE_YES` emitted WADDLE three
+times and put him on the floor. That objection is about *contents*, and the
+gate could not act on it: `r2_gate_check` only ever saw `did` and `cid`, so the
+halt had to be banned along with the motion it shares a CID with.
+
+Now the contents are inspected. The entry admits 0x17/0x0D only when the
+payload is exactly one byte, `LEG_ACTION_STOP`. WADDLE, THREE_LEGS, TWO_LEGS, a
+longer payload that merely *begins* with STOP, and a NULL payload claiming a
+length all fall through to FORBIDDEN and are refused as before.
+
+### Why the legs halt is not optional
+
+The Mac prototype's `stop_everything` records why it exists, added after #11:
+
+> "an animation drives LEG actions, and `stop_animation` is not documented to
+> halt one already in flight. A stop that leaves the legs moving is not a stop
+> — and a leg action in flight is the state that put R2 on the floor."
+
+That is the same droid and the same failure this panel is being built to
+supervise. Shipping two of the three halts would be shipping the one that does
+not cover the state that actually fells him.
+
+### Why checked first, above FORBIDDEN
+
+A halt is the one command that must never be refused for being too dangerous:
+refusing it leaves him moving. Putting the list first is only safe because
+every entry is fully specified — nothing matches it approximately, so it cannot
+widen anything by accident. A test sweeps all 65,536 did/cid pairs at the most
+permissive ceiling and asserts that **every** op answering ALLOW is one this
+gate already allowed or one of the three halts — not merely that the ops
+someone thought to name are still refused. The weaker version of that test let
+a rogue fourth entry through.
+
+### Only one of the three actually needed this
+
+Stated because the list reads as three equals and is not:
+
+- **`stop_animation` was already allowed**, on the allowlist at the READ tier
+  with the comment *"a stop is always safe"*. Its halt entry changes nothing,
+  and its payload pin does no work — an unexpected payload fails the length
+  match, falls through to the allowlist, and is admitted anyway.
+- **`stop_audio`'s entry is what moves it off the AUDIO ceiling.** That is a
+  real change and the reason the panel can now silence him from READ.
+- **The legs halt is the only one where the pinned payload is load-bearing**,
+  and it is the only one that was forbidden.
+
+So "every entry is fully specified" is true of the halt list, and is not a
+claim about what the gate answers for those ops overall: the allowlist has
+never been payload-aware.
+
+### Consequences
+
+- `r2_gate_check`'s signature carries the payload. Callers that cannot see one
+  pass `NULL, 0` — which is *not* the legs halt, by design.
+- `stop_audio` is no longer above a `READ` ceiling. The test that asserted it
+  was has been **amended with this reasoning rather than deleted**; the two
+  AUDIO ops that make him *do* something still are.
+- This is half of #168 part 3. The gate can now carry a stop; **the panel still
+  has no control that sends one**. A halt list with no STOP button is a layer
+  with no caller, and that is the next slice, not a finished job.
+
+### What this does not claim
+
+That the halts work on hardware. All three are admitted by the gate and proven
+to reach the transport in a host test; none has been fired at the droid from
+this firmware. The prototype has fired all three, which is why they are the
+three — but that is evidence from a different program on a different host.
 
