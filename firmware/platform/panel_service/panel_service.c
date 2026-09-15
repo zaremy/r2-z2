@@ -271,6 +271,14 @@ static const char *const k_rung[PANEL_LADDER_RUNGS] = {
 };
 #define GATE_TIERS 5        /* READ..STANCE: the rungs the gate can admit */
 
+/* THE LADDER IS THE GATE'S TIERS PLUS LOCOMOTION, which is not a gate tier at
+ * all. panel_ui.c pins this against r2_gate.h's enum where both headers are
+ * visible -- but the host tests never compile panel_ui.c, so that assertion
+ * does not run here. This one does, and it is what stops k_rung_actuator[]
+ * drifting out of step with the rungs it is indexed by. */
+_Static_assert(PANEL_LADDER_RUNGS == GATE_TIERS + 1,
+               "the ladder is the gate's tiers plus LOCOMOTION");
+
 /* WHAT EACH RUNG DRIVES. Indexed like k_rung. The question is not "is this
  * tier dangerous" -- it is "does a tap here make the droid do something in the
  * room", because that is what an operator is consenting to one item at a time.
@@ -278,7 +286,15 @@ static const char *const k_rung[PANEL_LADDER_RUNGS] = {
  * LEDS counts. It cannot fell him, but it is still a thing he DOES, and a
  * carve-out for "harmless" actuators is how the list of harmless ones grows. */
 static const bool k_rung_actuator[PANEL_LADDER_RUNGS] = {
-    false,   /* READ       -- battery, dome position, version: questions only */
+    /* READ. Not "the three ops run_tier_test happens to send" -- this table is
+     * indexed by TIER, so the claim has to hold for everything the gate admits
+     * at READ. It does, but not because they are all questions: `wake` resets
+     * his inactivity timer and is why he has no idle timeout in practice, and
+     * `stop_animation` halts something in flight. Neither COMMANDS motion,
+     * light or sound, which is the property that matters here. The next person
+     * to add a READ op inherits this row, so it says the rule and not the
+     * roster. */
+    false,   /* READ       -- contains no op that commands an actuator */
     true,    /* LEDS       -- he lights up */
     true,    /* AUDIO      -- he makes a noise */
     true,    /* DOME       -- he turns his head */

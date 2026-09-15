@@ -175,12 +175,33 @@ int panel_service_ladder(int ceiling, uint32_t done,
  * inspected first.
  *
  * So the bundle is not banned, it is CONDITIONAL, and the condition is a
- * property of the tier rather than of whoever writes the next one: a tier
- * containing anything that makes him move, light up or make a sound fires one
- * op per tap, and no amount of convenience at the call site can change that.
+ * property of the tier rather than of whoever writes the next one: a TEST of a
+ * tier containing anything that commands motion, light or sound fires one op
+ * per tap.
+ *
+ * A HALT IS EXEMPT, and the word TEST above is carrying that. r2_ops_stop_all
+ * fires three ops on one tap -- two of them ANIMATRONIC -- and must, because a
+ * partial stop is not a stop (D-026). Without this sentence the rule as
+ * written makes the panel's own STOP button illegal, which is how a rule stops
+ * being believed. The unit being rationed is CONSENT TO MAKE HIM ACT; a
+ * command to stop acting is not more of it.
  *
  * READ is the only tier this returns true for, and it says why in the table
- * rather than by being special-cased at the top. */
+ * rather than by being special-cased at the top.
+ *
+ * WHAT THIS IS NOT. It is not per-op consent. The rule's words are
+ * "individually OPT-IN", and opting in means the operator sees a named thing
+ * and chooses it; this only caps how many unnamed things one tap may fire. A
+ * moving tier still needs its ops drawn as rows -- D-025's consequence list
+ * calls that "rebuilds these rows for per-op consent" and it is not done here.
+ * What is done is that the bundle cannot be the default when that work lands.
+ *
+ * AND THE FALSE BRANCH IS UNREACHABLE IN THIS BUILD. run_tier_test refuses
+ * every tier but READ before it reaches the budget, so `may_bundle` is
+ * constant-true there today and a compiler may fold the whole thing away.
+ * This is a marker for whoever raises the ceiling, not a control that is
+ * currently protecting anything -- said plainly because a guard that cannot
+ * fire reads exactly like one that can. */
 bool panel_service_tier_may_bundle(int tier);
 
 /* Does this tier drive anything physical? An out-of-range tier answers TRUE --

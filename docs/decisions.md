@@ -2416,9 +2416,13 @@ STANCE sends them at the wrong lever.
   reopened, because the ladder is built on open. Unobservable at the shipped
   `READ` ceiling (one rung, no sequence) and folded into #168 part 2, which
   rebuilds these rows for per-op consent.
-- **Two of #168's four findings remain open**: consent is still per *tier*
-  rather than per actuator (`run_tier_test` fires three ops per tap), and there
-  is still no abort anywhere. Both bind before the ceiling leaves `READ`.
+- ~~**Two of #168's four findings remain open**: consent is still per *tier*
+  rather than per actuator, and there is still no abort anywhere.~~
+  **Corrected 2026-09-15.** The abort clause was refuted by D-026 and the STOP
+  button; the consent clause is narrowed by D-027 but not closed — a moving
+  tier can no longer bundle, and its ops are still not drawn as rows the
+  operator can choose between. `run_tier_test` does still fire three ops per
+  tap, because READ remains the only runnable tier and READ commands nothing.
 - The verdict window is **no longer** calibrated on read latency. #168 part 4
   gave each tier its own window (READ 2 s, DOME 4 s from D-013), refuses a tier
   nobody has measured rather than defaulting it, and replaced the reading count
@@ -2550,4 +2554,75 @@ to reach the transport in a host test; **none has been fired at the droid from
 this firmware**, and that is still true now the button exists — the panel's most
 prominent control has zero hardware evidence behind it. The prototype has fired all three, which is why they are the
 three — but that is evidence from a different program on a different host.
+
+## D-027 — Actuator-ness is a property of the tier, and LEDS counts
+
+**Status:** accepted, 2026-09-15
+**Narrows #168 part 2. Does not close it — see Consequences.**
+
+### The decision
+
+A rung's **test** may fire more than one op per tap only if that tier contains
+no op which commands motion, light or sound. READ qualifies; every other rung
+does not. An unknown or out-of-range tier is assumed to command something.
+
+A **halt** is exempt. `r2_ops_stop_all` fires three ops on one tap, two of them
+ANIMATRONIC, and must — a partial stop is not a stop (D-026).
+
+### Why the rule needed a reading at all
+
+`CLAUDE.md`: *"Each **actuator** test is individually opt-in, never bundled."*
+READ asks his battery, his dome position and his firmware version, and commands
+nothing, so one tap for three reads breaks no rule. The issue's framing — that
+`run_tier_test` "fires three ops per tap" — describes something that is true
+and, at READ, harmless.
+
+What is not harmless is the SHAPE. Tier-as-bundle one rung up is the
+prohibition itself: a STANCE tap that fires whatever STANCE contains is exactly
+what the rule exists to prevent, and D-010 put animations at that tier because
+their contents cannot be inspected first.
+
+### Why LEDS counts
+
+It cannot fell him. It is still something he **does**, in the room, where
+someone can see it — and a carve-out for harmless actuators is how the list of
+harmless ones grows. The question the table answers is not "is this dangerous"
+but "is this a thing the operator is consenting to make him do".
+
+### Why the property lives on the tier, not the op list
+
+`k_rung_actuator[]` is indexed by rung, so its claim has to hold for everything
+the gate admits at that tier — not for the ops `run_tier_test` happens to send
+today. READ's row survives that test, but not for the obvious reason: `wake`
+resets his inactivity timer (it is why he has no idle timeout in practice) and
+`stop_animation` halts something in flight. Neither **commands** an actuator,
+which is the property the row asserts. Stating it as the rule rather than as
+today's roster is what stops the next READ op inheriting the bundle silently.
+
+### What this does not deliver
+
+**Per-op consent.** "Individually opt-in" means the operator sees a named thing
+and chooses it. This caps how many unnamed things one tap may fire. A moving
+tier still needs its ops drawn as rows — D-025's consequence list calls that
+"rebuilds these rows for per-op consent", and it is not done.
+
+**A live guard.** `run_tier_test` refuses every tier but READ before reaching
+the budget, so the one-op branch is unreachable in this build and a compiler
+may fold it away. It is a marker left where whoever raises the ceiling will be
+standing, not protection that currently protects. Recorded as such because a
+guard that cannot fire reads exactly like one that can — this repo has the scar
+(four PRs of an LED stack that merged inert).
+
+### Consequences
+
+- The budget is enforced in `run_tier_test`, which is the line every **test**
+  crosses. It is not the line every OP crosses — that is `r2_gate_send`, and
+  `main.c` emits ops from six places. An earlier draft of this claimed
+  otherwise and was wrong in a way that would have misled the next reader.
+- `#168` now has all four parts **addressed**; part 2 is narrowed rather than
+  closed and the issue should stay open until a moving tier's ops are rows.
+- `PANEL_LADDER_RUNGS == GATE_TIERS + 1` is asserted in `panel_service.c` as
+  well as `panel_ui.c`, because the host tests never compile the latter — the
+  assertion that tied the two index spaces did not run where the table is
+  tested.
 

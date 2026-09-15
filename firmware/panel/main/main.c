@@ -334,12 +334,20 @@ static unsigned run_tier_test(int tier)
      * questions and moves nothing, so one tap for three reads breaks no rule
      * -- "each ACTUATOR test is individually opt-in" is about actuators.
      *
-     * THE GUARD IS HERE, AT THE SENDS, not at the UI. A rule enforced where
-     * the rungs are drawn is a rule the next caller can route around; this is
-     * the line every op crosses. The moment a tier that moves him becomes
-     * runnable, its tap fires ONE op whatever the loop below says, and
-     * whoever adds that tier has to add the per-op control rather than
-     * discovering later that their three-op tap was legal. */
+     * WHERE THIS IS, AND WHAT IT IS NOT. An earlier version of this comment
+     * called run_tier_test "the line every op crosses". It is not: this file
+     * emits ops from six places, and the line every op really crosses is
+     * r2_gate_send -- as the paragraph twenty lines above already says. This
+     * is the line every TEST crosses, which is the right place for a rule
+     * about what one tap may fire and the wrong place to claim universality.
+     *
+     * IT CANNOT FIRE TODAY. The refusal at the top of this function means
+     * `tier` is provably R2_TIER_READ by the time we get here, so the budget
+     * is constant 3 and the warning below is dead code. It is kept as a
+     * MARKER: whoever makes a moving tier runnable edits this function, and
+     * finds a named predicate telling them their tap may fire one op --
+     * before they discover the three-op version was legal. It is not
+     * protection that exists; it is a note left where they will stand. */
     const unsigned budget = panel_service_tier_may_bundle(tier) ? 3u : 1u;
     if (budget < 3u)
         ESP_LOGW(TAG, "tier %d drives an actuator: one op per tap", tier);
@@ -369,7 +377,7 @@ static unsigned run_tier_test(int tier)
         sent++;
     }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
-    ESP_LOGW(TAG, "READ test: %u of %u ops away", sent, budget);
+    ESP_LOGW(TAG, "tier %d test: %u of %u ops away", tier, sent, budget);
     return sent;
 }
 
