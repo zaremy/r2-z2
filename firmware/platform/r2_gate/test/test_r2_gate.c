@@ -11,6 +11,9 @@
 #include <string.h>
 
 #include "r2_gate.h"
+/* For the frame the gate SHOULD have produced: the wire-bytes assertion
+ * builds the expected encoding rather than trusting a call count. */
+#include "r2_packet.h"
 
 static int failures = 0, checks = 0;
 
@@ -210,13 +213,20 @@ static void test_a_leg_action_that_is_not_stop_is_still_forbidden(void)
      * cannot be inspected first (D-010) -- WADDLE is what put him on the
      * floor. The halt entry pins the payload to exactly {STOP}; everything
      * else about that op must be refused exactly as before. */
-    r2_gate_set_ceiling(R2_TIER_STANCE);          /* the most permissive */
+    /* THE SENTINEL, like every other set_ceiling in this file. Without it
+     * test_untouched_default silently stops testing anything: it asserts
+     * the INITIALISER is READ only when nothing has set the ceiling, and
+     * these tests set it. Measured -- with these four running first and
+     * not tripping it, `s_ceiling = R2_TIER_STANCE` survived the whole
+     * suite here while main killed it. That initialiser is the shipping
+     * panel's ONLY ceiling: firmware/panel never calls set_ceiling. */
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_STANCE);
 
     const uint8_t waddle[]   = { 3 };             /* LEG_ACTION_WADDLE */
     const uint8_t three[]    = { 1 };
     const uint8_t two[]      = { 2 };
     const uint8_t stop_plus[] = { 0, 0 };         /* STOP, then something else */
-    const uint8_t empty[]    = { 0 };
+    const uint8_t stop[]     = { 0 };             /* LEG_ACTION_STOP */
 
     CHECK(r2_gate_check(0x17, 0x0D, waddle, 1) == R2_GATE_FORBIDDEN,
           "WADDLE got through the halt list");
@@ -240,10 +250,10 @@ static void test_a_leg_action_that_is_not_stop_is_still_forbidden(void)
     CHECK(r2_gate_check(0x17, 0x0D, NULL, 1) == R2_GATE_FORBIDDEN,
           "a NULL payload claiming one byte was treated as the legs STOP");
 
-    CHECK(r2_gate_check(0x17, 0x0D, empty, 1) == R2_GATE_ALLOW,
-          "the legs STOP is refused");
+    CHECK(r2_gate_check(0x17, 0x0D, stop, 1) == R2_GATE_ALLOW,
+          "the legs STOP was refused");
 
-    r2_gate_set_ceiling(R2_TIER_READ);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
 }
 
 static void test_every_halt_is_admitted_at_every_ceiling(void)
@@ -252,7 +262,7 @@ static void test_every_halt_is_admitted_at_every_ceiling(void)
      * stop, and the panel's ceiling is READ. */
     const uint8_t stop[] = { 0 };
     for (int c = R2_TIER_READ; c < R2_TIER__COUNT; c++) {
-        r2_gate_set_ceiling((r2_tier_t)c);
+        s_ceiling_touched = 1; r2_gate_set_ceiling((r2_tier_t)c);
         CHECK(r2_gate_check(0x17, 0x2B, NULL, 0) == R2_GATE_ALLOW,
               "stop_animation refused at ceiling %d", c);
         CHECK(r2_gate_check(0x1A, 0x0A, NULL, 0) == R2_GATE_ALLOW,
@@ -260,7 +270,7 @@ static void test_every_halt_is_admitted_at_every_ceiling(void)
         CHECK(r2_gate_check(0x17, 0x0D, stop, 1) == R2_GATE_ALLOW,
               "the legs STOP refused at ceiling %d", c);
     }
-    r2_gate_set_ceiling(R2_TIER_READ);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
 }
 
 static void test_the_halt_list_widens_nothing_else(void)
@@ -269,39 +279,63 @@ static void test_the_halt_list_widens_nothing_else(void)
      * Sweep the whole did/cid space at the most permissive ceiling and assert
      * that the ONLY verdicts that changed are the three halts. Anything else
      * newly allowed would be this change leaking. */
-    r2_gate_set_ceiling(R2_TIER_STANCE);
+    /* THE EXPECTED SET, written out longhand. Asserting "the op I thought of
+     * is still refused" is the data-not-the-guard shape: a ROGUE FOURTH HALT
+     * ENTRY for an op that is merely NOT_ALLOWLISTED survived the earlier
+     * version of this test, because nothing compared the sweep against a
+     * baseline. This is that baseline. */
+    static const struct { uint8_t did, cid; } MAY_ALLOW[] = {
+        { 0x13, 0x0D }, { 0x13, 0x03 },                 /* wake, battery */
+        { 0x17, 0x14 }, { 0x17, 0x25 }, { 0x17, 0x16 }, /* head, leg reads */
+        { 0x17, 0x2B },                                 /* stop_animation */
+        { 0x18, 0x01 }, { 0x11, 0x00 },                 /* sensors, version */
+        { 0x1A, 0x0E },                                 /* leds */
+        { 0x1A, 0x07 }, { 0x1A, 0x08 }, { 0x1A, 0x0A }, /* audio */
+        { 0x17, 0x0F },                                 /* dome */
+    };
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_STANCE);
     for (unsigned did = 0; did < 256u; did++) {
         for (unsigned cid = 0; cid < 256u; cid++) {
-            const int is_stop_anim  = (did == 0x17 && cid == 0x2B);
-            const int is_stop_audio = (did == 0x1A && cid == 0x0A);
             /* Empty payload: the legs halt needs one byte, so it is not in
              * play here and every other op must answer as it always did. */
             const r2_gate_verdict_t v =
                 r2_gate_check((uint8_t)did, (uint8_t)cid, NULL, 0);
-            if (is_stop_anim || is_stop_audio) {
-                CHECK(v == R2_GATE_ALLOW, "halt %02x/%02x refused", did, cid);
-            } else if (v == R2_GATE_ALLOW) {
-                /* Allowed for its own reasons -- it must be on the allowlist,
-                 * not on the halt list. */
-                CHECK(!(did == 0x17 && cid == 0x0D),
-                      "perform_leg_action allowed with no payload");
-            }
+            if (v != R2_GATE_ALLOW) continue;
+            int expected = 0;
+            for (size_t k = 0; k < sizeof MAY_ALLOW / sizeof MAY_ALLOW[0]; k++)
+                if (MAY_ALLOW[k].did == did && MAY_ALLOW[k].cid == cid)
+                    expected = 1;
+            CHECK(expected, "%02x/%02x is newly ALLOWED at the top ceiling",
+                  did, cid);
         }
     }
-    r2_gate_set_ceiling(R2_TIER_READ);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
 }
 
 static void test_a_halt_actually_reaches_the_transport(void)
 {
     /* PROVE THE GATE AT THE EFFECTOR. A verdict function that says ALLOW
      * proves nothing about what r2_gate_send does with it -- this repo's own
-     * rule. Drive the real send and count the bytes that reach tx. */
-    r2_gate_set_ceiling(R2_TIER_READ);
+     * rule. Drive the real send and read the bytes that reach tx. */
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
     const uint8_t stop[] = { 0 };
     tx_reset();
     const int n = r2_gate_send(0x17, 0x0D, 1, stop, 1, fake_tx, NULL);
     CHECK(n > 0, "the legs STOP did not send (%d)", n);
     CHECK(tx_calls == 1, "the legs STOP reached tx %d times", tx_calls);
+
+    /* AND THE BYTES ON THE WIRE ARE THE ONES THAT WERE VALIDATED. Counting
+     * tx calls proves the gate said yes; it does not prove WHAT went out.
+     * A mutant that validated {STOP} and then encoded {WADDLE} before
+     * transmitting survived a test that only counted calls -- a
+     * time-of-check/time-of-use hole, unpinned. Compare against the frame the
+     * packet layer makes for the payload we asked for. */
+    uint8_t want[R2_ENCODED_MAX(8)];
+    const int wn = r2_packet_encode(0x17, 0x0D, 1, stop, 1, want, sizeof want);
+    CHECK(wn > 0, "could not encode the expected STOP frame");
+    CHECK(tx_len == (size_t)wn && memcmp(tx_buf, want, (size_t)wn) == 0,
+          "the bytes that reached the transport are not the STOP frame that "
+          "was validated");
 
     /* And the motion still does not. */
     const uint8_t waddle[] = { 3 };
@@ -313,11 +347,6 @@ static void test_a_halt_actually_reaches_the_transport(void)
 
 int main(void)
 {
-    test_a_leg_action_that_is_not_stop_is_still_forbidden();
-    test_every_halt_is_admitted_at_every_ceiling();
-    test_the_halt_list_widens_nothing_else();
-    test_a_halt_actually_reaches_the_transport();
-
     printf("r2_gate host tests\n==================\n");
     test_untouched_default();          /* FIRST: the default is only observable now */
     test_forbidden_at_every_ceiling();
@@ -326,6 +355,17 @@ int main(void)
     test_clamping();
     test_allowed_ops_transmit();
     test_no_tx_is_refused_not_crashed();
+
+    /* LAST, and test_untouched_default stays FIRST. Every one of these sets
+     * the ceiling, and that test can only prove the INITIALISER is READ
+     * while nothing has. Run ahead of it they made it vacuous: measured,
+     * `s_ceiling = R2_TIER_STANCE` survived the whole suite here and was
+     * killed on main. The panel never calls set_ceiling, so that
+     * initialiser is the shipping ceiling. */
+    test_a_leg_action_that_is_not_stop_is_still_forbidden();
+    test_every_halt_is_admitted_at_every_ceiling();
+    test_the_halt_list_widens_nothing_else();
+    test_a_halt_actually_reaches_the_transport();
     printf("==================\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

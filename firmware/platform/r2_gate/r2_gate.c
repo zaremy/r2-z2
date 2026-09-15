@@ -53,6 +53,10 @@ static const op_t FORBIDDEN[] = {
      * inspected first. EMOTE_YES emitted WADDLE three times and put him on the
      * floor with perform_leg_action never called by us. */
     { DID_ANIMATRONIC, 0x05, R2_TIER_READ, "play_animation" },
+    /* EXCEPT with a payload of exactly {LEG_ACTION_STOP}, which the HALTS
+     * list below admits before this one is consulted (D-026). The ban is on
+     * the MOTION; the halt shares its CID and could not be told apart until
+     * the gate learned to read the payload. */
     { DID_ANIMATRONIC, 0x0D, R2_TIER_READ, "perform_leg_action" },
     /* #22 AC6: the float is finer-grained than the stance enum and documented
      * nowhere. A write is a guess at an actuator that can fell him. */

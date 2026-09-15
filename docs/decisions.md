@@ -284,6 +284,11 @@ the ladder honest about what exists today; it does not add the missing rungs.
 
 ## D-010 — Excitement is choreographed by us; authored animations are not a behavior library
 **2026-08-17** · *survey complete, 56/56*
+**Amended by D-026 (2026-09-15):** the blanket ban on `perform_leg_action`
+now carries one exception — a payload of exactly `LEG_ACTION_STOP`, which
+HALTS the legs rather than moving them. The reasoning below is unchanged and
+is what the exception is shaped around: the objection is to contents that
+cannot be inspected, and that one payload is inspected and pinned.
 
 `architecture.md` assumed semantic behaviors could delegate to authored
 animations — `celebrate()` plays `EMOTE_LAUGH`, `express_curious()` plays
@@ -2494,8 +2499,27 @@ A halt is the one command that must never be refused for being too dangerous:
 refusing it leaves him moving. Putting the list first is only safe because
 every entry is fully specified — nothing matches it approximately, so it cannot
 widen anything by accident. A test sweeps all 65,536 did/cid pairs at the most
-permissive ceiling and asserts that the only verdicts that changed are the
-halts.
+permissive ceiling and asserts that **every** op answering ALLOW is one this
+gate already allowed or one of the three halts — not merely that the ops
+someone thought to name are still refused. The weaker version of that test let
+a rogue fourth entry through.
+
+### Only one of the three actually needed this
+
+Stated because the list reads as three equals and is not:
+
+- **`stop_animation` was already allowed**, on the allowlist at the READ tier
+  with the comment *"a stop is always safe"*. Its halt entry changes nothing,
+  and its payload pin does no work — an unexpected payload fails the length
+  match, falls through to the allowlist, and is admitted anyway.
+- **`stop_audio`'s entry is what moves it off the AUDIO ceiling.** That is a
+  real change and the reason the panel can now silence him from READ.
+- **The legs halt is the only one where the pinned payload is load-bearing**,
+  and it is the only one that was forbidden.
+
+So "every entry is fully specified" is true of the halt list, and is not a
+claim about what the gate answers for those ops overall: the allowlist has
+never been payload-aware.
 
 ### Consequences
 
