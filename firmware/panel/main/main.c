@@ -45,12 +45,53 @@ static const char *TAG = "panel";
 static r2_telemetry_t s_tm;
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
-static uint8_t next_seq(void) { static uint8_t s; return s++; }
+/* 0..254, NEVER 0xFF. R2 stamps its own unsolicited notifications with seq
+ * 0xFF -- head_reset_to_zero, leg_action_complete, animation_complete -- and
+ * the Mac prototype has reserved it from the start for exactly that reason:
+ * "Our own sequence counter is `% 0xFF` ... so it can never collide with 0xFF.
+ * That is what makes 'unmatched' a safe test for 'robot-initiated'."
+ * (r2_probe.py:226). This counter walked all 256, so roughly one test in
+ * eighty held 0xFF and a notification could strike a question R2 never heard
+ * -- on DOME and STANCE, the two tiers that EMIT those notifications and the
+ * two the sequence gate exists to protect. */
+static uint8_t next_seq(void) { static uint8_t s; s = (uint8_t)((s + 1u) % 0xFFu); return s; }
 
 /* Asked once per connection, cleared when the link falls. Written by the UI
  * loop and cleared on the NimBLE host task, hence volatile: the worst
  * interleaving costs one duplicate probe, never a missed one. */
 static volatile bool s_version_asked;
+
+/* WHAT THE RUNNING TEST ASKED, STRUCK OFF AS ITS OWN REPLIES ARRIVE (#168).
+ *
+ * THREE TASKS TOUCH THIS, which is why it takes a real lock and not the
+ * `volatile` above. `link_task` fills it when a test's ops go out; the NimBLE
+ * host task strikes entries in on_frame(); ui_task reads the count to decide
+ * the verdict. It is an array plus two counters -- a torn read here is not one
+ * stale value for one frame, it is a verdict computed from half an update.
+ *
+ * The critical sections are a handful of byte compares over at most eight
+ * entries, taken on the radio's own callback. That is short enough to sit in a
+ * spinlock and nowhere near long enough to hold off a higher-priority task. */
+static portMUX_TYPE s_ledger_mux = portMUX_INITIALIZER_UNLOCKED;
+static panel_ledger_t s_ledger;
+
+/* Every reply carries back the seq it answers. Returns whether it struck one
+ * of the running test's questions -- a poll, a keepalive or an echo does not.*/
+static bool ledger_note(uint8_t seq)
+{
+    portENTER_CRITICAL(&s_ledger_mux);
+    const bool mine = panel_ledger_note(&s_ledger, seq);
+    portEXIT_CRITICAL(&s_ledger_mux);
+    return mine;
+}
+
+unsigned panel_main_test_answered(void)
+{
+    portENTER_CRITICAL(&s_ledger_mux);
+    const unsigned n = panel_ledger_answered(&s_ledger);
+    portEXIT_CRITICAL(&s_ledger_mux);
+    return n;
+}
 
 static void on_state(r2_link_state_t s, int reason, void *ctx)
 {
@@ -69,16 +110,41 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
     uint8_t scratch[64];
     r2_response_t r;
     if (r2_packet_decode(frame, len, scratch, sizeof scratch, &r) != R2_OK) return;
+    const bool is_response = (r.flags & R2_FLAG_IS_RESPONSE) != 0u;
 
+    /* A FRAME IS NOT AN ANSWER. Three things have to be true before this
+     * strikes a question off the running test, and each was a real hole:
+     *
+     *   IT MUST BE A RESPONSE. An unsolicited notification carries a seq too
+     *   (r2_packet.c populates it either way), so matching on seq alone let
+     *   robot-initiated traffic resolve a live waiter. The Mac prototype hit
+     *   this and gated on the flag; so do we.
+     *
+     *   IT MUST NOT BE AN ERROR. r2_ops refuses a reply with err != 0
+     *   (R2_OPS_DEVICE_ERROR), so the counter this replaced could never be
+     *   credited by a refusal -- the stamp was only written after a good
+     *   parse. Striking before the parse was strictly WEAKER than the code it
+     *   replaced: a STANCE command R2 refuses would have read 3/3 OK and
+     *   opened the next rung.
+     *
+     *   IT MUST BE ONE OF OURS. The strike happens in the parse arms, so only
+     *   a reading we can actually read counts.
+     *
+     * "Answered" has to mean answered, or the sequence gate above it is
+     * counting the wrong thing again. */
     r2_battery_t b;
     r2_head_t    h;
     r2_version_t v;
-    if (r2_ops_parse_battery(&r, &b) == R2_OPS_OK)
+    if (r2_ops_parse_battery(&r, &b) == R2_OPS_OK) {
         r2_telemetry_battery(&s_tm, b.centivolts, now_ms());
-    else if (r2_ops_parse_head(&r, &h) == R2_OPS_OK)
+        if (is_response) (void)ledger_note(r.seq);
+    } else if (r2_ops_parse_head(&r, &h) == R2_OPS_OK) {
         r2_telemetry_dome(&s_tm, h.degrees, now_ms());
-    else if (r2_ops_parse_version(&r, &v) == R2_OPS_OK)
+        if (is_response) (void)ledger_note(r.seq);
+    } else if (r2_ops_parse_version(&r, &v) == R2_OPS_OK) {
         r2_telemetry_version(&s_tm, v.major, v.minor, v.revision, now_ms());
+        if (is_response) (void)ledger_note(r.seq);
+    }
 }
 
 /* Talks to R2. Never touches LVGL. */
@@ -242,10 +308,37 @@ static unsigned run_tier_test(int tier)
                  tier);
         return 0;
     }
+    /* A FRESH LEDGER PER TEST. Anything outstanding from a previous run is
+     * this run's noise -- counting a late reply to the last test as an answer
+     * to this one is the same overcounting by another route. */
+    portENTER_CRITICAL(&s_ledger_mux);
+    panel_ledger_reset(&s_ledger);
+    portEXIT_CRITICAL(&s_ledger_mux);
+
+    /* THE SEQ IS TAKEN ONCE AND USED TWICE: sent on the wire and written down
+     * here. Calling next_seq() again for the ledger would record a number
+     * nothing will ever answer, and the test could never pass. */
     unsigned sent = 0;
-    if (r2_ops_request_battery(next_seq(), r2_link_send, NULL) > 0) sent++;
-    if (r2_ops_request_head(next_seq(), r2_link_send, NULL) > 0)    sent++;
-    if (r2_ops_probe_version(next_seq(), r2_link_send, NULL) > 0)   sent++;
+    for (unsigned k = 0; k < 3; k++) {
+        const uint8_t sq = next_seq();
+        /* WRITTEN DOWN BEFORE IT GOES OUT. r2_link_send hands the frame to the
+         * stack and returns; the reply lands on the NimBLE host task. Record
+         * after sending and a preemption in that gap drops the strike, so a
+         * healthy test settles PARTIAL. An entry for an op that then fails to
+         * send is harmless -- `sent` is what becomes `expected`, so an
+         * un-strikeable slot is never waited on. */
+        portENTER_CRITICAL(&s_ledger_mux);
+        panel_ledger_add(&s_ledger, sq);
+        portEXIT_CRITICAL(&s_ledger_mux);
+        int ok;
+        switch (k) {
+        case 0:  ok = r2_ops_request_battery(sq, r2_link_send, NULL); break;
+        case 1:  ok = r2_ops_request_head(sq, r2_link_send, NULL);    break;
+        default: ok = r2_ops_probe_version(sq, r2_link_send, NULL);   break;
+        }
+        if (ok <= 0) continue;          /* the gate refused it: never asked */
+        sent++;
+    }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
     ESP_LOGW(TAG, "READ test: %u of 3 ops away", sent);
     return sent;
