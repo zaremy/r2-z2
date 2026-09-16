@@ -373,6 +373,25 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
                            panel_tier_op_t out[PANEL_TIER_OPS_MAX])
 {
     if (out == NULL || ops == NULL || n_ops <= 0) return 0;
+    /* BOUNDED BEFORE THE FIRST DEREFERENCE. The validation loop below reads
+     * every one of `n_ops` entries, and the capacity refusal used to come
+     * after it -- so a caller passing a count larger than its array got the
+     * documented refusal only after this function had read memory it does not
+     * own. A fuzzer under AddressSanitizer called it what it is: a
+     * heap-buffer-overflow READ, in a function whose whole contract is that it
+     * takes arbitrary caller input.
+     *
+     * The bound is the same one the capacity check applies; it just has to be
+     * applied first. The check below still stands, because it also refuses the
+     * list that fits only until a bundle row is added to it. */
+    if (n_ops > PANEL_TIER_OPS_MAX) return 0;
+    /* AND THE CALLER'S LIST MAY NOT BE THE OUTPUT. The bundle row is written
+     * to out[0] before the copy loop reads ops[0], so an aliased call
+     * overwrites its own input: a fuzzer got four identical "RUN ALL 3" rows
+     * out of READ's catalogue, breaking every invariant this file states at
+     * once. Nothing does this today; filtering a catalogue in place is a
+     * natural thing for the next person to try. */
+    if (ops == out) return 0;
 
     /* WILL THERE BE A BUNDLE ROW? Decided before the capacity check, because
      * the old check reserved room for one unconditionally -- so an ACTUATOR
@@ -407,7 +426,11 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
          * bundled test wearing a name -- what CLAUDE.md forbids, reached
          * without going near the RUN ALL row, which the `moves` veto below
          * does nothing about. It is also the only value run_op honours. */
-        if (ops[i].op != PANEL_OP_ALL && ops[i].sends != 1) return 0;
+        /* The `op != PANEL_OP_ALL` this used to carry was dead -- the line
+         * above has already returned for that case. Removed rather than left
+         * as a conjunct that cannot be false, which is the shape of error this
+         * file has now corrected three times. */
+        if (ops[i].sends != 1) return 0;
         /* A NAME MUST END INSIDE ITS FIELD. `char name[N]` initialised from a
          * literal of exactly N characters drops the NUL -- silently, with no
          * warning under -Wall -Wextra -Werror -- and the label would then be

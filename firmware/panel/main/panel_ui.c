@@ -410,6 +410,17 @@ static int         s_probe_op = -1;        /* which op row the verdict belongs t
  * index would paint the wrong one. -1 when nothing is flashing. */
 static int         s_refuse_op = -1;
 static uint32_t    s_refuse_op_at;
+/* WHAT EACH ROW SAYS FOR ITSELF, so the BUSY flash can put it back.
+ *
+ * The first version expired the flash by writing the literal "RUN" in green,
+ * copied from the rung flash without copying the half that matters: the rung
+ * restores from s_rung_why, its own state. A row that had settled NO REPLY in
+ * amber came back reading a green RUN -- a verdict erased, in the reassuring
+ * direction, on the panel whose one job is to report what R2 answered. And it
+ * is the routine case: the probe window is per tier, so an operator walking
+ * three rows taps into a busy window every time. */
+static char        s_op_says[PANEL_TIER_OPS_MAX][16];
+static uint32_t    s_op_says_col[PANEL_TIER_OPS_MAX];
 static int         s_probe_request = -1;   /* a tier main.c has yet to send */
 /* AND WHICH OP OF IT. Armed under the same spinlock and in the same breath as
  * s_probe_request, because a tier with a stale op is a tap that fires
@@ -925,6 +936,8 @@ static bool open_ops(int tier)
              0, 6, s_op[i].name);
         s_op_word[i] = text_r(row, &techmono_18, 1, PANEL_C_GREEN,
                               SVC_W - OP_INDENT, 120, 18, "RUN");
+        snprintf(s_op_says[i], sizeof s_op_says[i], "RUN");
+        s_op_says_col[i] = PANEL_C_GREEN;
         s_op_row[i] = row;
     }
     s_ops_tier = tier;
@@ -1331,6 +1344,8 @@ void panel_ui_tap(int x, int y)
                     lv_label_set_text(s_op_word[i], "...");
                     lv_obj_set_style_text_color(s_op_word[i],
                                                 lv_color_hex(V5_TEXT), 0);
+                    snprintf(s_op_says[i], sizeof s_op_says[i], "...");
+                    s_op_says_col[i] = V5_TEXT;
                 }
                 ESP_LOGI("panel", "RUN requested: tier %d op %d (%s)",
                          s_ops_tier, (int)s_op[i].op, s_op[i].name);
@@ -1782,9 +1797,12 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
             s_op_word[s_refuse_op] == NULL || s_refuse_op == s_probe_op) {
             s_refuse_op = -1;
         } else if (now_ms - s_refuse_op_at >= PANEL_REFUSE_FLASH_MS) {
-            lv_label_set_text(s_op_word[s_refuse_op], "RUN");
+            /* BACK TO WHAT THE ROW SAYS FOR ITSELF, which is the half the
+             * first version dropped: a row that had settled NO REPLY came back
+             * green and reading RUN. */
+            lv_label_set_text(s_op_word[s_refuse_op], s_op_says[s_refuse_op]);
             lv_obj_set_style_text_color(s_op_word[s_refuse_op],
-                                        lv_color_hex(PANEL_C_GREEN), 0);
+                                        lv_color_hex(s_op_says_col[s_refuse_op]), 0);
             s_refuse_op = -1;
         } else {
             lv_label_set_text(s_op_word[s_refuse_op], "BUSY");
@@ -1816,6 +1834,10 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         if (!panel_probe_settled(&s_probe))  colour = V5_TEXT;      /* running */
         else if (!panel_probe_passed(&s_probe)) colour = PANEL_C_AMBER;
         lv_obj_set_style_text_color(lbl, lv_color_hex(colour), 0);
+        /* AND THE ROW REMEMBERS IT, so a BUSY flash over this row later puts
+         * the verdict back rather than a green RUN. */
+        snprintf(s_op_says[s_probe_op], sizeof s_op_says[s_probe_op], "%s", word);
+        s_op_says_col[s_probe_op] = colour;
 
         /* THE ROW IS EXERCISED ONLY ON A PASS, AND THE TIER ONLY WHEN THE
          * SET IS (#168). Idempotent: this runs every tick while the verdict

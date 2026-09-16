@@ -426,9 +426,18 @@ static unsigned run_op(int tier, panel_op_t op)
              * `expected`, a green 4/4, and the new op never leaving. Nothing
              * on the glass or in the log would look different.
              *
-             * The ledger entry for this k was already written, so the test
-             * settles PARTIAL rather than passing: a visible failure, which is
-             * the point. */
+             * AND THE TEST STILL PASSES, which is worth saying plainly
+             * because the first version of this comment claimed it settles
+             * PARTIAL. It does not: `ok = 0` means `sent` is not incremented,
+             * `sent` becomes `expected`, and three answers to three requests
+             * is a pass. The row would read a green 3/3 OK under a label
+             * saying RUN ALL 4.
+             *
+             * The signal is this log line and that mismatch, not a failed
+             * verdict -- and the comment fifteen lines above already says why
+             * (an entry for an op that fails to send is harmless, because
+             * `sent` is what becomes `expected`). Two comments in one function
+             * disagreeing is how a reader ends up trusting the wrong one. */
             ESP_LOGE(TAG, "REFUSED: no op is wired at index %u -- the catalogue "
                           "and this switch disagree", k);
             ok = 0;
@@ -631,6 +640,19 @@ static bool tour_lock(const char *step)
  * wrong one under a right name is the lie this rig exists to prevent. */
 static void tour_shot(unsigned slot, const char *what, int want)
 {
+    /* EMPTY BY CONSTRUCTION, BEFORE ANYTHING ELSE. Every exit below used to
+     * leave whatever the slot already held, which was harmless while each slot
+     * got exactly one shot -- and wrong the moment slot 4 took the ladder and
+     * then the op list over it. Three separate early returns (a lock timeout,
+     * a recheck lock timeout, a failed write) each left the LADDER in a slot
+     * grab_tour.sh files as hw-test-ops.png, and one of them says in a comment
+     * that an empty slot is the honest outcome.
+     *
+     * Erasing here rather than fixing four branches means the invariant is
+     * structural: after this line the slot is empty until this function fills
+     * it, whatever happens next. */
+    panel_shot_erase_slot(slot);
+
     vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
 
     if (!tour_lock(what)) return;
@@ -655,9 +677,8 @@ static void tour_shot(unsigned slot, const char *what, int want)
          * settles NO REPLY, s_op_passed stays 0, and this is the branch that
          * takes. The erase added in the caller sits on a branch that case does
          * not reach. */
-        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- erasing slot",
+        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- slot left EMPTY",
                  slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
-        panel_shot_erase_slot(slot);
         s_tour_ok = false;
         return;
     }

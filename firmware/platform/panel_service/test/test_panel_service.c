@@ -733,6 +733,48 @@ static void test_the_bundle_sends_what_the_single_rows_add_up_to(void)
           "the bundle sends %u, its rows send %u", (unsigned)ops[0].sends, singles);
 }
 
+/* A COUNT LARGER THAN THE ARRAY IS REFUSED BEFORE ANYTHING IS DEREFERENCED.
+ * The validation loop reads every one of n_ops entries, and the capacity
+ * refusal used to come after it -- so a caller passing a stale count got the
+ * documented refusal only after this function had read memory it does not own.
+ * A fuzzer under AddressSanitizer called it a heap-buffer-overflow READ.
+ *
+ * THIS TEST CANNOT SEE THE OVERFLOW, and says so rather than implying it does:
+ * reading past a small stack array is undefined, not detectable, and usually
+ * silent without a sanitizer. What it pins is the bound that makes the read
+ * impossible -- that the refusal happens at all for an oversized count. Run
+ * the suite under -fsanitize=address to see the other half. */
+static void test_a_count_past_the_array_is_refused_before_any_read(void)
+{
+    const panel_tier_op_t three[] = {
+        { PANEL_OP_BATTERY, "ONE",   false, 1 },
+        { PANEL_OP_HEAD,    "TWO",   false, 1 },
+        { PANEL_OP_VERSION, "THREE", false, 1 },
+    };
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    CHECK(panel_service_ops_rows(0, three, PANEL_TIER_OPS_MAX + 1, out) == 0,
+          "a count past PANEL_TIER_OPS_MAX was not refused");
+    CHECK(panel_service_ops_rows(0, three, 64, out) == 0,
+          "a wildly oversized count was not refused");
+    /* The real three still work, so the bound is not simply a wall. */
+    CHECK(panel_service_ops_rows(0, three, 3, out) == 4,
+          "a legal three-op list was refused");
+}
+
+/* THE CALLER'S LIST MAY NOT BE THE OUTPUT. The bundle row is written to out[0]
+ * before the copy loop reads ops[0], so an aliased call overwrites its own
+ * input -- a fuzzer got four identical "RUN ALL 3" rows out of READ's
+ * catalogue, breaking every invariant this file states, at once. Nothing
+ * aliases today; filtering a catalogue in place is a natural thing to try. */
+static void test_an_aliased_call_is_refused(void)
+{
+    panel_tier_op_t buf[PANEL_TIER_OPS_MAX];
+    for (int i = 0; i < PANEL_TIER_OPS_MAX; i++)
+        buf[i] = (panel_tier_op_t){ PANEL_OP_BATTERY, "ASK", false, 1 };
+    CHECK(panel_service_ops_rows(0, buf, 2, buf) == 0,
+          "an aliased ops/out call was not refused");
+}
+
 /* A CATALOGUE MAY NOT CONTAIN A BUNDLE ROW -- this function SYNTHESISES one,
  * and handed one it used to copy it through untouched, because every other
  * check in the validation loop guards `op != PANEL_OP_ALL`. So the invariant
@@ -1026,6 +1068,8 @@ int main(void)
     test_the_bundle_alone_exercises_the_tier();
     test_an_actuator_tiers_gate_is_reachable_without_a_bundle();
     test_a_tier_with_no_rows_is_never_exercised();
+    test_a_count_past_the_array_is_refused_before_any_read();
+    test_an_aliased_call_is_refused();
     test_a_caller_supplied_bundle_row_is_refused();
     test_a_row_claiming_more_than_one_send_is_refused();
     test_a_name_that_fills_its_field_is_refused();
