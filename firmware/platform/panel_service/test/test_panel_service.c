@@ -554,8 +554,294 @@ static void test_ages_and_a_corrupt_ceiling(void)
     CHECK(c && strcmp(c->val, "----") == 0, "a corrupt ceiling reads '%s'", c ? c->val : "(missing)");
 }
 
+/* ---- the op catalogue (#168 part 2, the other half) ---------------------- */
+
+/* A CATALOGUE FOR A TIER THAT DOES NOT EXIST, which is the only way to prove
+ * the rule before it is load-bearing. The shipped table gives only READ any
+ * rows, so every assertion made through panel_service_tier_ops about actuator
+ * tiers is made about an empty list -- true, vacuous, and equally true with
+ * the rule deleted. These three go straight into panel_service_ops_rows. */
+static const panel_tier_op_t k_fake_ops[] = {
+    { PANEL_OP_BATTERY, "TURN LEFT",  true, 1 },
+    { PANEL_OP_HEAD,    "TURN RIGHT", true, 1 },
+    { PANEL_OP_VERSION, "WHERE ARE YOU", false, 1 },
+};
+
+/* DELETE THE may_bundle CHECK AND THIS FAILS. That is the point of it: every
+ * tier from LEDS up is an actuator tier, and handed three real ops each one
+ * must come back with three rows and no bundle. */
+static void test_the_rule_refuses_a_bundle_for_a_tier_that_moves_him(void)
+{
+    for (int tier = 1; tier < PANEL_LADDER_RUNGS; tier++) {
+        panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+        const int n = panel_service_ops_rows(tier, k_fake_ops, 3, out);
+        CHECK(n == 3, "tier %d assembled %d rows from 3 ops", tier, n);
+        for (int i = 0; i < n; i++)
+            CHECK(out[i].op != PANEL_OP_ALL,
+                  "tier %d moves him and was given a bundle row at %d", tier, i);
+    }
+    /* An out-of-range tier is treated as moving him, same as everywhere else. */
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(99, k_fake_ops, 3, out);
+    CHECK(n == 3, "an unknown tier assembled %d rows", n);
+    for (int i = 0; i < n; i++)
+        CHECK(out[i].op != PANEL_OP_ALL, "an unknown tier got a bundle row");
+}
+
+/* AND IT DOES GIVE ONE TO A TIER THAT MAY BUNDLE -- the other direction, so a
+ * rule that refused everything could not pass the pair. Same three ops, same
+ * call, the only difference is the tier. */
+static void test_the_rule_gives_a_bundle_to_a_tier_that_moves_nothing(void)
+{
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(0, k_fake_ops, 3, out);
+    CHECK(n == 4, "READ assembled %d rows from 3 ops", n);
+    if (n != 4) return;
+    CHECK(out[0].op == PANEL_OP_ALL, "READ was not given a bundle row");
+    CHECK(strcmp(out[0].name, "RUN ALL 3") == 0,
+          "the bundle is labelled \"%s\"", out[0].name);
+}
+
+/* A LIST THAT WOULD NOT FIT IS REFUSED WHOLE. Truncating would drop the last
+ * op, and a row the operator cannot see is a row they cannot tell is missing. */
+static void test_a_list_too_long_to_fit_is_refused_rather_than_cut(void)
+{
+    panel_tier_op_t big[PANEL_TIER_OPS_MAX + 4];
+    for (unsigned i = 0; i < sizeof big / sizeof big[0]; i++)
+        big[i] = (panel_tier_op_t){ PANEL_OP_BATTERY, "X", false, 1 };
+
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    CHECK(panel_service_ops_rows(0, big, PANEL_TIER_OPS_MAX, out) == 0,
+          "a list needing a bundle row it cannot fit was not refused");
+    CHECK(panel_service_ops_rows(0, big, PANEL_TIER_OPS_MAX + 4, out) == 0,
+          "an oversized list was not refused");
+    CHECK(panel_service_ops_rows(0, big, 0, out) == 0, "an empty list wrote rows");
+    CHECK(panel_service_ops_rows(0, big, -1, out) == 0, "a negative count wrote rows");
+    CHECK(panel_service_ops_rows(0, NULL, 3, out) == 0, "a NULL catalogue wrote rows");
+    CHECK(panel_service_ops_rows(0, big, 3, NULL) == 0, "a NULL out was written through");
+}
+
+
+/* THE ILLEGAL CASE FIRST, and it is the rule itself: an actuator tier must
+ * never be handed a bundle row. Walked across EVERY rung rather than the ones
+ * that have a catalogue today, so the assertion still holds the day somebody
+ * gives STANCE its rows -- the failure it guards against is a copy-paste of
+ * READ's list onto a tier that moves him, and that copy-paste happens in a
+ * tier that does not exist yet. */
+static void test_an_actuator_tier_is_never_given_a_bundle_row(void)
+{
+    for (int tier = -3; tier < PANEL_LADDER_RUNGS + 3; tier++) {
+        panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+        const int n = panel_service_tier_ops(tier, ops);
+        CHECK(n >= 0 && n <= PANEL_TIER_OPS_MAX, "tier %d wrote %d rows", tier, n);
+        if (panel_service_tier_may_bundle(tier)) continue;
+        for (int i = 0; i < n; i++)
+            CHECK(ops[i].op != PANEL_OP_ALL,
+                  "tier %d moves him and was given a bundle row at %d", tier, i);
+    }
+}
+
+/* A TIER WITH NO CATALOGUE IS REFUSED, NOT RUN EMPTY. Every rung but READ, and
+ * every index off both ends, answers 0 -- which the caller reads as "this rung
+ * cannot be run". A tier that returned one unnamed row here would put a
+ * tappable control on the glass for an op no code sends. */
+static void test_a_tier_with_no_catalogue_answers_zero(void)
+{
+    panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+    for (int tier = 1; tier < PANEL_LADDER_RUNGS; tier++)
+        CHECK(panel_service_tier_ops(tier, ops) == 0, "tier %d has rows", tier);
+    CHECK(panel_service_tier_ops(-1, ops) == 0, "tier -1 has rows");
+    CHECK(panel_service_tier_ops(PANEL_LADDER_RUNGS, ops) == 0, "off the top");
+    CHECK(panel_service_tier_ops(1000, ops) == 0, "far off the top");
+    CHECK(panel_service_tier_ops(0, NULL) == 0, "a NULL out was written through");
+}
+
+/* READ's list: the bundle, then its three questions, in the order they go out.
+ * Names are checked for CONTENT, not merely for being non-NULL -- a row whose
+ * label is "" is a control the operator cannot identify, and an empty string
+ * passes every NULL check. */
+static void test_reads_ops_are_named_and_none_of_them_moves_him(void)
+{
+    panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, ops);
+    CHECK(n == 4, "READ wrote %d rows, wanted 4", n);
+    if (n != 4) return;
+
+    CHECK(ops[0].op == PANEL_OP_ALL,     "row 0 is not the bundle");
+    CHECK(ops[1].op == PANEL_OP_BATTERY, "row 1 is not battery");
+    CHECK(ops[2].op == PANEL_OP_HEAD,    "row 2 is not the dome read");
+    CHECK(ops[3].op == PANEL_OP_VERSION, "row 3 is not the version");
+
+    for (int i = 0; i < n; i++) {
+        CHECK(ops[i].name != NULL, "row %d has no name", i);
+        CHECK(ops[i].name != NULL && ops[i].name[0] != '\0',
+              "row %d is labelled with an empty string", i);
+        /* NOTHING AT READ MOVES HIM. That is the entire test for this tier,
+         * and it is the property every rung above it leans on. */
+        CHECK(ops[i].moves == false, "READ row %d claims to move him", i);
+        CHECK(ops[i].sends >= 1, "row %d sends nothing", i);
+    }
+}
+
+/* THE BUNDLE ROW SENDS WHAT THE SINGLES ADD UP TO. If they ever disagree, a
+ * PASS on RUN ALL means fewer answers than the rows it claims to run, and the
+ * sequence gate advances on a test that asked less than it said. */
+static void test_the_bundle_sends_what_the_single_rows_add_up_to(void)
+{
+    panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, ops);
+    CHECK(n > 1 && ops[0].op == PANEL_OP_ALL, "READ has no bundle row");
+    if (n <= 1 || ops[0].op != PANEL_OP_ALL) return;
+
+    unsigned singles = 0;
+    for (int i = 1; i < n; i++) {
+        CHECK(ops[i].op != PANEL_OP_ALL, "a second bundle row at %d", i);
+        singles += ops[i].sends;
+    }
+    CHECK(ops[0].sends == singles,
+          "the bundle sends %u, its rows send %u", (unsigned)ops[0].sends, singles);
+}
+
+/* THE LABEL NAMES THE COUNT, so a stale label is a lying control. The static
+ * assert in panel_service.c pins this at compile time; this pins the rendered
+ * string, which is the half an operator actually reads. */
+static void test_the_bundle_label_names_the_number_it_fires(void)
+{
+    panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, ops);
+    CHECK(n == 4, "READ wrote %d rows", n);
+    if (n != 4) return;
+    char want[24];
+    snprintf(want, sizeof want, "RUN ALL %u", (unsigned)ops[0].sends);
+    CHECK(strcmp(ops[0].name, want) == 0,
+          "the bundle says \"%s\" and fires %u", ops[0].name, (unsigned)ops[0].sends);
+}
+
+/* A TIER THAT MAY BUNDLE BUT HAS ONE OP GETS NO BUNDLE ROW -- a "RUN ALL 1"
+ * beside the single op it runs is two controls for one action, and the
+ * operator has to work out they are the same one.
+ *
+ * DRIVEN THROUGH panel_service_ops_rows, because READ is the only catalogued
+ * tier and it has three: asked through panel_service_tier_ops this assertion
+ * never meets a one-op list at all. A mutation battery caught it surviving
+ * exactly that way -- deleting the check left the suite green. The loop below
+ * is the same claim about the shipped table, kept because that is what the
+ * renderer actually calls. */
+static void test_a_one_op_list_is_not_given_a_bundle_of_one(void)
+{
+    const panel_tier_op_t one = { PANEL_OP_BATTERY, "BATTERY", false, 1 };
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(0, &one, 1, out);
+    CHECK(n == 1, "a one-op list assembled %d rows", n);
+    if (n >= 1)
+        CHECK(out[0].op != PANEL_OP_ALL, "a single op was given a bundle row");
+
+    for (int tier = -3; tier < PANEL_LADDER_RUNGS + 3; tier++) {
+        panel_tier_op_t ops[PANEL_TIER_OPS_MAX];
+        const int m = panel_service_tier_ops(tier, ops);
+        if (m == 0) continue;
+        CHECK(ops[0].op != PANEL_OP_ALL || m > 2,
+              "tier %d bundles a single op", tier);
+    }
+}
+
+/* ---- the exercised rule, once ops are tapped one at a time --------------- */
+
+/* THE ILLEGAL CASE FIRST: one op passing must NOT exercise the tier. This is
+ * the whole reason the rule needed writing -- "any op answered" is the
+ * widening that per-op consent invites, and it is exactly the meaning #174
+ * took away from the bit. */
+static void test_one_op_passing_does_not_exercise_the_tier(void)
+{
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, rows);
+    CHECK(n == 4, "READ wrote %d rows", n);
+    if (n != 4) return;
+    /* rows: [0] the bundle, [1..3] the three questions. */
+    CHECK(!panel_service_tier_exercised(rows, n, 1u << 1), "battery alone exercised it");
+    CHECK(!panel_service_tier_exercised(rows, n, 1u << 2), "the dome read alone exercised it");
+    CHECK(!panel_service_tier_exercised(rows, n, 1u << 3), "the version alone exercised it");
+    CHECK(!panel_service_tier_exercised(rows, n, (1u << 1) | (1u << 2)),
+          "two of three exercised it");
+    CHECK(!panel_service_tier_exercised(rows, n, 0), "nothing passing exercised it");
+}
+
+/* ALL THREE, IN ANY ORDER, DOES. The operator chose each one; that is consent
+ * given three times, which is more than the bundle asked for, not less. */
+static void test_every_single_op_passing_exercises_the_tier(void)
+{
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, rows);
+    if (n != 4) { CHECK(0, "READ wrote %d rows", n); return; }
+    CHECK(panel_service_tier_exercised(rows, n, (1u << 1) | (1u << 2) | (1u << 3)),
+          "all three singles did not exercise the tier");
+}
+
+/* AND THE BUNDLE ALONE DOES, because its PASS already means all three were
+ * answered. Checked with every single-op bit CLEAR, so it cannot be passing
+ * for the other reason. */
+static void test_the_bundle_alone_exercises_the_tier(void)
+{
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_tier_ops(0, rows);
+    if (n != 4) { CHECK(0, "READ wrote %d rows", n); return; }
+    CHECK(rows[0].op == PANEL_OP_ALL, "row 0 is not the bundle");
+    CHECK(panel_service_tier_exercised(rows, n, 1u << 0),
+          "the bundle alone did not exercise the tier");
+}
+
+/* A TIER THAT MOVES HIM HAS NO BUNDLE ROW, so its gate has to be reachable
+ * through the singles alone. Driven through panel_service_ops_rows against a
+ * tier with no catalogue, because that is the only way to see the shape the
+ * rule will actually meet. */
+static void test_an_actuator_tiers_gate_is_reachable_without_a_bundle(void)
+{
+    const panel_tier_op_t moving[] = {
+        { PANEL_OP_BATTERY, "TURN LEFT",  true, 1 },
+        { PANEL_OP_HEAD,    "TURN RIGHT", true, 1 },
+    };
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(3, moving, 2, rows);
+    CHECK(n == 2, "a moving tier assembled %d rows", n);
+    if (n != 2) return;
+    CHECK(!panel_service_tier_exercised(rows, n, 1u << 0), "one of two exercised it");
+    CHECK(!panel_service_tier_exercised(rows, n, 1u << 1), "one of two exercised it");
+    CHECK(panel_service_tier_exercised(rows, n, 0x3u), "both did not exercise it");
+}
+
+/* AN EMPTY OR MALFORMED LIST IS NOT EXERCISED. A tier nobody catalogued must
+ * not unlock the one above it by having nothing to do. */
+static void test_a_tier_with_no_rows_is_never_exercised(void)
+{
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    CHECK(!panel_service_tier_exercised(rows, 0, 0xFFFFFFFFu), "an empty list exercised a tier");
+    CHECK(!panel_service_tier_exercised(rows, -1, 0xFFFFFFFFu), "a negative count exercised a tier");
+    CHECK(!panel_service_tier_exercised(NULL, 4, 0xFFFFFFFFu), "a NULL list exercised a tier");
+    CHECK(!panel_service_tier_exercised(rows, PANEL_TIER_OPS_MAX + 1, 0xFFFFFFFFu),
+          "an oversized count exercised a tier");
+    /* A list that is nothing but an unpassed bundle row proves nothing. */
+    const panel_tier_op_t only_bundle = { PANEL_OP_ALL, "RUN ALL 2", false, 2 };
+    CHECK(!panel_service_tier_exercised(&only_bundle, 1, 0),
+          "a bare unpassed bundle row exercised a tier");
+}
+
 int main(void)
 {
+    test_one_op_passing_does_not_exercise_the_tier();
+    test_every_single_op_passing_exercises_the_tier();
+    test_the_bundle_alone_exercises_the_tier();
+    test_an_actuator_tiers_gate_is_reachable_without_a_bundle();
+    test_a_tier_with_no_rows_is_never_exercised();
+    test_the_rule_refuses_a_bundle_for_a_tier_that_moves_him();
+    test_the_rule_gives_a_bundle_to_a_tier_that_moves_nothing();
+    test_a_list_too_long_to_fit_is_refused_rather_than_cut();
+    test_an_actuator_tier_is_never_given_a_bundle_row();
+    test_a_tier_with_no_catalogue_answers_zero();
+    test_reads_ops_are_named_and_none_of_them_moves_him();
+    test_the_bundle_sends_what_the_single_rows_add_up_to();
+    test_the_bundle_label_names_the_number_it_fires();
+    test_a_one_op_list_is_not_given_a_bundle_of_one();
+
     test_an_unprobed_board_is_not_called_v2();
     test_the_rows_are_the_same_rows_at_every_link_state();
     test_ages_and_a_corrupt_ceiling();

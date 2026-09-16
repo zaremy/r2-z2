@@ -204,6 +204,106 @@ int panel_service_ladder(int ceiling, uint32_t done,
  * fire reads exactly like one that can. */
 bool panel_service_tier_may_bundle(int tier);
 
+/* THE TIER'S OPS, BY NAME (#168 part 2, the other half).
+ *
+ * `panel_service_tier_may_bundle` capped how many UNNAMED ops one tap may
+ * fire. That is not consent, it is rationing. CLAUDE.md's words are "each
+ * actuator test is individually OPT-IN", and opting in means the operator
+ * sees a named thing and chooses that thing. This is the catalogue that lets
+ * them: a rung no longer runs a tier, it opens the tier's ops, and each one is
+ * its own tap.
+ *
+ * A TIER WITH NO CATALOGUE RETURNS 0, AND 0 MEANS REFUSED -- the same shape as
+ * panel_probe_timeout_ms, and for the same reason. Today only READ has one,
+ * because r2_ops can emit READ's three questions and the LED writes and
+ * nothing else; inventing a plausible row for AUDIO or STANCE would put a
+ * named, tappable control on the glass for an op no code sends. A guessed
+ * catalogue reads exactly like a measured one six months from now. Whoever
+ * raises the ceiling to a tier writes that tier's rows, beside the timeout
+ * they must also go and measure.
+ *
+ * THE BUNDLE IS A ROW, AND ONLY WHERE IT IS LEGAL. READ may bundle, so its
+ * list leads with RUN ALL 3 -- three reads on one tap, which breaks no rule
+ * and is what the ladder did before. An actuator tier never gets that row, and
+ * that is the invariant worth pinning: it is the rule itself expressed as
+ * data, and the test asserts it across every tier rather than only the one
+ * that exists today. */
+#define PANEL_TIER_OPS_MAX 4
+
+typedef enum {
+    PANEL_OP_ALL = 0,     /* every op below, on one tap. Bundling tiers only. */
+    PANEL_OP_BATTERY,     /* DID_POWER 0x03 */
+    PANEL_OP_HEAD,        /* DID_ANIMATRONIC 0x14 -- reads the dome, never turns it */
+    PANEL_OP_VERSION,     /* DID_SYSTEM_INFO 0x00 */
+    PANEL_OP__COUNT,
+} panel_op_t;
+
+typedef struct {
+    panel_op_t  op;
+    const char *name;     /* what the row says. Never NULL in a returned row. */
+    /* Does firing THIS row act on him? Per-op, not per-tier: a tier counts as
+     * an actuator tier when ANY of its ops moves something, and the rows
+     * inside it are not all alike -- a future DOME list holds both a read-back
+     * and a turn. The renderer colours on this, so a row that moves him cannot
+     * be drawn like one that asks a question. */
+    bool        moves;
+    /* How many ops this row actually sends, which is what a PASS has to count.
+     * 1 for a single op; the bundle's own size for PANEL_OP_ALL. */
+    uint8_t     sends;
+} panel_tier_op_t;
+
+/* Fill a tier's op rows, in tap order. Returns how many were written: 0 for a
+ * tier with no catalogue, which the caller must treat as "this rung cannot be
+ * run", never as "run it with no ops". */
+int panel_service_tier_ops(int tier, panel_tier_op_t out[PANEL_TIER_OPS_MAX]);
+
+/* THE RULE, LIFTED OUT FROM BEHIND THE TABLE, and this is not tidiness.
+ *
+ * Only READ has a catalogue, so every actuator tier returns 0 rows -- which
+ * means the invariant that matters, "a tier that moves him is never given a
+ * bundle row", is UNFALSIFIABLE through panel_service_tier_ops. The assertion
+ * passes on an empty list, and would pass just as happily with the rule
+ * deleted. That is the repo's own mutation finding wearing a new coat: the
+ * test asserts the shipped data is fine rather than that the check rejects bad
+ * input.
+ *
+ * So the check lives here, tier and catalogue both arguments, and
+ * panel_service_tier_ops is the table plus one call to it. A test can hand
+ * this STANCE and three ops and watch it refuse the bundle row -- today,
+ * against a tier that does not exist yet, which is the only moment the rule
+ * can be proved before it is load-bearing.
+ *
+ * `n_ops` above PANEL_TIER_OPS_MAX minus the bundle row is refused outright
+ * rather than truncated: a list missing its last row is a control the operator
+ * cannot reach and cannot tell is missing. */
+int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
+                           panel_tier_op_t out[PANEL_TIER_OPS_MAX]);
+
+/* HAS THIS TIER BEEN EXERCISED? -- and per-op consent changes the answer.
+ *
+ * The sequence gate (D-025) opens a rung only when every tier below it has
+ * run, and while a tap fired the whole tier that question had one meaning.
+ * Split into named ops it has three possible ones, and two of them are wrong:
+ *
+ *   - "any op passed" would let ONE of READ's three questions unlock LEDS.
+ *     The bit would mean "something answered", which is what the ledger work
+ *     in #174 was done to stop it meaning.
+ *   - "the bundle passed" would make the gate unreachable on any tier that is
+ *     not allowed a bundle -- which is every tier that moves him, i.e. every
+ *     tier the gate actually protects.
+ *
+ * So: the bundle row passing satisfies it on its own, because a PASS there
+ * already means every op it contains was answered; otherwise EVERY single-op
+ * row must have passed, in whatever order the operator chose. That is the
+ * sequence rule surviving contact with per-op consent rather than being
+ * quietly widened by it.
+ *
+ * `passed` is a mask over the rows panel_service_tier_ops returned, bit i for
+ * row i. An empty list is NOT exercised -- a tier nobody catalogued cannot
+ * have run. */
+bool panel_service_tier_exercised(const panel_tier_op_t *rows, int n,
+                                  uint32_t passed);
+
 /* Does this tier drive anything physical? An out-of-range tier answers TRUE --
  * an unknown rung is treated as if it moves him, because the safe default for
  * a question about actuators is yes. */

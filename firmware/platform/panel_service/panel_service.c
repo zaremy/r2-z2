@@ -302,6 +302,111 @@ static const bool k_rung_actuator[PANEL_LADDER_RUNGS] = {
     true,    /* LOCOMOTION -- he drives away */
 };
 
+/* READ'S THREE QUESTIONS, NAMED. The order is the order they went out in when
+ * the ladder fired them as a bundle, so the list reads the same way the log
+ * does. None of them moves him -- that is the whole test for this tier -- so
+ * every row is `.moves = false` and the renderer draws them plainly.
+ *
+ * NAMES ARE WHAT THE OPERATOR SEES, so they say what is asked rather than what
+ * is sent: "DOME POSITION" and not "get_head_position". The op comments in
+ * panel_service.h carry the DID/CID for whoever needs to match a row to a
+ * frame in the log. */
+static const panel_tier_op_t k_read_ops[] = {
+    { PANEL_OP_BATTERY, "BATTERY",       false, 1 },
+    { PANEL_OP_HEAD,    "DOME POSITION", false, 1 },
+    { PANEL_OP_VERSION, "R2 FIRMWARE",   false, 1 },
+};
+#define READ_OPS_N (sizeof k_read_ops / sizeof k_read_ops[0])
+
+/* ONE BUFFER, AND THE ROWS POINT INTO IT. Every other name in a row is a string
+ * literal with static storage, so the caller may hold a `panel_tier_op_t` for
+ * as long as it likes; this one has to have the same lifetime or the rule
+ * would not hold for it. Rebuilt on each call, which is correct because there
+ * is exactly one bundle row per list and the caller redraws from one call. */
+static char k_all_label[16];
+
+/* The bundle row plus the ops themselves have to fit what the caller hands us,
+ * and the caller's array is sized by a constant in the header. Fail the build
+ * rather than silently truncating a tier's list -- a list missing its last row
+ * is a control the operator cannot reach and cannot tell is missing. */
+_Static_assert(READ_OPS_N + 1u <= PANEL_TIER_OPS_MAX,
+               "READ's op list no longer fits PANEL_TIER_OPS_MAX");
+_Static_assert(READ_OPS_N <= 255u, "sends is a uint8_t");
+
+int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
+                           panel_tier_op_t out[PANEL_TIER_OPS_MAX])
+{
+    if (out == NULL || ops == NULL || n_ops <= 0) return 0;
+    /* REFUSED, NOT TRUNCATED. One row short is a control nobody can reach. */
+    if (n_ops + 1 > PANEL_TIER_OPS_MAX) return 0;
+
+    int n = 0;
+
+    /* THE BUNDLE ROW IS CONDITIONAL ON THE RULE, NOT ON THE TIER'S NAME. It is
+     * asked of panel_service_tier_may_bundle rather than hardcoded for READ,
+     * so an actuator tier can never grow one by a copy-paste of this list.
+     *
+     * AND NOT FOR A LIST OF ONE: "RUN ALL 1" beside the single op it runs is
+     * two controls for one action, and the operator has to work out that they
+     * are the same one. */
+    if (panel_service_tier_may_bundle(tier) && n_ops > 1) {
+        unsigned sends = 0;
+        for (int i = 0; i < n_ops; i++) sends += ops[i].sends;
+        out[n].op    = PANEL_OP_ALL;
+        /* THE LABEL NAMES THE COUNT because it is the count the operator is
+         * consenting to. Built from the list rather than written down beside
+         * it -- a literal here would survive the list changing under it. */
+        snprintf(k_all_label, sizeof k_all_label, "RUN ALL %u", sends);
+        out[n].name  = k_all_label;
+        out[n].moves = false;                 /* the bundle is only legal where
+                                               * nothing in it moves him */
+        out[n].sends = (uint8_t)sends;
+        n++;
+    }
+
+    for (int i = 0; i < n_ops; i++) out[n++] = ops[i];
+    return n;
+}
+
+int panel_service_tier_ops(int tier, panel_tier_op_t out[PANEL_TIER_OPS_MAX])
+{
+    /* ONLY READ HAS A CATALOGUE, and every other tier answers 0 -- including
+     * the out-of-range ones, which get the same refusal rather than a special
+     * case. See the header: a guessed row is worse than a missing one.
+     *
+     * READ IS RUNG 0. This file does not include r2_gate.h -- it works in rung
+     * indices and keeps its own GATE_TIERS -- and panel_ui.c already asserts at
+     * compile time that the rung order mirrors r2_tier_t index for index. */
+    if (tier != 0) return 0;
+    return panel_service_ops_rows(tier, k_read_ops, (int)READ_OPS_N, out);
+}
+
+bool panel_service_tier_exercised(const panel_tier_op_t *rows, int n,
+                                  uint32_t passed)
+{
+    /* A TIER WITH NO ROWS HAS NOT RUN. Returning true for an empty list would
+     * let a tier nobody catalogued unlock the one above it -- the gate opening
+     * because there was nothing to do. */
+    if (rows == NULL || n <= 0 || n > PANEL_TIER_OPS_MAX) return false;
+
+    bool any_single = false;
+    for (int i = 0; i < n; i++) {
+        const bool ran = (passed & (1u << i)) != 0u;
+        if (rows[i].op == PANEL_OP_ALL) {
+            /* THE BUNDLE ALONE IS ENOUGH, because a PASS on it means every op
+             * it contains was answered -- that is what panel_probe counts. */
+            if (ran) return true;
+            continue;
+        }
+        any_single = true;
+        if (!ran) return false;
+    }
+    /* Every single-op row passed. `any_single` guards the list that is nothing
+     * but an unpassed bundle row, which would otherwise fall out of the loop
+     * having proved nothing and be reported as exercised. */
+    return any_single;
+}
+
 bool panel_service_tier_is_actuator(int tier)
 {
     /* AN UNKNOWN RUNG MOVES HIM. A corrupt or future index that answered

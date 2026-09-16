@@ -373,7 +373,35 @@ static panel_rung_block_t s_rung_why[PANEL_LADDER_RUNGS];
 static uint32_t    s_tiers_run;
 static panel_probe_t s_probe;
 static int         s_probe_rung = -1;      /* which rung the verdict belongs to */
+
+/* THE OP LIST (#168 part 2, the other half). A rung no longer RUNS a tier --
+ * it opens that tier's ops, and each one is its own tap with its own verdict.
+ * "Individually opt-in" means the operator sees a named thing and chooses it,
+ * which a rung labelled STANCE cannot offer whatever it fires underneath.
+ *
+ * AN OVERLAY, NOT A THIRD PAGE. It covers the ladder's body and leaves the
+ * header and the STOP bar exactly where they were -- the halt has to stay
+ * reachable while an op is in flight, which is the whole moment it exists for,
+ * and a pushed page would have taken it away at the worst time.
+ *
+ * s_ops_tier is -1 whenever the ladder is what the operator is looking at. */
+static int         s_ops_tier = -1;
+static lv_obj_t   *s_ops_panel;
+static lv_obj_t   *s_op_row[PANEL_TIER_OPS_MAX];
+static lv_obj_t   *s_op_word[PANEL_TIER_OPS_MAX];
+static panel_tier_op_t s_op[PANEL_TIER_OPS_MAX];
+static int         s_op_n;
+/* WHICH ROWS HAVE PASSED, bit i for row i. The tier's exercised bit is decided
+ * from this by panel_service_tier_exercised, not from "something passed" --
+ * one of READ's three questions answering must not unlock LEDS. */
+static uint32_t    s_op_passed;
+static int         s_probe_op = -1;        /* which op row the verdict belongs to */
 static int         s_probe_request = -1;   /* a tier main.c has yet to send */
+/* AND WHICH OP OF IT. Armed under the same spinlock and in the same breath as
+ * s_probe_request, because a tier with a stale op is a tap that fires
+ * something the operator did not choose -- the exact thing per-op consent is
+ * for. Meaningless while s_probe_request is -1. */
+static panel_op_t  s_probe_request_op = PANEL_OP_ALL;
 
 /* THE STOP. Requested on ui_task, sent on link_task, reported back -- the same
  * one-way handoff the probe uses, for the same reason: the UI must not touch
@@ -732,7 +760,136 @@ static void build_interior(lv_obj_t *pg)
      * the pessimistic state means the wrong claim is never on the glass, not
      * even for that frame. CLAUDE.md: assert the status, never inherit it. */
     stop_paint(STOP_UNREACHABLE);
+
+    /* THE OP LIST'S PANEL, over the ladder's body and under nothing. Built
+     * empty and hidden; a rung tap fills it. Same geometry as the body it
+     * covers, so a row's coordinates mean the same thing in both. */
+    s_ops_panel = lv_obj_create(s_int);
+    bare(s_ops_panel);
+    lv_obj_set_size(s_ops_panel, 334, INT_LADDER_BOTTOM - INT_BODY_Y);
+    lv_obj_set_pos(s_ops_panel, SVC_X, INT_BODY_Y);
+    lv_obj_set_style_bg_color(s_ops_panel, lv_color_hex(V5_GROUND), 0);
+    lv_obj_set_style_bg_opa(s_ops_panel, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_ops_panel, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* THE LADDER'S WORDS, RECOMPUTED IN PLACE. The rows themselves never change
+ * -- there are always PANEL_LADDER_RUNGS of them -- so a rung that has just
+ * been unlocked by a pass can be relabelled without rebuilding anything.
+ *
+ * This closes a gap the ladder shipped with: the exercised bit was set on a
+ * pass but the ladder was only rebuilt when the interior REOPENED, so a rung
+ * that had just become reachable still read NOT YET. Unobservable while the
+ * ceiling sat at READ and there was no sequence to walk; observable the moment
+ * anyone raises it, and cheaper to fix here than to find there. */
+static const char *rung_word(panel_rung_block_t why);
+
+static void relabel_ladder(void)
+{
+    if (s_int_open != PANEL_SVC_HW_TEST) return;
+    panel_rung_t r[PANEL_LADDER_RUNGS];
+    const int n = panel_service_ladder((int)r2_gate_get_ceiling(), s_tiers_run, r);
+    for (int i = 0; i < n && i < PANEL_LADDER_RUNGS; i++) {
+        if (s_rung_word[i] == NULL) continue;
+        s_rung_allowed[i] = r[i].allowed;
+        s_rung_why[i]     = r[i].why;
+        /* NOT WHILE IT IS FLASHING REFUSED. That flash owns the label for its
+         * duration and restores itself from s_rung_why, which was just
+         * updated -- writing here as well would end the flash early. */
+        if (i == s_refuse_rung) continue;
+        lv_label_set_text(s_rung_word[i], rung_word(r[i].why));
+        lv_obj_set_style_text_color(s_rung_word[i],
+                                    lv_color_hex(r[i].allowed ? PANEL_C_GREEN
+                                                              : V5_DIM), 0);
+    }
+}
+
+/* Leave the op list, back to the ladder. NOT a close of the interior: the STOP
+ * bar's verdict belongs to the visit, and stepping back one level is the same
+ * visit. Any test still in flight is disowned the same way close_interior
+ * disowns one -- the rows its verdict would be painted on are about to be
+ * freed. */
+static void close_ops(void)
+{
+    if (s_ops_tier < 0) return;
+    s_ops_tier = -1;
+    s_probe_op = -1;
+    s_probe_rung = -1;
+    s_op_n = 0;
+    s_op_passed = 0;
+    for (int i = 0; i < PANEL_TIER_OPS_MAX; i++) {
+        s_op_row[i] = NULL;
+        s_op_word[i] = NULL;
+    }
+    portENTER_CRITICAL(&s_probe_mux);
+    s_probe_request = -1;
+    s_probe_pending = false;
+    s_probe_in_flight = false;
+    s_probe_gen++;                  /* disown a send already in flight */
+    portEXIT_CRITICAL(&s_probe_mux);
+    panel_probe_init(&s_probe);
+    lv_obj_add_flag(s_ops_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clean(s_ops_panel);
+    char head[32];
+    snprintf(head, sizeof head, BACK "HW TEST");
+    lv_label_set_text(s_int_back, head);
+    relabel_ladder();
+}
+
+/* Open a tier's ops. False when the tier has no catalogue, which the caller
+ * turns into the same REFUSED flash a locked rung gets -- the operator asked
+ * for something this build cannot offer, and a tap that silently did nothing
+ * would leave them guessing which. */
+static bool open_ops(int tier)
+{
+    s_op_n = panel_service_tier_ops(tier, s_op);
+    if (s_op_n <= 0) {
+        ESP_LOGW("panel", "rung %d has no op catalogue -- refused", tier);
+        return false;
+    }
+
+    lv_obj_clean(s_ops_panel);
+    for (int i = 0; i < PANEL_TIER_OPS_MAX; i++) {
+        s_op_row[i] = NULL;
+        s_op_word[i] = NULL;
+    }
+    s_op_passed = 0;
+    s_probe_op = -1;
+    /* THE TIER, for the timeout and the exercised bit. panel_probe_start picks
+     * its window from this, and a tier nobody has timed is refused there. */
+    s_probe_rung = tier;
+    panel_probe_init(&s_probe);
+
+    char head[32];
+    snprintf(head, sizeof head, BACK "%s", panel_service_ceiling_name(tier));
+    lv_label_set_text(s_int_back, head);
+
+    for (int i = 0; i < s_op_n; i++) {
+        lv_obj_t *row = lv_obj_create(s_ops_panel);
+        bare(row);
+        lv_obj_set_size(row, SVC_W, INT_KV_H);
+        lv_obj_set_pos(row, 0, i * INT_KV_H);
+        if (i < s_op_n - 1) {
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+            lv_obj_set_style_border_width(row, 1, 0);
+            lv_obj_set_style_border_color(row, lv_color_hex(V5_HAIRLINE), 0);
+        }
+        /* A ROW THAT MOVES HIM IS AMBER, one that only asks is the text
+         * colour. Per-op, not per-tier: a DOME list holds both a read-back and
+         * a turn, and drawing them alike would be the bundle's dishonesty at a
+         * smaller scale. Nothing at READ is amber, which is the point. */
+        text(row, &techmono_24, 1, s_op[i].moves ? PANEL_C_AMBER : V5_TEXT,
+             0, 6, s_op[i].name);
+        s_op_word[i] = text_r(row, &techmono_18, 1, PANEL_C_GREEN,
+                              SVC_W, 120, 18, "RUN");
+        s_op_row[i] = row;
+    }
+    s_ops_tier = tier;
+    lv_obj_remove_flag(s_ops_panel, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI("panel", "rung %d opened: %d ops", tier, s_op_n);
+    return true;
 }
 
 static void set_pips_hidden(bool hidden)
@@ -963,6 +1120,10 @@ static void open_interior(panel_svc_t s)
 static void close_interior(void)
 {
     if (s_int_open == PANEL_SVC_COUNT) return;
+    /* THE OVERLAY GOES FIRST, and its rows with it. Leaving it up would show
+     * the next interior's body through a live op list, and leaving s_ops_tier
+     * set would route that interior's taps into freed rows. */
+    close_ops();
     s_int_open = PANEL_SVC_COUNT;
     /* The rung labels belong to the body about to be cleaned. Forgetting to
      * forget them left svc_refresh dereferencing freed LVGL objects on the
@@ -1011,7 +1172,15 @@ void panel_ui_tap(int x, int y)
         /* THE HEADER IS THE BACK BUTTON, all 74 px of it -- a tap target the
          * size of the reference's whole header rather than the width of its
          * chevrons. */
-        if (y < INT_HEAD_H) { close_interior(); return; }
+        /* ONE LEVEL, NOT ALL THE WAY OUT. With an op list open the header is
+         * that list's back, and the ladder is where it goes. Closing the
+         * interior from here would drop the operator two levels for one tap
+         * and take the STOP's verdict with it. */
+        if (y < INT_HEAD_H) {
+            if (s_ops_tier >= 0) close_ops();
+            else                 close_interior();
+            return;
+        }
 
         /* A RUNG THE GATE WOULD ADMIT IS THE ONE OTHER CONTROL ON THIS PANEL.
          * A locked rung is inert on purpose: the refusal the operator sees is
@@ -1052,6 +1221,70 @@ void panel_ui_tap(int x, int y)
             return;
         }
 
+        /* THE OP LIST OWNS THE BODY WHILE IT IS OPEN. Its rows sit over the
+         * ladder's, so a tap that landed on one of them must never also be
+         * offered to the rung underneath -- which is the same coordinates and
+         * a live control. */
+        if (s_ops_tier >= 0) {
+            for (int i = 0; i < s_op_n; i++) {
+                if (s_op_row[i] == NULL || !hit(s_op_row[i], x, y)) continue;
+
+                /* ONE DECISION, UNDER ONE LOCK, and the running probe is part
+                 * of it. An earlier version committed the request first and
+                 * checked PANEL_PROBE_RUNNING after: that closed the 140 ms
+                 * hole and opened the 2 s one, because a tap during a running
+                 * test still armed a request the link task then sent.
+                 *
+                 * IT IS NOT SUFFICIENT FOR A TIER THAT MOVES HIM. This guard
+                 * releases when the verdict settles, at 2 s, and D-013
+                 * measured a dome move at 2.0-2.2 s -- so above READ it would
+                 * release while he was still travelling. Said here as well as
+                 * in panel_probe.h because whoever raises the ceiling may read
+                 * only one of them. See #168 part 4, which is still open. */
+                bool taken;
+                portENTER_CRITICAL(&s_probe_mux);
+                taken = panel_probe_may_start((panel_probe_gate_t){
+                    .queued    = s_probe_request >= 0,
+                    .in_flight = s_probe_in_flight,
+                    .pending   = s_probe_pending,
+                    .state     = s_probe.state,
+                });
+                if (taken) {
+                    /* THE TIER AND THE OP, ARMED TOGETHER. A tier with a stale
+                     * op is a tap that fires something the operator did not
+                     * choose, which is the failure per-op consent exists to
+                     * prevent. */
+                    s_probe_request    = s_ops_tier;
+                    s_probe_request_op = s_op[i].op;
+                    s_probe_accepted++;
+                }
+                portEXIT_CRITICAL(&s_probe_mux);
+
+                if (!taken) {
+                    ESP_LOGI("panel", "op %d ignored -- a test is under way", i);
+                    return;
+                }
+
+                /* AND THE OLD VERDICT GOES NOW, not when the new clock starts.
+                 * A row tapped again wore its own green "1/1 OK" for the
+                 * ~140 ms before its next test began -- a pass it had not
+                 * earned, in the reassuring direction. Safe outside the
+                 * spinlock: s_probe and s_probe_op are touched only by this
+                 * task, under the display lock. */
+                s_probe_op = i;
+                panel_probe_init(&s_probe);
+                if (s_op_word[i] != NULL) {
+                    lv_label_set_text(s_op_word[i], "...");
+                    lv_obj_set_style_text_color(s_op_word[i],
+                                                lv_color_hex(V5_TEXT), 0);
+                }
+                ESP_LOGI("panel", "RUN requested: tier %d op %d (%s)",
+                         s_ops_tier, (int)s_op[i].op, s_op[i].name);
+                return;
+            }
+            return;
+        }
+
         for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
             if (s_rung_row[i] == NULL || !hit(s_rung_row[i], x, y)) continue;
             if (!s_rung_allowed[i]) {
@@ -1060,59 +1293,20 @@ void panel_ui_tap(int x, int y)
                 s_refuse_at = s_last_now;
                 return;
             }
-            /* ONE DECISION, UNDER ONE LOCK, and the running probe is part of
-             * it. An earlier version committed the request first and checked
-             * PANEL_PROBE_RUNNING after: that closed the 140 ms hole and
-             * opened the 2 s one, because a tap during a running test still
-             * armed a request the link task then sent. Anything that means a
-             * test is under way -- queued, sent but not yet started, or
-             * running -- refuses the tap, and the refusal is decided before
-             * anything is written.
+            /* A RUNG OPENS ITS OPS AND SENDS NOTHING. The tap that fires a
+             * command is one row further in, on a control that names what it
+             * does -- which is what "individually opt-in" asks for and what a
+             * rung labelled STANCE cannot give whatever it fires underneath.
              *
-             * IT IS NOT SUFFICIENT FOR A TIER THAT MOVES HIM. This guard
-             * releases when the verdict settles, at 2 s, and D-013 measured a
-             * dome move at 2.0-2.2 s -- so above READ it would release while
-             * he was still travelling. Said here as well as in panel_probe.h
-             * because whoever raises the ceiling may read only one of them,
-             * and a pair of individually honest comments is how this repo has
-             * misled itself before. See #168. */
-            bool taken;
-            portENTER_CRITICAL(&s_probe_mux);
-            taken = panel_probe_may_start((panel_probe_gate_t){
-                .queued    = s_probe_request >= 0,
-                .in_flight = s_probe_in_flight,
-                .pending   = s_probe_pending,
-                .state     = s_probe.state,
-            });
-            if (taken) {
-                s_probe_request = i;
-                s_probe_rung = i;
-                s_probe_accepted++;
+             * A tier with no catalogue gets the same REFUSED flash a locked
+             * rung does. It is not locked, and the distinction is real: the
+             * gate would admit it and nobody has written its rows. The flash
+             * is the same because the operator's next move is the same -- this
+             * build will not run it -- and the log line says which. */
+            if (!open_ops(i)) {
+                s_refuse_rung = i;
+                s_refuse_at = s_last_now;
             }
-            portEXIT_CRITICAL(&s_probe_mux);
-
-            /* AND THE OLD VERDICT GOES NOW, not when the new clock starts.
-             * Deferring the rung index was not enough: at this ceiling exactly
-             * one rung is tappable, so the rung tapped IS the rung that just
-             * passed, and it wore a green "3/3 OK" for the ~140 ms before its
-             * own test began -- a pass it had not earned, in the reassuring
-             * direction. Reset here and it reads RUN until it reads "...".
-             * Safe outside the spinlock: s_probe is touched only by this task,
-             * under the display lock, and the start happens in the refresh --
-             * also this task, so it cannot land in between. */
-            if (taken) panel_probe_init(&s_probe);
-            if (!taken) {
-                /* The running rung already reads "..." -- the refusal of a
-                 * second tap is legible there. Flashed anyway when the tap
-                 * lands on a rung that is NOT the running one. */
-                ESP_LOGI("panel", "RUN on rung %d ignored -- a test is under way", i);
-                if (i != s_probe_rung) {
-                    s_refuse_rung = i;
-                    s_refuse_at = s_last_now;
-                }
-                return;
-            }
-            ESP_LOGI("panel", "RUN requested for rung %d", i);
             return;
         }
         return;
@@ -1171,8 +1365,16 @@ bool panel_ui_debug_showing(int want)
         return s_page_at == PAGE_STATUS && s_int_open == PANEL_SVC_COUNT;
     if (want == PANEL_TOUR_MENU)
         return s_page_at == PAGE_SERVICE && s_int_open == PANEL_SVC_COUNT;
-    return s_page_at == PAGE_SERVICE && s_int_open == (panel_svc_t)want;
+    if (want == PANEL_TOUR_OPS)
+        return s_page_at == PAGE_SERVICE && s_int_open == PANEL_SVC_HW_TEST &&
+               s_ops_tier >= 0;
+    /* AND AN INTERIOR IS NOT ITSELF WITH AN OP LIST OVER IT. Without this,
+     * "HARDWARE TEST" would be satisfied by a screen showing the ops. */
+    return s_page_at == PAGE_SERVICE && s_int_open == (panel_svc_t)want &&
+           s_ops_tier < 0;
 }
+
+bool panel_ui_debug_open_rung(int rung);
 
 /* Put `want` back on the glass after something interrupted it. */
 void panel_ui_debug_restore(int want)
@@ -1182,6 +1384,16 @@ void panel_ui_debug_restore(int want)
         panel_ui_show_page(PAGE_STATUS);
     } else if (want == PANEL_TOUR_MENU) {
         panel_ui_show_page(PAGE_SERVICE);
+    } else if (want == PANEL_TOUR_OPS) {
+        /* REOPENED, NOT RESTORED, and the difference is the verdict: the test
+         * that produced it was disowned when the overlay closed, so what comes
+         * back is a fresh op list reading RUN. tour_shot's second check is
+         * what catches that -- it asks whether the view is right, and this one
+         * is, which is why the caller must treat an interrupted run as a
+         * failed run rather than re-photograph it. */
+        panel_ui_show_page(PAGE_SERVICE);
+        panel_ui_debug_open_row(PANEL_SVC_HW_TEST);
+        panel_ui_debug_open_rung(0);
     } else {
         panel_ui_show_page(PAGE_SERVICE);
         panel_ui_debug_open_row(want);
@@ -1191,7 +1403,11 @@ void panel_ui_debug_restore(int want)
 /* Tap a ladder rung through the real hit test, for the screenshot tour.
  * False when the rung does not exist, is locked, or the tap left no request.
  * Scrolls it into view first, so a ladder longer than its body still works. */
-bool panel_ui_debug_run_rung(int rung)
+/* A RUNG NO LONGER RUNS ANYTHING, so the tour's one helper became two. Split
+ * rather than widened: a single "run_rung" that internally opened the ops and
+ * then tapped one of them would hide from the pictures the fact that consent
+ * is now given twice, which is the thing this slice is about. */
+bool panel_ui_debug_open_rung(int rung)
 {
     if (rung < 0 || rung >= PANEL_LADDER_RUNGS) return false;
     if (s_rung_row[rung] == NULL || !s_rung_allowed[rung]) return false;
@@ -1199,6 +1415,22 @@ bool panel_ui_debug_run_rung(int rung)
     lv_obj_update_layout(s_int_body);
     lv_area_t a;
     lv_obj_get_coords(s_rung_row[rung], &a);
+    panel_ui_tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    /* THE OUTCOME, NOT THE ATTEMPT. A rung whose tier has no catalogue flashes
+     * REFUSED and opens nothing, and the tour must not photograph the ladder
+     * under the op list's name. */
+    return s_ops_tier == rung;
+}
+
+int panel_ui_debug_op_count(void) { return s_ops_tier >= 0 ? s_op_n : 0; }
+
+bool panel_ui_debug_run_op(int row)
+{
+    if (s_ops_tier < 0 || row < 0 || row >= s_op_n) return false;
+    if (s_op_row[row] == NULL) return false;
+    lv_obj_update_layout(s_ops_panel);
+    lv_area_t a;
+    lv_obj_get_coords(s_op_row[row], &a);
     /* Asked as "did MY tap take", not "is a request queued": the link task
      * can take the request microseconds later, which made the old check fail
      * on a perfectly healthy panel and the tour cry refusal. */
@@ -1256,10 +1488,16 @@ void panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms)
     portEXIT_CRITICAL(&s_probe_mux);
 }
 
-int panel_ui_take_probe_request(unsigned *gen)
+int panel_ui_take_probe_request(unsigned *gen, panel_op_t *op)
 {
     portENTER_CRITICAL(&s_probe_mux);
     const int t = s_probe_request;
+    /* THE OP TRAVELS WITH THE TIER, read under the same lock that took it.
+     * Read outside, the link task could take tier N's request and then op
+     * N+1's op -- a tap firing something the operator did not choose, which is
+     * what this whole slice is for. Left untouched when there is no request,
+     * so a caller that ignores the return value cannot act on a stale op. */
+    if (op != NULL && t >= 0) *op = s_probe_request_op;
     s_probe_request = -1;
     if (t >= 0) s_probe_in_flight = true;   /* until the send reports back */
     if (gen) *gen = s_probe_gen;
@@ -1442,9 +1680,8 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
      * hour later showed ALL 3 HALTS SENT with no timestamp, as though it had
      * just happened. */
 
-    if (s_int_open != PANEL_SVC_COUNT &&
-        panel_service_kind(s_int_open) == PANEL_SVC_LADDER &&
-        s_probe_rung >= 0 && s_rung_word[s_probe_rung] != NULL) {
+    if (s_ops_tier >= 0 && s_probe_op >= 0 && s_probe_op < s_op_n &&
+        s_op_word[s_probe_op] != NULL) {
         /* THE LEDGER, NOT THE CLOCK (#168). This used to count READINGS that
          * had arrived since the test started, which the panel's own battery
          * and dome polls also land in -- so a PASS meant "three readings
@@ -1459,7 +1696,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
 
         char word[16];
         panel_probe_word(&s_probe, word, sizeof word);
-        lv_obj_t *lbl = s_rung_word[s_probe_rung];
+        lv_obj_t *lbl = s_op_word[s_probe_op];
         if (strcmp(lv_label_get_text(lbl), word) != 0)
             lv_label_set_text(lbl, word);
         uint32_t colour = PANEL_C_GREEN;                 /* RUN, and a pass */
@@ -1467,17 +1704,30 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         else if (!panel_probe_passed(&s_probe)) colour = PANEL_C_AMBER;
         lv_obj_set_style_text_color(lbl, lv_color_hex(colour), 0);
 
-        /* THE TIER IS EXERCISED ONLY ON A PASS (#168). Idempotent: this runs
-         * every tick while the verdict stands, and setting a set bit is free.
+        /* THE ROW IS EXERCISED ONLY ON A PASS, AND THE TIER ONLY WHEN THE
+         * SET IS (#168). Idempotent: this runs every tick while the verdict
+         * stands, and setting a set bit is free.
          *
-         * The ladder is rebuilt when the interior reopens, so a rung unlocked
-         * by this pass shows NOT YET until then. Unobservable in this build --
-         * the ceiling is READ, so there is exactly one rung and no sequence to
-         * walk -- and it belongs with the per-op consent work (#168 part 2),
-         * which rebuilds these rows anyway. Stated rather than left to be
-         * discovered. */
-        if (panel_probe_settled(&s_probe) && panel_probe_passed(&s_probe))
-            s_tiers_run |= PANEL_RUNG_BIT(s_probe_rung);
+         * WHAT COUNTS AS THE TIER HAVING RUN IS NOT THIS FILE'S CALL. Per-op
+         * consent makes it a real question -- one of READ's three questions
+         * answering must not unlock LEDS, and a tier with no legal bundle must
+         * still be reachable through its singles -- so the rule lives in
+         * panel_service where a test can reach it, and this only feeds it the
+         * set of rows that have passed. */
+        if (panel_probe_settled(&s_probe) && panel_probe_passed(&s_probe)) {
+            s_op_passed |= 1u << s_probe_op;
+            if (s_probe_rung >= 0 &&
+                panel_service_tier_exercised(s_op, s_op_n, s_op_passed)) {
+                const uint32_t before = s_tiers_run;
+                s_tiers_run |= PANEL_RUNG_BIT(s_probe_rung);
+                /* AND THE LADDER UNDERNEATH IS RELABELLED THE MOMENT IT
+                 * CHANGES, not when the interior next reopens -- a rung that
+                 * has just become reachable reading NOT YET is the ladder
+                 * lying about its own state. Only on the edge, so this is not
+                 * a rebuild every tick. */
+                if (s_tiers_run != before) relabel_ladder();
+            }
+        }
     }
 }
 

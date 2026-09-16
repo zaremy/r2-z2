@@ -2689,3 +2689,78 @@ should be red**, and this ADR should be revisited rather than cited.
   `panel_ui.c`; it is not a new state colour and must not be used as one.
 - `panel_state.h`'s red comment is now narrower than it reads. Corrected there.
 
+## D-029 — A rung opens its ops, and consent is given per named op
+
+**Status:** accepted, 2026-09-15 · closes #168 part 2
+**Completes D-025's consequence list. Does not change the ceiling or the gate.**
+
+### The decision
+
+Tapping a rung on the HARDWARE TEST ladder no longer sends anything. It opens
+that tier's **ops, by name**, and each op is its own tap with its own verdict.
+
+`CLAUDE.md` says *"each actuator test is individually opt-in, never bundled"*.
+D-025 answered the second half by capping how many ops one tap may fire
+(`panel_service_tier_may_bundle`). That is **rationing, not consent**: a cap on
+unnamed things is not the operator seeing a named thing and choosing it. This
+is the first half.
+
+Three rules, and each is enforced in `panel_service` where a test can reach it:
+
+1. **A tier with no op catalogue cannot be run.** `panel_service_tier_ops`
+   returns 0, and 0 means refused — the same shape, and the same reasoning, as
+   `panel_probe_timeout_ms` returning 0 for a tier nobody has timed.
+2. **A bundle row exists only where a bundle is legal.** READ leads with
+   RUN ALL 3; no actuator tier ever gets that row.
+3. **A tier counts as exercised only when the whole set has passed** — the
+   bundle row alone, or every single-op row.
+
+### Why each of those, rather than the obvious thing
+
+- **A catalogue for every tier would have been fabrication.** `r2_ops` can emit
+  READ's three questions and the LED writes, and nothing else. A plausible
+  "TURN DOME LEFT" row would be a named, tappable control for an op no code
+  sends, and six months from now it reads exactly like a measured one. Whoever
+  raises the ceiling writes that tier's rows beside the timeout they must also
+  go and measure. Both refusals are deliberate friction on the same commit.
+- **"Any op passed" would have been a silent widening.** One of READ's three
+  questions answering would unlock LEDS — which is precisely the meaning #174
+  took away from the exercised bit when it made a PASS mean *R2 answered THESE
+  questions*. "The bundle passed" fails the other way: every tier the sequence
+  gate actually protects is an actuator tier, and no actuator tier is allowed a
+  bundle, so the gate would be unreachable.
+- **The bundle rule is asked of the predicate, not of the tier's name.** An
+  actuator tier cannot grow a RUN ALL row by a copy-paste of READ's list.
+
+### The half that is unfalsifiable today, and what was done about it
+
+Only READ has a catalogue, so *every* actuator tier returns zero rows — which
+makes "an actuator tier is never given a bundle row" true, vacuous, and equally
+true with the rule deleted. That is this repo's own mutation finding wearing a
+new coat: the test asserts the shipped data is fine rather than that the check
+rejects bad input.
+
+So the rule is lifted out from behind the table as
+`panel_service_ops_rows(tier, ops, n, out)`, and the test hands it STANCE and
+three ops that move him. A mutation battery confirms it: **8 of 8 mutants
+killed**, including one that only died after the one-op case was driven
+directly rather than through the shipped table.
+
+### Consequences
+
+- The ladder's own words are now recomputed in place when a pass changes them,
+  rather than at the next reopen. The old behaviour left a rung that had just
+  become reachable reading NOT YET — unobservable at a READ ceiling, and a
+  ladder lying about itself at any other.
+- **The screenshot tour runs every op row, not just the bundle.** Row 0 fires
+  three ops on one tap, which is exactly what the ladder did before this
+  change, so a tour that ran only row 0 would exercise none of the new path and
+  report green. Affordable only because READ moves nothing; a tour of a moving
+  tier must not walk its rows unattended.
+- One slot, two views. The partition holds nine (9 × 0x52000 in 3 MB) and the
+  ladder gives its slot to the op list — the view that changed, against the one
+  nobody had seen.
+- **#168 part 4 is still open.** The one-at-a-time guard still releases when
+  the verdict settles at 2 s, and D-013 measured a dome move at 2.0–2.2 s. Per-op
+  consent does not fix that, and nothing here should be read as having done so.
+

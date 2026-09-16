@@ -151,7 +151,7 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 /* Talks to R2. Never touches LVGL. */
 /* Defined with the other senders, below: the link loop calls it the moment
  * the operator taps a rung. */
-static unsigned run_tier_test(int tier);
+static unsigned run_op(int tier, panel_op_t op);
 
 /* The link loop's tick. Short enough that a tap on the ladder reaches the
  * radio promptly; the keepalive and the polls count beats of it rather than
@@ -216,7 +216,13 @@ static void link_task(void *arg)
         /* THE OPERATOR'S TEST FIRST, and before the link check: a tap while he
          * is away must still settle, as NO REPLY rather than as silence. */
         unsigned probe_gen = 0;
-        const int probe_tier = panel_ui_take_probe_request(&probe_gen);
+        /* INITIALISED TO A VALUE run_op REFUSES. panel_ui writes this under
+         * the same lock that hands over the tier and only when there is a
+         * request, so this value is never sent -- and if that ever stopped
+         * being true, the failure is a refusal and a loud log line rather than
+         * whichever op happened to be first in an enum. */
+        panel_op_t probe_op = PANEL_OP__COUNT;
+        const int probe_tier = panel_ui_take_probe_request(&probe_gen, &probe_op);
         if (probe_tier >= 0) {
             const uint32_t at = now_ms();      /* stamped before the ops go */
             /* Carried through the send, so a panel that left the interior
@@ -229,7 +235,7 @@ static void link_task(void *arg)
              * him anyway: the answer is about the link the sends actually
              * met. Argument order is unsequenced in C, so the two are
              * separate statements rather than one call. */
-            const unsigned sent = run_tier_test(probe_tier);
+            const unsigned sent = run_op(probe_tier, probe_op);
             const bool up = r2_link_is_up();
             panel_ui_probe_sent(sent, at, probe_gen, up);
         }
@@ -314,13 +320,25 @@ static void link_task(void *arg)
  * the ceiling would be refused here even if the ladder offered it. The count
  * returned is how many the gate admitted AND the link took; the panel needs
  * that number to know what a pass looks like. */
-static unsigned run_tier_test(int tier)
+static unsigned run_op(int tier, panel_op_t op)
 {
     if (tier != (int)R2_TIER_READ) {
         /* Not reachable from the ladder, which only offers what the gate
          * would admit. Said out loud rather than assumed. */
         ESP_LOGE(TAG, "REFUSED: rung %d is not READ, and this build runs only READ",
                  tier);
+        return 0;
+    }
+
+    /* A BUNDLE IS REFUSED WHERE IT IS NOT LEGAL, and this is now a check with
+     * somewhere to fail rather than a marker. panel_service_tier_ops never
+     * offers an actuator tier a RUN ALL row, so the operator cannot ask for
+     * one -- but "the UI does not offer it" is a claim about a renderer, and
+     * the rule belongs at the line that sends. Same shape as the gate: the
+     * ladder offers only what the gate would admit AND the gate refuses the
+     * rest regardless. */
+    if (op == PANEL_OP_ALL && !panel_service_tier_may_bundle(tier)) {
+        ESP_LOGE(TAG, "REFUSED: tier %d drives an actuator and may not bundle", tier);
         return 0;
     }
     /* A FRESH LEDGER PER TEST. Anything outstanding from a previous run is
@@ -330,33 +348,39 @@ static unsigned run_tier_test(int tier)
     panel_ledger_reset(&s_ledger);
     portEXIT_CRITICAL(&s_ledger_mux);
 
-    /* HOW MANY OPS THIS TAP MAY FIRE (#168 part 2). READ asks three
-     * questions and moves nothing, so one tap for three reads breaks no rule
-     * -- "each ACTUATOR test is individually opt-in" is about actuators.
+    /* WHAT THIS TAP SENDS, AND IT IS WHAT THE OPERATOR NAMED (#168 part 2).
+     * The bundle is one row among four now, not the only thing a rung can do;
+     * every other row is exactly one op, chosen by its own name on its own
+     * tap. That is what "individually opt-in" asks for, and it is the half the
+     * budget rule could not supply -- a cap on how many unnamed things fire is
+     * rationing, not consent.
      *
      * WHERE THIS IS, AND WHAT IT IS NOT. An earlier version of this comment
-     * called run_tier_test "the line every op crosses". It is not: this file
+     * called this function "the line every op crosses". It is not: this file
      * emits ops from six places, and the line every op really crosses is
-     * r2_gate_send -- as the paragraph twenty lines above already says. This
-     * is the line every TEST crosses, which is the right place for a rule
-     * about what one tap may fire and the wrong place to claim universality.
-     *
-     * IT CANNOT FIRE TODAY. The refusal at the top of this function means
-     * `tier` is provably R2_TIER_READ by the time we get here, so the budget
-     * is constant 3 and the warning below is dead code. It is kept as a
-     * MARKER: whoever makes a moving tier runnable edits this function, and
-     * finds a named predicate telling them their tap may fire one op --
-     * before they discover the three-op version was legal. It is not
-     * protection that exists; it is a note left where they will stand. */
-    const unsigned budget = panel_service_tier_may_bundle(tier) ? 3u : 1u;
-    if (budget < 3u)
-        ESP_LOGW(TAG, "tier %d drives an actuator: one op per tap", tier);
+     * r2_gate_send. This is the line every TEST crosses, which is the right
+     * place for a rule about what one tap may fire and the wrong place to
+     * claim universality. */
+    unsigned first, budget;
+    switch (op) {
+    case PANEL_OP_ALL:     first = 0u; budget = 3u; break;
+    case PANEL_OP_BATTERY: first = 0u; budget = 1u; break;
+    case PANEL_OP_HEAD:    first = 1u; budget = 1u; break;
+    case PANEL_OP_VERSION: first = 2u; budget = 1u; break;
+    default:
+        /* NOT A FALLTHROUGH TO SOMETHING PLAUSIBLE. An op this function does
+         * not recognise is one the catalogue and this switch disagree about,
+         * and quietly running the last case would send a command nobody
+         * chose. Refused, and loudly, because that disagreement is a bug. */
+        ESP_LOGE(TAG, "REFUSED: op %d is not one this build can send", (int)op);
+        return 0;
+    }
 
     /* THE SEQ IS TAKEN ONCE AND USED TWICE: sent on the wire and written down
      * here. Calling next_seq() again for the ledger would record a number
      * nothing will ever answer, and the test could never pass. */
     unsigned sent = 0;
-    for (unsigned k = 0; k < budget; k++) {
+    for (unsigned k = first; k < first + budget; k++) {
         const uint8_t sq = next_seq();
         /* WRITTEN DOWN BEFORE IT GOES OUT. r2_link_send hands the frame to the
          * stack and returns; the reply lands on the NimBLE host task. Record
@@ -377,7 +401,7 @@ static unsigned run_tier_test(int tier)
         sent++;
     }
     for (unsigned i = 0; i < sent; i++) r2_telemetry_note_request(&s_tm);
-    ESP_LOGW(TAG, "tier %d test: %u of %u ops away", tier, sent, budget);
+    ESP_LOGW(TAG, "tier %d op %d: %u of %u away", tier, (int)op, sent, budget);
     return sent;
 }
 
@@ -655,36 +679,77 @@ static void tour_task(void *arg)
         if (opened) {
             tour_shot(2 + i, k_tour_name[i], k_tour_row[i]);
 
-            /* THE LADDER GETS RUN, NOT JUST LISTED. Its slot is re-captured
-             * after tapping READ, so the picture shows the verdict rather
-             * than the offer: a ladder that draws RUN proves nothing about
-             * whether tapping it does anything. The pre-run ladder is already
-             * on record from the run before this one. */
+            /* THE LADDER GETS RUN, NOT JUST LISTED, AND IT NOW TAKES TWO
+             * TAPS. A rung opens its ops; an op row runs one (#168 part 2).
+             * The slot is re-captured at the end so the picture shows the op
+             * list carrying a verdict, which is the view an operator actually
+             * arms something from -- a ladder that draws RUN proves nothing
+             * about what tapping it does, and now it does not even send.
+             *
+             * ONE SLOT, TWO VIEWS, and the partition has no tenth: 9 x 0x52000
+             * is 2.98 MB of a 3 MB partition. The ladder loses, because it is
+             * the view that did not change and the op list is the one nobody
+             * has ever seen. */
             if (k_tour_row[i] == 3) {          /* HARDWARE TEST */
                 bool asked = false;
-                if (tour_lock("run rung")) {
-                    asked = panel_ui_debug_run_rung(0);   /* READ */
+                if (tour_lock("open rung")) {
+                    /* READ. False when the rung refused -- a tier with no
+                     * catalogue opens nothing, and photographing the ladder
+                     * under the op list's name is the lie this rig exists to
+                     * prevent. */
+                    asked = panel_ui_debug_open_rung(0);
                     bsp_display_unlock();
                 }
-                if (asked) {
-                    /* Past the probe's own timeout, so the frame shows a
-                     * settled verdict and never the "..." in between. */
+                if (!asked) {
+                    ESP_LOGE(TAG, "TOUR: rung 0 did not open its ops");
+                    s_tour_ok = false;
+                }
+
+                /* EVERY ROW, NOT JUST THE BUNDLE. Row 0 fires three ops on one
+                 * tap, which is exactly what the ladder did before this slice
+                 * -- so a tour that ran only row 0 would exercise none of the
+                 * new path and report green. The single-op rows are the code
+                 * that changed; they are the ones that have to go out over a
+                 * real radio to a real droid.
+                 *
+                 * READ MOVES NOTHING, which is what makes this affordable. A
+                 * tour of a tier that moved him could not walk its rows
+                 * unattended, and should not try. */
+                bool rows_ok = asked;
+                for (int r = 0; rows_ok && r < panel_ui_debug_op_count(); r++) {
+                    bool fired = false;
+                    if (tour_lock("run op")) {
+                        fired = panel_ui_debug_run_op(r);
+                        bsp_display_unlock();
+                    }
+                    if (!fired) {
+                        ESP_LOGE(TAG, "TOUR: op row %d refused the tap", r);
+                        s_tour_ok = false;
+                        rows_ok = false;
+                        break;
+                    }
+                    /* Past the probe's own timeout, so the next tap is not
+                     * refused by the one-at-a-time guard and the frame shows a
+                     * settled verdict rather than the "..." in between. */
                     vTaskDelay(pdMS_TO_TICKS(PANEL_PROBE_TIMEOUT_MS + 600u));
                     if (!panel_ui_debug_probe_settled()) {
                         /* Photographing a "..." and calling it a result is
                          * the lie this rig exists not to tell. */
-                        ESP_LOGE(TAG, "TOUR: the READ test never settled");
+                        ESP_LOGE(TAG, "TOUR: op row %d never settled", r);
                         s_tour_ok = false;
-                    } else {
-                        ESP_LOGW(TAG, "TOUR: READ test %s",
-                                 panel_ui_debug_probe_passed() ? "PASSED"
-                                                               : "did NOT pass");
-                        tour_shot(2 + i, "HARDWARE TEST after RUN", k_tour_row[i]);
+                        rows_ok = false;
+                        break;
                     }
-                } else {
-                    ESP_LOGE(TAG, "TOUR: the READ rung refused the tap");
-                    s_tour_ok = false;
+                    ESP_LOGW(TAG, "TOUR: op row %d %s", r,
+                             panel_ui_debug_probe_passed() ? "PASSED"
+                                                           : "did NOT pass");
                 }
+                /* ON ROWS_OK, NOT ON s_tour_ok. The tour-wide flag carries
+                 * every earlier step's failure, and suppressing THIS picture
+                 * because the VOICE interior had a bad moment would lose the
+                 * evidence for the thing being changed. */
+                if (rows_ok)
+                    tour_shot(2 + i, "HW TEST ops after RUN", PANEL_TOUR_OPS);
             }
         } else {
             /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
