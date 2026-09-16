@@ -115,7 +115,15 @@ static panel_tier_op_t *make_ops(int n_ops)
 /* WHAT THE RUN ACTUALLY REACHED. Printed and ASSERTED at the end: a run that
  * stops assembling bundle rows, or stops accepting full-length lists, has lost
  * the coverage this file exists for and must fail rather than pass quietly.
- * That is exactly how the first version shipped looking green. */
+ * That is exactly how the first version shipped looking green.
+ *
+ * THE THRESHOLDS ARE SET BY REVERTING EACH BIAS AND WATCHING THE RUN GO RED,
+ * not by picking a number that sits under the current figures. Measured, one
+ * bias reverted at a time: uniform rows -> 26 bundle rows, uniform tier -> 447,
+ * moving one row in two -> 689, no aliasing -> 1 aliased call. The bundle
+ * threshold is above 689 for that reason -- set below it, the generator could
+ * lose a bias and stay green, which is the failure this whole mechanism exists
+ * to prevent, and which it did once already. */
 static unsigned s_accepted, s_bundles, s_full, s_aliased;
 
 static void one_case(unsigned n)
@@ -225,13 +233,15 @@ int main(int argc, char **argv)
 
     /* COVERAGE IS A RESULT, NOT A HOPE. Asserted rather than printed, because
      * the version of this file that reached none of it still printed PASS. The
-     * thresholds are deliberately far below what the current generator hits
-     * (roughly 40% accepted, 10% bundles at 50k) -- they are here to catch a
-     * generator that has stopped reaching, not to pin its exact rate. */
+     * thresholds sit below what this generator reaches and above what each
+     * single-bias regression produces. At 50k it accepts ~18,900 cases (37.7%
+     * of cases) and assembles ~1,880 bundle rows (3.8% of cases; 10.0% of the
+     * accepted ones) -- both quoted per-case, because an earlier version of
+     * this sentence mixed the two denominators inside one parenthesis. */
     printf("  reach: accepted %u, bundle rows %u, full lists %u, aliased %u\n",
            s_accepted, s_bundles, s_full, s_aliased);
     CHECK(s_accepted > n / 20u, "only %u of %u cases were accepted", s_accepted, n);
-    CHECK(s_bundles  > n / 100u, "only %u bundle rows in %u cases", s_bundles, n);
+    CHECK(s_bundles  > n / 50u, "only %u bundle rows in %u cases", s_bundles, n);
     CHECK(s_full     > n / 200u, "only %u full-length lists in %u cases", s_full, n);
     CHECK(s_aliased  > n / 100u, "only %u aliased calls in %u cases", s_aliased, n);
 

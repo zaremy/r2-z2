@@ -663,7 +663,7 @@ static void tour_shot(unsigned slot, const char *what, int want)
 
     vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
 
-    if (!tour_lock(what)) return;
+    if (!tour_lock(what)) return;      /* the slot is already erased above */
     if (!panel_ui_debug_showing(want)) {
         ESP_LOGW(TAG, "TOUR: %s was interrupted -- restoring it", what);
         panel_ui_debug_restore(want);
@@ -874,16 +874,60 @@ static void tour_task(void *arg)
                         ok_flash = panel_ui_debug_tap_op_expect_refusal(0);
                         bsp_display_unlock();
                     }
+                    /* KEPT MUST SAY SOMETHING. If row 0 had no label both
+                     * sides of the comparison below would be "" and the check
+                     * would pass having proved nothing -- the shape this repo
+                     * keeps getting bitten by. */
+                    if (ok_flash && kept[0] == '\0') {
+                        ESP_LOGE(TAG, "TOUR: row 0 said nothing before the "
+                                      "flash -- the check would be vacuous");
+                        ok_flash = false;
+                    }
                     if (!ok_flash) {
                         ESP_LOGE(TAG, "TOUR: could not stage a refused tap");
                         s_tour_ok = false;
                     } else {
+                        /* THE FLASH IS OBSERVED, NOT INFERRED. The helper
+                         * reports a refusal from the probe counter not moving,
+                         * which a tap landing on NOTHING also satisfies -- and
+                         * the comparison below would then pass having
+                         * exercised no flash at all. Look at the row while the
+                         * flash should be up. */
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                        const char *mid = "";
+                        char busy[16] = "";
+                        if (tour_lock("busy mid")) {
+                            /* COPIED UNDER THE LOCK. lv_label_get_text hands
+                             * back the label's own buffer, which ui_task is
+                             * free to realloc the moment the lock is dropped. */
+                            mid = panel_ui_debug_op_says(0);
+                            snprintf(busy, sizeof busy, "%s", mid);
+                            bsp_display_unlock();
+                        }
+                        if (strcmp(busy, "BUSY") != 0) {
+                            ESP_LOGE(TAG, "TOUR: row 0 read \"%s\" during the "
+                                          "flash, not BUSY -- no flash fired, "
+                                          "so the check below proves nothing",
+                                     busy);
+                            s_tour_ok = false;
+                            rows_ok = false;
+                        }
+                    }
+                    if (ok_flash && rows_ok) {
                         /* Past the flash, and past row 1's own window so the
                          * panel is idle again for the shot below. */
                         vTaskDelay(pdMS_TO_TICKS(PANEL_REFUSE_FLASH_MS + 400u));
-                        const char *now = "";
+                        /* COPIED UNDER THE LOCK, like `kept` above it and
+                         * unlike the first version of this line: the pointer
+                         * lv_label_get_text returns is the LABEL'S OWN buffer,
+                         * and ui_task reallocs it on the next repaint and frees
+                         * it outright on a view change. Reading it after
+                         * bsp_display_unlock was a use-after-unlock with a
+                         * narrow window and no symptom. */
+                        char now[16] = "";
                         if (tour_lock("busy check")) {
-                            now = panel_ui_debug_op_says(0);
+                            snprintf(now, sizeof now, "%s",
+                                     panel_ui_debug_op_says(0));
                             bsp_display_unlock();
                         }
                         if (strcmp(now, kept) != 0) {
