@@ -405,6 +405,11 @@ static int         s_op_n;
  * one of READ's three questions answering must not unlock LEDS. */
 static uint32_t    s_op_passed;
 static int         s_probe_op = -1;        /* which op row the verdict belongs to */
+/* A ROW TAPPED WHILE A TEST IS RUNNING, and when. Separate from the rung's
+ * flash because the two lists are drawn from different arrays and a single
+ * index would paint the wrong one. -1 when nothing is flashing. */
+static int         s_refuse_op = -1;
+static uint32_t    s_refuse_op_at;
 static int         s_probe_request = -1;   /* a tier main.c has yet to send */
 /* AND WHICH OP OF IT. Armed under the same spinlock and in the same breath as
  * s_probe_request, because a tier with a stale op is a tap that fires
@@ -825,6 +830,7 @@ static void close_ops(void)
     if (s_ops_tier < 0) return;
     s_ops_tier = -1;
     s_probe_op = -1;
+    s_refuse_op = -1;               /* its label is about to be freed */
     s_probe_rung = -1;
     s_op_n = 0;
     s_op_passed = 0;
@@ -874,6 +880,7 @@ static bool open_ops(int tier)
     }
     s_op_passed = 0;
     s_probe_op = -1;
+    s_refuse_op = -1;
     /* THE TIER, for the timeout and the exercised bit. panel_probe_start picks
      * its window from this, and a tier nobody has timed is refused there. */
     s_probe_rung = tier;
@@ -1295,7 +1302,20 @@ void panel_ui_tap(int x, int y)
                 portEXIT_CRITICAL(&s_probe_mux);
 
                 if (!taken) {
+                    /* AND IT SAYS SO. A refused RUNG tap flashes REFUSED, on
+                     * the reasoning two blocks up that a tap which "did
+                     * nothing" silently leaves the operator guessing which --
+                     * and the op rows are now the layer that actually sends,
+                     * so they needed it more than the rungs did.
+                     *
+                     * It will be hit routinely: the probe window is per TIER,
+                     * not per op, so an operator walking three rows in a row
+                     * taps into a busy window every time. */
                     ESP_LOGI("panel", "op %d ignored -- a test is under way", i);
+                    if (i != s_probe_op) {
+                        s_refuse_op = i;
+                        s_refuse_op_at = s_last_now;
+                    }
                     return;
                 }
 
@@ -1753,6 +1773,25 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
      * the screen" has to mean in code. Left uncleared, reopening the ladder an
      * hour later showed ALL 3 HALTS SENT with no timestamp, as though it had
      * just happened. */
+
+    /* THE OP REFUSAL FLASH, before the verdict below, so a refused tap on the
+     * running row never overwrites what the test is saying -- the same
+     * ordering, and the same reason, as the rung flash above. */
+    if (s_refuse_op >= 0) {
+        if (s_ops_tier < 0 || s_refuse_op >= s_op_n ||
+            s_op_word[s_refuse_op] == NULL || s_refuse_op == s_probe_op) {
+            s_refuse_op = -1;
+        } else if (now_ms - s_refuse_op_at >= PANEL_REFUSE_FLASH_MS) {
+            lv_label_set_text(s_op_word[s_refuse_op], "RUN");
+            lv_obj_set_style_text_color(s_op_word[s_refuse_op],
+                                        lv_color_hex(PANEL_C_GREEN), 0);
+            s_refuse_op = -1;
+        } else {
+            lv_label_set_text(s_op_word[s_refuse_op], "BUSY");
+            lv_obj_set_style_text_color(s_op_word[s_refuse_op],
+                                        lv_color_hex(PANEL_C_AMBER), 0);
+        }
+    }
 
     if (s_ops_tier >= 0 && s_probe_op >= 0 && s_probe_op < s_op_n &&
         s_op_word[s_probe_op] != NULL) {

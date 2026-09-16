@@ -2394,8 +2394,9 @@ A stored "DOME ran fine" unlocks STANCE on a droid nobody has looked at since
 last week. He has no resting posture, parks himself in bipod about a minute
 after the link drops, and an authored animation has already put him on the
 floor once (`CLAUDE.md`). A persisted bit records that a test *once* passed; it
-cannot speak for the droid in front of you. Re-walking the ladder after a boot
-~~costs one tap per rung~~ and re-proves what the bit only remembers.
+cannot speak for the droid in front of you. ~~Re-walking the ladder after a
+boot costs one tap per rung and re-proves what the bit only remembers.~~
+Re-walking the ladder after a boot re-proves what the bit only remembers.
 
 > **Superseded by D-029.** Per-op consent gives an actuator tier no legal
 > bundle, so re-walking one costs **one tap per op** and every op must pass.

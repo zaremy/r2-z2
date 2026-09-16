@@ -733,6 +733,55 @@ static void test_the_bundle_sends_what_the_single_rows_add_up_to(void)
           "the bundle sends %u, its rows send %u", (unsigned)ops[0].sends, singles);
 }
 
+/* A CATALOGUE MAY NOT CONTAIN A BUNDLE ROW -- this function SYNTHESISES one,
+ * and handed one it used to copy it through untouched, because every other
+ * check in the validation loop guards `op != PANEL_OP_ALL`. So the invariant
+ * this file states four separate times was enforced only against the row the
+ * function builds itself, never against the row it is given.
+ *
+ * All four of these passed before the guard, and each contradicts a comment
+ * written to prevent it: a bundle row on STANCE; a bundle claiming 200 sends
+ * against a ledger of 8; a bundle drawn plain over an op that moves him; and
+ * two bundle rows, which made any single op enough to exercise the tier. */
+static void test_a_caller_supplied_bundle_row_is_refused(void)
+{
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+
+    /* On a tier that moves him -- the invariant's whole point. */
+    const panel_tier_op_t on_stance = { PANEL_OP_ALL, "RUN ALL 9", false, 9 };
+    CHECK(panel_service_ops_rows(4, &on_stance, 1, out) == 0,
+          "STANCE was handed a bundle row and kept it");
+
+    /* Claiming more sends than the probe ledger could ever strike off. */
+    const panel_tier_op_t huge[] = {
+        { PANEL_OP_ALL,     "RUN ALL 200", false, 200 },
+        { PANEL_OP_BATTERY, "BATTERY",     false, 1 },
+    };
+    CHECK(panel_service_ops_rows(0, huge, 2, out) == 0,
+          "a 200-send bundle row was accepted");
+
+    /* Beside an op that moves him: the veto only removes the row this
+     * function ADDS, so a handed one sailed past it. */
+    const panel_tier_op_t mixed[] = {
+        { PANEL_OP_ALL,  "RUN ALL",   false, 2 },
+        { PANEL_OP_HEAD, "TURN DOME", true,  1 },
+    };
+    CHECK(panel_service_ops_rows(0, mixed, 2, out) == 0,
+          "a handed bundle row survived beside an op that moves him");
+
+    /* And two of them, which gave tier_exercised two sufficient conditions. */
+    const panel_tier_op_t twice[] = {
+        { PANEL_OP_ALL,     "RUN ALL A", false, 1 },
+        { PANEL_OP_ALL,     "RUN ALL B", false, 1 },
+        { PANEL_OP_BATTERY, "BATTERY",   false, 1 },
+    };
+    CHECK(panel_service_ops_rows(0, twice, 3, out) == 0,
+          "two bundle rows were accepted");
+
+    /* The shipped catalogue still works, so the guard is not simply a wall. */
+    CHECK(panel_service_tier_ops(0, out) == 4, "READ's own list was refused");
+}
+
 /* A NAMED ROW THAT CLAIMS MORE THAN ONE SEND IS A BUNDLED ACTUATOR TEST, and
  * the `moves` veto does not touch it -- that veto removes the RUN ALL row and
  * says nothing about a single row firing five commands. Refused as a LIST:
@@ -977,6 +1026,7 @@ int main(void)
     test_the_bundle_alone_exercises_the_tier();
     test_an_actuator_tiers_gate_is_reachable_without_a_bundle();
     test_a_tier_with_no_rows_is_never_exercised();
+    test_a_caller_supplied_bundle_row_is_refused();
     test_a_row_claiming_more_than_one_send_is_refused();
     test_a_name_that_fills_its_field_is_refused();
     test_a_held_row_keeps_its_own_name();

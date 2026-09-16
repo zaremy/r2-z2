@@ -322,20 +322,12 @@ static void link_task(void *arg)
  * that number to know what a pass looks like. */
 static unsigned run_op(int tier, panel_op_t op)
 {
-    /* A BUNDLE IS REFUSED WHERE IT IS NOT LEGAL, AND THIS IS ABOVE THE READ
-     * GATE ON PURPOSE. Below it the branch could not execute at all -- READ is
-     * the only tier that gets past, and READ may bundle -- so a check written
-     * there is a guard whose false branch is unreachable, described as
-     * protection. This repo has shipped that before and it is the finding it
-     * ranks worst.
-     *
-     * Here it has reachable inputs: every actuator tier arrives at this line.
-     * It is still not the thing that stops an illegal bundle today --
-     * panel_service_tier_ops never offers an actuator tier a RUN ALL row, so
-     * the operator cannot ask for one -- but "the renderer does not offer it"
-     * is a claim about a renderer, and this is the line that sends. Same shape
-     * as the gate: the ladder offers only what the ceiling admits AND
-     * r2_gate_send refuses the rest regardless. */
+    /* A MARKER, NOT A CONTROL -- everything it refuses is refused again one
+     * line down, so deleting it changes no behaviour today. It earns its place
+     * when the ceiling is raised and that next line is relaxed: whoever does
+     * that finds the bundle rule already written at the point of send. Said in
+     * one sentence because an earlier draft argued for fifteen lines that it
+     * was live protection, which is the claim this repo ranks worst. */
     if (op == PANEL_OP_ALL && !panel_service_tier_may_bundle(tier)) {
         ESP_LOGE(TAG, "REFUSED: tier %d drives an actuator and may not bundle", tier);
         return 0;
@@ -424,7 +416,23 @@ static unsigned run_op(int tier, panel_op_t op)
         switch (k) {
         case 0:  ok = r2_ops_request_battery(sq, r2_link_send, NULL); break;
         case 1:  ok = r2_ops_request_head(sq, r2_link_send, NULL);    break;
-        default: ok = r2_ops_probe_version(sq, r2_link_send, NULL);   break;
+        case 2:  ok = r2_ops_probe_version(sq, r2_link_send, NULL);   break;
+        default:
+            /* NOT A FALLTHROUGH TO THE LAST OP, for the same reason the op
+             * switch above refuses an unknown op. The static assert ties the
+             * enum to the table but not to THIS switch: add a fourth READ op
+             * to both and every assert still passes, while the BUNDLE would
+             * send battery, head, version, version -- `sent` matching
+             * `expected`, a green 4/4, and the new op never leaving. Nothing
+             * on the glass or in the log would look different.
+             *
+             * The ledger entry for this k was already written, so the test
+             * settles PARTIAL rather than passing: a visible failure, which is
+             * the point. */
+            ESP_LOGE(TAG, "REFUSED: no op is wired at index %u -- the catalogue "
+                          "and this switch disagree", k);
+            ok = 0;
+            break;
         }
         if (ok <= 0) continue;          /* the gate refused it: never asked */
         sent++;
@@ -635,8 +643,21 @@ static void tour_shot(unsigned slot, const char *what, int want)
     bsp_display_unlock();
 
     if (!ready) {
-        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- slot left EMPTY",
+        /* ERASED, NOT MERELY SKIPPED -- and "slot left EMPTY" was a lie the
+         * moment a slot could be written twice. Returning here was correct
+         * while every slot got exactly one shot; slot 4 now takes the ladder
+         * first and the op list over it, so a failed op-list capture left the
+         * LADDER in a slot grab_tour.sh files as hw-test-ops.png. The right
+         * filename over the wrong picture, which is the failure this rig
+         * exists to prevent and which this file names three times.
+         *
+         * It bites on the bench run specifically: with no droid every op
+         * settles NO REPLY, s_op_passed stays 0, and this is the branch that
+         * takes. The erase added in the caller sits on a branch that case does
+         * not reach. */
+        ESP_LOGE(TAG, "TOUR %u/%u: %s is NOT on the glass -- erasing slot",
                  slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+        panel_shot_erase_slot(slot);
         s_tour_ok = false;
         return;
     }

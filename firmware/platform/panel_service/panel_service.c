@@ -358,12 +358,16 @@ _Static_assert(READ_OPS_N == PANEL_OP__COUNT - 1u,
  * breaks it, and this is what stops that move. */
 _Static_assert(PANEL_TIER_OPS_MAX - 1 <= PANEL_LEDGER_MAX,
                "a bundle can now ask more than the probe ledger can hold");
-/* THE SUM IS WHAT IS CAST, AND IT IS BOUNDED AT RUNTIME, not here. The assert
- * this replaces bounded the ROW COUNT -- not the quantity that gets narrowed
- * to uint8_t, and three rows sending 100 each overflow it with the count at 3.
- * A sum cannot be computed in a _Static_assert over a table of structs, and
- * panel_service_ops_rows is public and takes arbitrary ops anyway, so the
- * shipped table is not the only input. The check is in that function. */
+/* NO ASSERT ON THE SUM, BECAUSE THERE IS NOTHING LEFT TO OVERFLOW. The one
+ * this replaces bounded the ROW COUNT, which is not the quantity that gets
+ * narrowed to uint8_t. The bound now comes from the rules rather than a check:
+ * a named row sends exactly 1, a catalogue may not contain a bundle row, and a
+ * list may not exceed PANEL_TIER_OPS_MAX -- so the synthesised bundle's sum is
+ * the row count and cannot exceed 3.
+ *
+ * An earlier version of this comment ended "the check is in that function".
+ * There was no such check; it had been deleted as unreachable two commits
+ * earlier, and the sentence outlived it. */
 
 int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
                            panel_tier_op_t out[PANEL_TIER_OPS_MAX])
@@ -387,6 +391,18 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
      * illegal row is a bug in that catalogue, and serving the rest of it would
      * hide the bug behind a screen that works. */
     for (int i = 0; i < n_ops; i++) {
+        /* A CATALOGUE MAY NOT CONTAIN A BUNDLE ROW. This function SYNTHESISES
+         * one when the rules allow; handed one, it used to skip every check
+         * below (they all guard `op != PANEL_OP_ALL`) and copy it through --
+         * so the invariant this file states four separate times was only ever
+         * enforced against the row it builds itself, never the one it is
+         * given. A probe put "RUN ALL 9" on STANCE, a 200-send bundle past a
+         * ledger of 8, and a plain-drawn bundle over an op that moves him.
+         *
+         * Reachable only through this public entry point today. It is also
+         * exactly how the next person writes the LEDS catalogue: by copying
+         * READ's RENDERED four rows, which lead with RUN ALL 3. */
+        if (ops[i].op == PANEL_OP_ALL) return 0;
         /* ONE SEND PER NAMED ROW. A row firing five commands on one tap is a
          * bundled test wearing a name -- what CLAUDE.md forbids, reached
          * without going near the RUN ALL row, which the `moves` veto below
