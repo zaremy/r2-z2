@@ -291,6 +291,36 @@ little entity is continuously present in the household.
   status on connect, never inherit it*, and the same rule as the LED colour that
   outlives the session that set it.
 
+## Look at the screen before designing for it
+
+The panel's STOP control was built 44 px tall "to match the tap target the rest
+of the file measures against". On the glass it was amber text at the same size
+and left margin as the rung names — no fill, no border, no rule — so beside six
+rows reading `LOCKED` it read as **a label describing a state**, not a control.
+The operator rejected it on sight.
+
+One screenshot also showed two things reading the code had missed: the control
+sat flush to the bottom edge, and the `NOT YET` / `LOCKED` distinction built
+across two earlier PRs was **invisible** at the shipped ceiling.
+
+"44 px, matches the rungs" is a correct sentence and the wrong design. The gap
+between those is only visible in pixels.
+
+**This panel can show you, with no finger and no operator:**
+
+```bash
+idf.py -DPANEL_SHOT_TOUR=ON build && idf.py -p <port> flash   # walks all 9 views
+tools/grab_shot.sh <port> out.png <slot>                       # reads one back
+```
+
+**How to apply:** for any change to what the panel draws, capture a frame and
+LOOK at it before asking for approval — and iterate on the real renderer rather
+than a mock, so what gets approved is what ships. Two traps, both hit:
+`panel_shot_take()` is hardcoded to **slot 0** (`panel_shot_take_slot()` is the
+one you want), and painting a control on a screen where it is hidden repaints
+nothing while logging success. **Open the PNG. The log line saying the capture
+worked is written by the same code that got it wrong.**
+
 ## Wire one path end-to-end before building the layer above it
 
 **Four PRs of the LED stack merged completely inert.** The state table, the
