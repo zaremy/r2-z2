@@ -316,14 +316,13 @@ static const panel_tier_op_t k_read_ops[] = {
     { PANEL_OP_HEAD,    "DOME POSITION", false, 1 },
     { PANEL_OP_VERSION, "R2 FIRMWARE",   false, 1 },
 };
+/* A NAME TOO LONG FOR THE FIELD WOULD BE TRUNCATED BY THE INITIALISER, and C
+ * does that silently -- a row reading "DOME POSITIO". Caught at build time
+ * instead. sizeof on a string literal counts the NUL. */
+_Static_assert(sizeof "DOME POSITION" <= PANEL_OP_NAME_LEN, "a row name is too long");
 #define READ_OPS_N (sizeof k_read_ops / sizeof k_read_ops[0])
 
-/* ONE BUFFER, AND THE ROWS POINT INTO IT. Every other name in a row is a string
- * literal with static storage, so the caller may hold a `panel_tier_op_t` for
- * as long as it likes; this one has to have the same lifetime or the rule
- * would not hold for it. Rebuilt on each call, which is correct because there
- * is exactly one bundle row per list and the caller redraws from one call. */
-static char k_all_label[16];
+
 
 /* The bundle row plus the ops themselves have to fit what the caller hands us,
  * and the caller's array is sized by a constant in the header. Fail the build
@@ -331,14 +330,37 @@ static char k_all_label[16];
  * is a control the operator cannot reach and cannot tell is missing. */
 _Static_assert(READ_OPS_N + 1u <= PANEL_TIER_OPS_MAX,
                "READ's op list no longer fits PANEL_TIER_OPS_MAX");
-_Static_assert(READ_OPS_N <= 255u, "sends is a uint8_t");
+/* THE SUM IS WHAT IS CAST, AND IT IS BOUNDED AT RUNTIME, not here. The assert
+ * this replaces bounded the ROW COUNT -- not the quantity that gets narrowed
+ * to uint8_t, and three rows sending 100 each overflow it with the count at 3.
+ * A sum cannot be computed in a _Static_assert over a table of structs, and
+ * panel_service_ops_rows is public and takes arbitrary ops anyway, so the
+ * shipped table is not the only input. The check is in that function. */
 
 int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
                            panel_tier_op_t out[PANEL_TIER_OPS_MAX])
 {
     if (out == NULL || ops == NULL || n_ops <= 0) return 0;
+
+    /* WILL THERE BE A BUNDLE ROW? Decided before the capacity check, because
+     * the old check reserved room for one unconditionally -- so an ACTUATOR
+     * tier with exactly PANEL_TIER_OPS_MAX ops, which needs no bundle row and
+     * fits exactly, was refused whole. It then read as "nobody catalogued this
+     * tier" (D-029), which is the one thing it was not. The tiers likeliest to
+     * have four ops are the ones that move him.
+     *
+     * AND NOT IF ANY OP MOVES HIM. may_bundle asks a per-TIER table, and this
+     * function is public and takes arbitrary ops -- that is the whole point of
+     * it. Handed a non-actuator tier and a moving op, the tier table would say
+     * yes and the row would be drawn plain rather than amber and fire it. The
+     * ops themselves get a veto, so the rule cannot be wrong about a list the
+     * table has never seen. */
+    bool bundled = panel_service_tier_may_bundle(tier) && n_ops > 1;
+    for (int i = 0; bundled && i < n_ops; i++)
+        if (ops[i].moves) bundled = false;
+
     /* REFUSED, NOT TRUNCATED. One row short is a control nobody can reach. */
-    if (n_ops + 1 > PANEL_TIER_OPS_MAX) return 0;
+    if (n_ops + (bundled ? 1 : 0) > PANEL_TIER_OPS_MAX) return 0;
 
     int n = 0;
 
@@ -349,15 +371,20 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
      * AND NOT FOR A LIST OF ONE: "RUN ALL 1" beside the single op it runs is
      * two controls for one action, and the operator has to work out that they
      * are the same one. */
-    if (panel_service_tier_may_bundle(tier) && n_ops > 1) {
+    if (bundled) {
         unsigned sends = 0;
         for (int i = 0; i < n_ops; i++) sends += ops[i].sends;
+        /* THE PUBLIC ENTRY POINT TAKES ARBITRARY OPS, so the shipped table's
+         * compile-time bound proves nothing about this call. A sum that does
+         * not fit is refused rather than wrapped: a bundle row claiming to
+         * send 4 when it sends 260 is a control lying about what it does. */
+        if (sends > 255u) return 0;
         out[n].op    = PANEL_OP_ALL;
         /* THE LABEL NAMES THE COUNT because it is the count the operator is
          * consenting to. Built from the list rather than written down beside
-         * it -- a literal here would survive the list changing under it. */
-        snprintf(k_all_label, sizeof k_all_label, "RUN ALL %u", sends);
-        out[n].name  = k_all_label;
+         * it -- a literal here would survive the list changing under it, and
+         * written INTO the row so the row owns it. */
+        snprintf(out[n].name, sizeof out[n].name, "RUN ALL %u", sends);
         out[n].moves = false;                 /* the bundle is only legal where
                                                * nothing in it moves him */
         out[n].sends = (uint8_t)sends;

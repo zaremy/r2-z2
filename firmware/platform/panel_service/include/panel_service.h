@@ -238,9 +238,21 @@ typedef enum {
     PANEL_OP__COUNT,
 } panel_op_t;
 
+/* LONG ENOUGH FOR THE LONGEST ROW, checked against the shipped table below.
+ * "DOME POSITION" is 13. */
+#define PANEL_OP_NAME_LEN 20
+
 typedef struct {
     panel_op_t  op;
-    const char *name;     /* what the row says. Never NULL in a returned row. */
+    /* WHAT THE ROW SAYS, COPIED IN RATHER THAN POINTED AT. The bundle row's
+     * label is BUILT ("RUN ALL 3"), so a `const char *` had to point into a
+     * static buffer that the next call rewrites -- a row a caller held would
+     * silently change its own label with the holder doing nothing, which a
+     * probe demonstrated. Every other name is a literal and would have been
+     * fine; one of them was not, and a rule that holds for three rows out of
+     * four is not a rule. Always NUL-terminated, never empty in a returned
+     * row. */
+    char        name[PANEL_OP_NAME_LEN];
     /* Does firing THIS row act on him? Per-op, not per-tier: a tier counts as
      * an actuator tier when ANY of its ops moves something, and the rows
      * inside it are not all alike -- a future DOME list holds both a read-back

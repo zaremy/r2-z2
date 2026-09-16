@@ -130,6 +130,7 @@ void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen
  * interior, which closes the overlay. The rig would then photograph a bare
  * ladder under the op list's name, having checked twice that it was right. */
 #define PANEL_TOUR_OPS    (-3)
+void        panel_ui_debug_to_menu(void);
 bool        panel_ui_debug_open_row(int row);
 /* Tap a ladder rung through the hit test; false if it was locked, off screen,
  * or the tap did not register a request. */

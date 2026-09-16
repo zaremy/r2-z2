@@ -562,9 +562,21 @@ static void test_ages_and_a_corrupt_ceiling(void)
  * tiers is made about an empty list -- true, vacuous, and equally true with
  * the rule deleted. These three go straight into panel_service_ops_rows. */
 static const panel_tier_op_t k_fake_ops[] = {
-    { PANEL_OP_BATTERY, "TURN LEFT",  true, 1 },
-    { PANEL_OP_HEAD,    "TURN RIGHT", true, 1 },
+    { PANEL_OP_BATTERY, "TURN LEFT",     true,  1 },
+    { PANEL_OP_HEAD,    "TURN RIGHT",    true,  1 },
     { PANEL_OP_VERSION, "WHERE ARE YOU", false, 1 },
+};
+
+/* EVERY OP IN EVERY OTHER FIXTURE SENDS EXACTLY ONE, which made the sum of
+ * `sends` indistinguishable from the row count -- so `sends += ops[i].sends`
+ * mutated to `sends = n_ops` SURVIVED, and so did building the label from
+ * n_ops. Both tests read as though they pinned the arithmetic and neither
+ * could fail. A review's mutation battery found it; this fixture is the fix.
+ *
+ * 2 + 3 = 5 is not 2, so the count and the sum finally disagree. */
+static const panel_tier_op_t k_multi_ops[] = {
+    { PANEL_OP_BATTERY, "TWO THINGS",   false, 2 },
+    { PANEL_OP_HEAD,    "THREE THINGS", false, 3 },
 };
 
 /* DELETE THE may_bundle CHECK AND THIS FAILS. That is the point of it: every
@@ -589,12 +601,22 @@ static void test_the_rule_refuses_a_bundle_for_a_tier_that_moves_him(void)
 }
 
 /* AND IT DOES GIVE ONE TO A TIER THAT MAY BUNDLE -- the other direction, so a
- * rule that refused everything could not pass the pair. Same three ops, same
- * call, the only difference is the tier. */
+ * rule that refused everything could not pass the pair.
+ *
+ * ITS OWN FIXTURE, because k_fake_ops is three ops that MOVE him and the ops
+ * now veto a bundle regardless of what the tier table says. Written with
+ * k_fake_ops this test failed the moment that veto landed, which is the veto
+ * working: "READ" plus three moving ops is a list that must not bundle. */
+static const panel_tier_op_t k_harmless_ops[] = {
+    { PANEL_OP_BATTERY, "ASK ONE",   false, 1 },
+    { PANEL_OP_HEAD,    "ASK TWO",   false, 1 },
+    { PANEL_OP_VERSION, "ASK THREE", false, 1 },
+};
+
 static void test_the_rule_gives_a_bundle_to_a_tier_that_moves_nothing(void)
 {
     panel_tier_op_t out[PANEL_TIER_OPS_MAX];
-    const int n = panel_service_ops_rows(0, k_fake_ops, 3, out);
+    const int n = panel_service_ops_rows(0, k_harmless_ops, 3, out);
     CHECK(n == 4, "READ assembled %d rows from 3 ops", n);
     if (n != 4) return;
     CHECK(out[0].op == PANEL_OP_ALL, "READ was not given a bundle row");
@@ -700,6 +722,97 @@ static void test_the_bundle_sends_what_the_single_rows_add_up_to(void)
     }
     CHECK(ops[0].sends == singles,
           "the bundle sends %u, its rows send %u", (unsigned)ops[0].sends, singles);
+}
+
+/* THE SUM, NOT THE COUNT. Two rows sending 2 and 3 must bundle to 5 and read
+ * "RUN ALL 5" -- with a one-per-row fixture both of those are 2 either way,
+ * which is how the arithmetic shipped untested. */
+static void test_the_bundle_sums_sends_rather_than_counting_rows(void)
+{
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(0, k_multi_ops, 2, out);
+    CHECK(n == 3, "a 2-op list assembled %d rows", n);
+    if (n != 3) return;
+    CHECK(out[0].op == PANEL_OP_ALL, "row 0 is not the bundle");
+    CHECK(out[0].sends == 5, "the bundle sends %u, wanted 5",
+          (unsigned)out[0].sends);
+    CHECK(strcmp(out[0].name, "RUN ALL 5") == 0,
+          "the bundle is labelled \"%s\", wanted RUN ALL 5", out[0].name);
+}
+
+/* A SUM THAT WOULD NOT FIT A uint8_t IS REFUSED, NOT WRAPPED. A bundle row
+ * claiming to send 4 while sending 260 is a control lying about what it does,
+ * and the compile-time bound on the shipped table says nothing about this
+ * function's arbitrary-ops contract. */
+static void test_a_bundle_whose_sum_overflows_is_refused(void)
+{
+    const panel_tier_op_t big[] = {
+        { PANEL_OP_BATTERY, "A", false, 200 },
+        { PANEL_OP_HEAD,    "B", false, 200 },
+    };
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    CHECK(panel_service_ops_rows(0, big, 2, out) == 0,
+          "a bundle summing to 400 was not refused");
+}
+
+/* A ROW'S NAME BELONGS TO THE ROW. The bundle's label used to point into one
+ * shared static buffer, so a held row silently changed its own label when
+ * somebody else asked for a different list -- demonstrated by a review probe.
+ * Nothing in panel_ui held one across calls, which made it latent rather than
+ * live; the comment claiming the opposite is what the next reader would have
+ * believed. */
+static void test_a_held_row_keeps_its_own_name(void)
+{
+    panel_tier_op_t a[PANEL_TIER_OPS_MAX], b[PANEL_TIER_OPS_MAX];
+    const int na = panel_service_tier_ops(0, a);
+    CHECK(na > 0 && a[0].op == PANEL_OP_ALL, "READ has no bundle row");
+    if (na <= 0 || a[0].op != PANEL_OP_ALL) return;
+    char held[PANEL_OP_NAME_LEN];
+    snprintf(held, sizeof held, "%s", a[0].name);
+
+    /* A different list, with a different sum, through the same function. */
+    const int nb = panel_service_ops_rows(0, k_multi_ops, 2, b);
+    CHECK(nb == 3, "the second list assembled %d rows", nb);
+    CHECK(strcmp(a[0].name, held) == 0,
+          "the held row's name became \"%s\" (was \"%s\")", a[0].name, held);
+}
+
+/* AN ACTUATOR TIER WITH EXACTLY PANEL_TIER_OPS_MAX OPS FITS, and used to be
+ * refused whole because the capacity check reserved a bundle row for a tier
+ * that can never have one. It then read as "nobody catalogued this tier",
+ * which is the one thing it was not -- and the tiers likeliest to have four
+ * ops are the ones that move him. */
+static void test_a_full_actuator_list_fits_because_it_needs_no_bundle(void)
+{
+    panel_tier_op_t full[PANEL_TIER_OPS_MAX];
+    for (int i = 0; i < PANEL_TIER_OPS_MAX; i++) {
+        full[i] = (panel_tier_op_t){ PANEL_OP_BATTERY, "", true, 1 };
+        snprintf(full[i].name, sizeof full[i].name, "OP %d", i);
+    }
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    const int n = panel_service_ops_rows(3, full, PANEL_TIER_OPS_MAX, out);
+    CHECK(n == PANEL_TIER_OPS_MAX, "a full actuator list assembled %d rows", n);
+    for (int i = 0; i < n; i++)
+        CHECK(out[i].op != PANEL_OP_ALL, "a full actuator list got a bundle row");
+}
+
+/* AND THE OPS THEMSELVES VETO A BUNDLE. may_bundle asks a per-TIER table, and
+ * this function is public and takes arbitrary ops -- handed a tier the table
+ * calls harmless and an op that moves him, the bundle row would be drawn plain
+ * rather than amber and would fire it. */
+static void test_a_moving_op_refuses_the_bundle_whatever_the_tier_says(void)
+{
+    const panel_tier_op_t mixed[] = {
+        { PANEL_OP_BATTERY, "WHERE ARE YOU", false, 1 },
+        { PANEL_OP_HEAD,    "TURN",          true,  1 },
+    };
+    panel_tier_op_t out[PANEL_TIER_OPS_MAX];
+    CHECK(panel_service_tier_may_bundle(0), "READ stopped being a bundling tier");
+    const int n = panel_service_ops_rows(0, mixed, 2, out);
+    CHECK(n == 2, "a mixed list assembled %d rows", n);
+    for (int i = 0; i < n; i++)
+        CHECK(out[i].op != PANEL_OP_ALL,
+              "a list containing a moving op was given a bundle row");
 }
 
 /* THE LABEL NAMES THE COUNT, so a stale label is a lying control. The static
@@ -832,6 +945,11 @@ int main(void)
     test_the_bundle_alone_exercises_the_tier();
     test_an_actuator_tiers_gate_is_reachable_without_a_bundle();
     test_a_tier_with_no_rows_is_never_exercised();
+    test_the_bundle_sums_sends_rather_than_counting_rows();
+    test_a_bundle_whose_sum_overflows_is_refused();
+    test_a_held_row_keeps_its_own_name();
+    test_a_full_actuator_list_fits_because_it_needs_no_bundle();
+    test_a_moving_op_refuses_the_bundle_whatever_the_tier_says();
     test_the_rule_refuses_a_bundle_for_a_tier_that_moves_him();
     test_the_rule_gives_a_bundle_to_a_tier_that_moves_nothing();
     test_a_list_too_long_to_fit_is_refused_rather_than_cut();

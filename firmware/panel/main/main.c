@@ -322,23 +322,30 @@ static void link_task(void *arg)
  * that number to know what a pass looks like. */
 static unsigned run_op(int tier, panel_op_t op)
 {
+    /* A BUNDLE IS REFUSED WHERE IT IS NOT LEGAL, AND THIS IS ABOVE THE READ
+     * GATE ON PURPOSE. Below it the branch could not execute at all -- READ is
+     * the only tier that gets past, and READ may bundle -- so a check written
+     * there is a guard whose false branch is unreachable, described as
+     * protection. This repo has shipped that before and it is the finding it
+     * ranks worst.
+     *
+     * Here it has reachable inputs: every actuator tier arrives at this line.
+     * It is still not the thing that stops an illegal bundle today --
+     * panel_service_tier_ops never offers an actuator tier a RUN ALL row, so
+     * the operator cannot ask for one -- but "the renderer does not offer it"
+     * is a claim about a renderer, and this is the line that sends. Same shape
+     * as the gate: the ladder offers only what the ceiling admits AND
+     * r2_gate_send refuses the rest regardless. */
+    if (op == PANEL_OP_ALL && !panel_service_tier_may_bundle(tier)) {
+        ESP_LOGE(TAG, "REFUSED: tier %d drives an actuator and may not bundle", tier);
+        return 0;
+    }
+
     if (tier != (int)R2_TIER_READ) {
         /* Not reachable from the ladder, which only offers what the gate
          * would admit. Said out loud rather than assumed. */
         ESP_LOGE(TAG, "REFUSED: rung %d is not READ, and this build runs only READ",
                  tier);
-        return 0;
-    }
-
-    /* A BUNDLE IS REFUSED WHERE IT IS NOT LEGAL, and this is now a check with
-     * somewhere to fail rather than a marker. panel_service_tier_ops never
-     * offers an actuator tier a RUN ALL row, so the operator cannot ask for
-     * one -- but "the UI does not offer it" is a claim about a renderer, and
-     * the rule belongs at the line that sends. Same shape as the gate: the
-     * ladder offers only what the gate would admit AND the gate refuses the
-     * rest regardless. */
-    if (op == PANEL_OP_ALL && !panel_service_tier_may_bundle(tier)) {
-        ESP_LOGE(TAG, "REFUSED: tier %d drives an actuator and may not bundle", tier);
         return 0;
     }
     /* A FRESH LEDGER PER TEST. Anything outstanding from a previous run is
@@ -361,9 +368,31 @@ static unsigned run_op(int tier, panel_op_t op)
      * r2_gate_send. This is the line every TEST crosses, which is the right
      * place for a rule about what one tap may fire and the wrong place to
      * claim universality. */
+    /* THE BUNDLE'S SIZE COMES FROM THE CATALOGUE, NOT FROM A LITERAL HERE.
+     * A hardcoded 3 is a second copy of READ_OPS_N with nothing tying them:
+     * drop one of READ's questions and the row renders RUN ALL 2 while this
+     * fires three, `sent` matches `expected`, and the operator gets a green
+     * 3/3 on a row they consented to twice. panel_service is tested; this
+     * switch is not, which is exactly why the number must not live here. */
+    panel_tier_op_t rows[PANEL_TIER_OPS_MAX];
+    const int n_rows = panel_service_tier_ops(tier, rows);
+    if (n_rows <= 0) {
+        ESP_LOGE(TAG, "REFUSED: tier %d has no op catalogue", tier);
+        return 0;
+    }
+    unsigned all_sends = 0;
+    for (int i = 0; i < n_rows; i++)
+        if (rows[i].op == PANEL_OP_ALL) all_sends = rows[i].sends;
+
     unsigned first, budget;
     switch (op) {
-    case PANEL_OP_ALL:     first = 0u; budget = 3u; break;
+    case PANEL_OP_ALL:
+        if (all_sends == 0u) {
+            /* Asked for a bundle on a list that has no bundle row. */
+            ESP_LOGE(TAG, "REFUSED: tier %d offers no bundle", tier);
+            return 0;
+        }
+        first = 0u; budget = all_sends; break;
     case PANEL_OP_BATTERY: first = 0u; budget = 1u; break;
     case PANEL_OP_HEAD:    first = 1u; budget = 1u; break;
     case PANEL_OP_VERSION: first = 2u; budget = 1u; break;
@@ -670,6 +699,10 @@ static void tour_task(void *arg)
     for (unsigned i = 0; i < sizeof k_tour_row / sizeof k_tour_row[0]; i++) {
         bool opened = false;
         if (!tour_lock(k_tour_name[i])) break;
+        /* FROM THE MENU, EVERY TIME. The tap below is routed to whatever is
+         * already open, so starting from an interior made the result depend on
+         * what that interior does with a tap at a menu row's coordinates. */
+        panel_ui_debug_to_menu();
         /* Scrolls the row into view, taps where it actually landed, and says
          * whether that opened the row asked for. */
         opened = panel_ui_debug_open_row(k_tour_row[i]);
@@ -687,7 +720,8 @@ static void tour_task(void *arg)
              * about what tapping it does, and now it does not even send.
              *
              * ONE SLOT, TWO VIEWS, and the partition has no tenth: 9 x 0x52000
-             * is 2.98 MB of a 3 MB partition. The ladder loses, because it is
+             * is 2.88 MiB of a 3 MiB partition and a tenth would need 3.20.
+             * The ladder loses, because it is
              * the view that did not change and the op list is the one nobody
              * has ever seen. */
             if (k_tour_row[i] == 3) {          /* HARDWARE TEST */

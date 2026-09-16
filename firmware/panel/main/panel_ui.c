@@ -1366,8 +1366,18 @@ bool panel_ui_debug_showing(int want)
     if (want == PANEL_TOUR_MENU)
         return s_page_at == PAGE_SERVICE && s_int_open == PANEL_SVC_COUNT;
     if (want == PANEL_TOUR_OPS)
+        /* AND AT LEAST ONE ROW HAS A VERDICT. The op list's correctness is
+         * ACCUMULATED STATE, which no other tour view has -- every other one
+         * is stateless, so "the right view is showing" was a sufficient check
+         * for them and is not for this one.
+         *
+         * What it was missing: panel_ui_debug_restore rebuilds a FRESH op list
+         * after an interruption, every row reading RUN and s_op_passed back to
+         * 0. tour_shot would then recheck, be satisfied, capture, and file a
+         * verdict-free picture under the name "after RUN" with the tour still
+         * green. That is the one picture this slice's evidence rests on. */
         return s_page_at == PAGE_SERVICE && s_int_open == PANEL_SVC_HW_TEST &&
-               s_ops_tier >= 0;
+               s_ops_tier >= 0 && s_op_passed != 0u;
     /* AND AN INTERIOR IS NOT ITSELF WITH AN OP LIST OVER IT. Without this,
      * "HARDWARE TEST" would be satisfied by a screen showing the ops. */
     return s_page_at == PAGE_SERVICE && s_int_open == (panel_svc_t)want &&
@@ -1385,12 +1395,16 @@ void panel_ui_debug_restore(int want)
     } else if (want == PANEL_TOUR_MENU) {
         panel_ui_show_page(PAGE_SERVICE);
     } else if (want == PANEL_TOUR_OPS) {
-        /* REOPENED, NOT RESTORED, and the difference is the verdict: the test
-         * that produced it was disowned when the overlay closed, so what comes
-         * back is a fresh op list reading RUN. tour_shot's second check is
-         * what catches that -- it asks whether the view is right, and this one
-         * is, which is why the caller must treat an interrupted run as a
-         * failed run rather than re-photograph it. */
+        /* REOPENED, NOT RESTORED, and the difference is the verdicts: the test
+         * that produced them was disowned when the overlay closed, so what
+         * comes back is a fresh op list reading RUN on every row.
+         *
+         * THAT IS WHY IT IS DONE AT ALL, rather than left to fail: the rebuilt
+         * list has s_op_passed == 0, which panel_ui_debug_showing now refuses,
+         * so tour_shot's recheck FAILS and the slot is left empty. An empty
+         * slot is a finding; a fresh op list photographed as "after RUN" is
+         * the lie this rig exists to prevent. The restore puts the panel back
+         * somewhere sane for the steps that follow and nothing more. */
         panel_ui_show_page(PAGE_SERVICE);
         panel_ui_debug_open_row(PANEL_SVC_HW_TEST);
         panel_ui_debug_open_rung(0);
@@ -1444,6 +1458,20 @@ bool panel_ui_debug_run_op(int row)
     after = s_probe_accepted;
     portEXIT_CRITICAL(&s_probe_mux);
     return after != before;
+}
+
+/* BACK TO THE MENU, WHATEVER IS OPEN. panel_ui_debug_open_row taps a SERVICE
+ * row, and a tap while an interior is up is routed to the INTERIOR -- so
+ * opening the next one depended on whatever the previous view happened to do
+ * with a tap at those coordinates. It worked, and it was an accident: adding a
+ * second level under the ladder broke it, and the tour then reported four
+ * interiors as "did NOT open" with nothing wrong with them.
+ *
+ * The rig now states what it needs instead of inheriting it. */
+void panel_ui_debug_to_menu(void)
+{
+    close_interior();               /* closes an op list with it */
+    panel_ui_show_page(PAGE_SERVICE);
 }
 
 bool panel_ui_debug_open_row(int row)
@@ -1534,9 +1562,19 @@ void panel_ui_note_press(void)
 
 void panel_ui_swipe(int dir)
 {
-    /* Inside an interior, horizontal swipe is reserved for BACK. */
+    /* Inside an interior, horizontal swipe is reserved for BACK.
+     *
+     * AND BACK IS ONE LEVEL, the same one the header tap goes. This used to
+     * test only s_int_open, so with an op list open the two back affordances
+     * disagreed: the header went to the ladder and the swipe went all the way
+     * out to the SERVICE menu, taking the STOP's verdict with it. The header's
+     * own comment argued against exactly that and the swipe did it anyway --
+     * two controls for one intent, behaving differently. */
     if (s_int_open != PANEL_SVC_COUNT) {
-        if (dir < 0) close_interior();
+        if (dir < 0) {
+            if (s_ops_tier >= 0) close_ops();
+            else                 close_interior();
+        }
         return;
     }
     int next = s_page_at + (dir > 0 ? 1 : -1);
