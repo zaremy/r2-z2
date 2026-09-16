@@ -24,6 +24,7 @@
 #include <stdint.h>
 
 #include "r2_telemetry.h"
+#include "panel_service.h"   /* panel_op_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,11 +95,17 @@ void        panel_ui_tap(int x, int y);
  * it records whether the list was moving at that moment. */
 void        panel_ui_note_press(void);
 
-/* THE LADDER'S RUN (#101 child 6). The renderer never sends anything: a tap
- * on a permitted rung leaves a request here, main.c takes it, sends that
- * tier's ops through the gate like everything else, and reports how many the
- * gate admitted. Returns -1 when nothing was asked for. */
-int         panel_ui_take_probe_request(unsigned *gen);
+/* THE LADDER'S RUN (#101 child 6, and #168 part 2). The renderer never sends
+ * anything: a tap leaves a request here, main.c takes it, sends it through the
+ * gate like everything else, and reports how many ops the gate admitted.
+ * Returns the tier, or -1 when nothing was asked for.
+ *
+ * `op` IS WHICH OP OF THAT TIER, and it is the half that makes this consent
+ * rather than rationing. A rung no longer runs a tier -- it opens the tier's
+ * named ops and the operator taps one, so what arrives here is a thing they
+ * chose by name. Written only when the return value is >= 0, so a caller that
+ * ignores the return cannot act on a stale op. */
+int         panel_ui_take_probe_request(unsigned *gen, panel_op_t *op);
 
 /* THE STOP, across the same seam. Read-and-clear on the link task; the report
  * comes back the other way. `sent` is how many of the three halts reached the
@@ -107,6 +114,20 @@ bool        panel_ui_take_stop_request(void);
 void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);
+
+/* HOW LONG A REFUSED TAP'S WORD STAYS UP.
+ *
+ * OUTSIDE THE TOUR'S #ifdef, and it spent one commit inside it: panel_ui.c
+ * uses this unconditionally, so the SHIPPING build stopped compiling while
+ * every tour build kept passing. Nine consecutive green builds and a hardware
+ * run, all of the one configuration that could not see it -- the plain build
+ * was not compiled again until the merge check.
+ *
+ * It lives in the header rather than in panel_ui.c because the tour has to
+ * wait the flash out before asking what a row says, and a tour holding its own
+ * copy of the interval would pass or fail on whether two numbers still agreed,
+ * which is not the thing being tested. */
+#define PANEL_REFUSE_FLASH_MS 1200u
 
 #ifdef PANEL_SHOT_TOUR
 /* Screenshot-tour build only. `panel_ui_debug_open_row` scrolls a SERVICE row
@@ -117,10 +138,21 @@ void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen
  * views have their own ids; anything >= 0 is a SERVICE row. */
 #define PANEL_TOUR_STATUS (-2)
 #define PANEL_TOUR_MENU   (-1)
+/* THE OP LIST IS ITS OWN VIEW, not "HARDWARE TEST with something over it".
+ * s_int_open stays HW TEST while the overlay is up, so asking for row 3 would
+ * answer yes with the op list gone -- and panel_ui_debug_restore reopens the
+ * interior, which closes the overlay. The rig would then photograph a bare
+ * ladder under the op list's name, having checked twice that it was right. */
+#define PANEL_TOUR_OPS    (-3)
+void        panel_ui_debug_to_menu(void);
 bool        panel_ui_debug_open_row(int row);
 /* Tap a ladder rung through the hit test; false if it was locked, off screen,
  * or the tap did not register a request. */
-bool        panel_ui_debug_run_rung(int rung);
+bool        panel_ui_debug_open_rung(int rung);
+bool        panel_ui_debug_run_op(int row);
+int         panel_ui_debug_op_count(void);
+const char *panel_ui_debug_op_says(int row);
+bool        panel_ui_debug_tap_op_expect_refusal(int row);
 bool        panel_ui_debug_probe_settled(void);
 bool        panel_ui_debug_probe_passed(void);
 bool        panel_ui_debug_showing(int want);
