@@ -27,6 +27,7 @@ class FakeStatusBridge(B.Bridge):
 
     def running(self):
         return True
+import sensor_probe as SP
 import r2_mood
 import r2_reactive as R
 from sensor_probe import GROUPS, EXT_GROUPS, masks, channels, empirical_thresholds
@@ -442,6 +443,62 @@ class TestStalledStream(unittest.TestCase):
             feed.drain()
         feed.flush()
         self.assertFalse(feed.stalled(12))
+
+
+class TestTouchMargin(unittest.TestCase):
+    """The sensitivity knob, and the fact that the DEFAULT is the knob.
+
+    `empirical_thresholds` took `margin=1.5` as a literal default, so raising
+    the constant while leaving the signature alone would have changed nothing
+    and every test here would still have passed. These pin the route-through,
+    not the number."""
+
+    def test_the_default_is_the_constant(self):
+        # Delete `margin: float = TOUCH_MARGIN` back to a literal and this
+        # fails -- which is the only reason the constant is load-bearing.
+        rest = {"g": [0.0, 1.0] * 20}
+        limit = SP.empirical_thresholds(rest, window_n=4)["g"][1]
+        explicit = SP.empirical_thresholds(
+            rest, window_n=4, margin=SP.TOUCH_MARGIN)["g"][1]
+        self.assertEqual(limit, explicit)
+
+    def test_the_bar_is_strictly_higher_than_the_old_default(self):
+        """Pins the DIRECTION without pinning the number, so retuning stays
+        cheap but a silent revert to 1.5 does not."""
+        self.assertGreater(SP.TOUCH_MARGIN, 1.5)
+
+    def test_raising_the_margin_raises_the_bar_proportionally(self):
+        rest = {"g": [0.0, 1.0] * 20}
+        loose = SP.empirical_thresholds(rest, window_n=4, margin=1.5)["g"][1]
+        tight = SP.empirical_thresholds(rest, window_n=4, margin=3.0)["g"][1]
+        self.assertAlmostEqual(tight, loose * 2.0)
+
+    def test_a_trial_between_the_old_and_new_bar_no_longer_fires(self):
+        """The whole point of the change, stated as behaviour.
+
+        A two-channel disturbance sized to clear 1.5x rest but not 2.5x is
+        exactly the incidental knock the operator attributed to the desk. It
+        fired before; it must not now. Two channels, so corroboration is
+        satisfied and this tests the MARGIN rather than accidentally testing
+        the corroboration rule."""
+        rest = {"a": [0.0, 1.0] * 20, "b": [0.0, 1.0] * 20}
+        loose = SP.empirical_thresholds(rest, window_n=4, margin=1.5)
+        tight = SP.empirical_thresholds(rest, window_n=4, margin=2.5)
+        # Peak-to-peak 2.0 against a rest p2p of 1.0: over 1.5x, under 2.5x.
+        trial = {"a": [0.0, 2.0, 0.0, 2.0], "b": [0.0, 2.0, 0.0, 2.0]}
+        self.assertTrue(SP.trial_fires(trial, loose)[0],
+                        "should have fired under the old margin")
+        self.assertFalse(SP.trial_fires(trial, tight)[0],
+                         "must not fire under the raised margin")
+
+    def test_a_real_pet_sized_disturbance_still_fires(self):
+        """The mirror risk. D-018: R2 always responds -- a margin raised too
+        far turns a pet into silence, which is worse than a spurious chirp."""
+        rest = {"a": [0.0, 1.0] * 20, "b": [0.0, 1.0] * 20}
+        tight = SP.empirical_thresholds(rest, window_n=4,
+                                        margin=SP.TOUCH_MARGIN)
+        trial = {"a": [0.0, 6.0, 0.0, 6.0], "b": [0.0, 6.0, 0.0, 6.0]}
+        self.assertTrue(SP.trial_fires(trial, tight)[0])
 
 
 class TestCorroboration(unittest.TestCase):
