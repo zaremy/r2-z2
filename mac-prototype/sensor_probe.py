@@ -60,6 +60,20 @@ RESIST_MARGIN_DEG = 4.0
 TRIALS_TO_CONFIRM = 4          # of 5
 # A trial must disturb this many channels at once to count.
 CHANNELS_TO_CORROBORATE = 2
+# How far a window must beat the worst excursion REST produces to count as a
+# touch. 1.5 through 2026-09-06, where the operator attributed 2 of 6 reactions
+# to the DESK rather than to a hand -- he answered a knock on the surface he
+# stood on. Raised to 2.5 on their ruling ("reduce sensitivity to reduce
+# accidental triggers"); the behaviour itself they judged good enough.
+#
+# NOT sized from data, and the reason matters: that run predates #151, so its
+# reactions carry `over: None` -- no per-reaction ratios were stored, and there
+# is no record of how far a real pet cleared the old bar or how far a desk knock
+# did. 2.5 is a judgement call. The risk it buys is the mirror of the one it
+# fixes: a light pet may now go unanswered, which violates D-018 ("R2 always
+# responds") more visibly than a spurious chirp did. If that shows up, lower it
+# -- and the run log now stores the ratios needed to size it properly.
+TOUCH_MARGIN = 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +167,7 @@ def window_stat(vals: list[float], mu: float = 0.0) -> float:
 
 
 def empirical_thresholds(baseline: dict[str, list[float]], window_n: int,
-                         margin: float = 1.5) -> dict[str, tuple[float, float]]:
+                         margin: float = TOUCH_MARGIN) -> dict[str, tuple[float, float]]:
     """Per channel: (rest mean, the excursion REST ITSELF produces).
 
     REPLACES a 6-sigma rule that was measurably broken. That rule compared the
