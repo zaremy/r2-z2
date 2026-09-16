@@ -137,6 +137,14 @@ bool        panel_ui_debug_open_row(int row);
 bool        panel_ui_debug_open_rung(int rung);
 bool        panel_ui_debug_run_op(int row);
 int         panel_ui_debug_op_count(void);
+
+/* HOW LONG A REFUSED TAP'S WORD STAYS UP. Here rather than inside panel_ui.c
+ * because the screenshot tour has to wait it out before asking what a row says
+ * -- and a tour that waited its own hardcoded interval would pass or fail on
+ * whether two numbers still agreed, which is not the thing being tested. */
+#define PANEL_REFUSE_FLASH_MS 1200u
+const char *panel_ui_debug_op_says(int row);
+bool        panel_ui_debug_tap_op_expect_refusal(int row);
 bool        panel_ui_debug_probe_settled(void);
 bool        panel_ui_debug_probe_passed(void);
 bool        panel_ui_debug_showing(int want);

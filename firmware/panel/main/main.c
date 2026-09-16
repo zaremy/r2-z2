@@ -649,9 +649,17 @@ static void tour_shot(unsigned slot, const char *what, int want)
      * that an empty slot is the honest outcome.
      *
      * Erasing here rather than fixing four branches means the invariant is
-     * structural: after this line the slot is empty until this function fills
-     * it, whatever happens next. */
-    panel_shot_erase_slot(slot);
+     * structural -- PROVIDED the erase worked. It returns whether it did, and
+     * an earlier version discarded that under the words "whatever happens
+     * next": on a failed erase the slot keeps the previous picture and every
+     * "slot left EMPTY" below becomes the lie this rig exists to prevent. */
+    if (!panel_shot_erase_slot(slot)) {
+        ESP_LOGE(TAG, "TOUR %u/%u: could not clear the slot for %s -- it may "
+                      "still hold an older frame, so nothing is captured",
+                 slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+        s_tour_ok = false;
+        return;
+    }
 
     vTaskDelay(pdMS_TO_TICKS(400));      /* let LVGL draw it */
 
@@ -718,11 +726,15 @@ static void tour_task(void *arg)
 {
     (void)arg;
     /* THE TOUR IS LONGER THAN IT WAS. Walking every op row adds three more
-     * PANEL_PROBE_TIMEOUT_MS + 600 waits, about 7.8 s, on top of the one the
-     * ladder's single run already cost. Measured end to end on the board at
-     * ~24 s from the first frame to TOUR COMPLETE, so the claim below still
-     * holds -- re-derived rather than carried, because it was a claim about a
-     * duration this change lengthened.
+     * PANEL_PROBE_TIMEOUT_MS + 600 waits on top of the one the ladder's
+     * single run already cost, and a refused-tap step after them. MEASURED
+     * END TO END ON THE BOARD, first frame to TOUR COMPLETE: 18.3 s -> 47.1 s,
+     * so 28.8 s of tour inside a 60 s step.
+     *
+     * RE-DERIVED TWICE, and the second time caught this sentence already stale
+     * again: the figure was written as 24.8 s and the refused-tap step added
+     * four seconds in the same edit. A duration is the easiest claim in a
+     * comment to leave behind, because nothing fails when it does.
      *
      * AND IT IS NOW RED ON A BENCH WITH NO DROID. Every op settles NO REPLY,
      * s_op_passed stays 0, and slot 4 is left empty by design. That is honest
@@ -833,6 +845,61 @@ static void tour_task(void *arg)
                              panel_ui_debug_probe_passed() ? "PASSED"
                                                            : "did NOT pass");
                 }
+                /* THE REFUSED TAP, AND WHAT THE ROW SAYS AFTERWARDS.
+                 *
+                 * Nothing exercised this path: panel_ui_debug_run_op returns
+                 * false on a refusal and the loop above treats false as an
+                 * abort, so a refused tap had never once occurred during a
+                 * tour -- which means the green board run PROVED THE BUSY
+                 * FLASH NEVER FIRED, rather than proving it works. The bug it
+                 * was added to fix (a settled verdict coming back as a green
+                 * RUN) would have shipped invisible to every test and every
+                 * picture.
+                 *
+                 * Row 0 has just settled. Tap row 1 to start a test, then tap
+                 * row 0 INSIDE its window: refused, so row 0 flashes BUSY over
+                 * its own verdict. After the flash expires it must read that
+                 * verdict again -- not "RUN", which is what the first version
+                 * wrote back. */
+                if (rows_ok) {
+                    char kept[16] = "";
+                    bool ok_flash = false;
+                    if (tour_lock("busy flash")) {
+                        snprintf(kept, sizeof kept, "%s",
+                                 panel_ui_debug_op_says(0));
+                        ok_flash = panel_ui_debug_run_op(1);
+                        bsp_display_unlock();
+                    }
+                    if (ok_flash && tour_lock("busy tap")) {
+                        ok_flash = panel_ui_debug_tap_op_expect_refusal(0);
+                        bsp_display_unlock();
+                    }
+                    if (!ok_flash) {
+                        ESP_LOGE(TAG, "TOUR: could not stage a refused tap");
+                        s_tour_ok = false;
+                    } else {
+                        /* Past the flash, and past row 1's own window so the
+                         * panel is idle again for the shot below. */
+                        vTaskDelay(pdMS_TO_TICKS(PANEL_REFUSE_FLASH_MS + 400u));
+                        const char *now = "";
+                        if (tour_lock("busy check")) {
+                            now = panel_ui_debug_op_says(0);
+                            bsp_display_unlock();
+                        }
+                        if (strcmp(now, kept) != 0) {
+                            ESP_LOGE(TAG, "TOUR: row 0 said \"%s\" before the "
+                                          "flash and \"%s\" after -- the flash "
+                                          "ATE THE VERDICT", kept, now);
+                            s_tour_ok = false;
+                            rows_ok = false;
+                        } else {
+                            ESP_LOGW(TAG, "TOUR: row 0 kept \"%s\" through a "
+                                          "BUSY flash", kept);
+                        }
+                        vTaskDelay(pdMS_TO_TICKS(PANEL_PROBE_TIMEOUT_MS + 400u));
+                    }
+                }
+
                 /* ON ROWS_OK, NOT ON s_tour_ok. The tour-wide flag carries
                  * every earlier step's failure, and suppressing THIS picture
                  * because the VOICE interior had a bad moment would lose the

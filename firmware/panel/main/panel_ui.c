@@ -559,7 +559,9 @@ static bool     s_probe_in_flight;
  * and the comment claiming they "see the same refusal the gate would give"
  * described something that was never rendered. A locked rung says so on
  * itself for a moment instead. */
-#define PANEL_REFUSE_FLASH_MS 1200u
+/* PANEL_REFUSE_FLASH_MS is in panel_ui.h: the tour has to wait the flash
+ * out before asking what a row says, and a second copy of the number
+ * there would be a copy free to drift from this one. */
 static int      s_refuse_rung = -1;
 static uint32_t s_refuse_at;
 
@@ -1506,6 +1508,39 @@ bool panel_ui_debug_open_rung(int rung)
 }
 
 int panel_ui_debug_op_count(void) { return s_ops_tier >= 0 ? s_op_n : 0; }
+
+/* WHAT THE ROW ACTUALLY SAYS, read off the LABEL rather than off s_op_says.
+ * Reading the shadow would make the check circular: the bug this exists to
+ * catch was the flash writing a literal to the label while s_op_says held the
+ * right word. The glass is the thing being asserted about. */
+const char *panel_ui_debug_op_says(int row)
+{
+    if (s_ops_tier < 0 || row < 0 || row >= s_op_n) return "";
+    if (s_op_word[row] == NULL) return "";
+    return lv_label_get_text(s_op_word[row]);
+}
+
+/* Tap a row and report that the tap was REFUSED -- the opposite of
+ * panel_ui_debug_run_op, and the case the tour could not reach before: that
+ * helper returns false on a refusal and the tour treats false as an abort, so
+ * a refused tap had never once happened during a tour run. */
+bool panel_ui_debug_tap_op_expect_refusal(int row)
+{
+    if (s_ops_tier < 0 || row < 0 || row >= s_op_n) return false;
+    if (s_op_row[row] == NULL) return false;
+    lv_obj_update_layout(s_ops_panel);
+    lv_area_t a;
+    lv_obj_get_coords(s_op_row[row], &a);
+    unsigned before, after;
+    portENTER_CRITICAL(&s_probe_mux);
+    before = s_probe_accepted;
+    portEXIT_CRITICAL(&s_probe_mux);
+    panel_ui_tap((a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2);
+    portENTER_CRITICAL(&s_probe_mux);
+    after = s_probe_accepted;
+    portEXIT_CRITICAL(&s_probe_mux);
+    return after == before;          /* refused, which is what we wanted */
+}
 
 bool panel_ui_debug_run_op(int row)
 {
