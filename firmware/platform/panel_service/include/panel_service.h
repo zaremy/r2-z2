@@ -259,8 +259,25 @@ typedef struct {
      * and a turn. The renderer colours on this, so a row that moves him cannot
      * be drawn like one that asks a question. */
     bool        moves;
-    /* How many ops this row actually sends, which is what a PASS has to count.
-     * 1 for a single op; the bundle's own size for PANEL_OP_ALL. */
+    /* HOW MANY OPS THIS ROW SENDS, which is what a PASS has to count.
+     *
+     * THE BUNDLE ROW'S FIELD IS THE ONLY INTERESTING ONE, and pretending
+     * otherwise was a mistake worth recording: an earlier version let a single
+     * row claim any count, and a test was written to prove the bundle SUMS
+     * them rather than counting rows. `run_op` ignores the field for singles
+     * -- it maps a named op to exactly one send -- so that distinction existed
+     * nowhere but in the struct, and the fixture invented to test it was
+     * testing a property the system does not have.
+     *
+     * Worse, a single row with sends > 1 IS a bundled test wearing a name:
+     * "ALL LEDS OFF" firing five commands on one tap is what CLAUDE.md
+     * forbids, reached without ever touching the RUN ALL row.
+     *
+     * So a single row sends exactly 1, refused otherwise, and the bundle's
+     * field is the number of rows below it. The sum and the count are now the
+     * same number BECAUSE THEY ARE THE SAME THING -- which makes a mutation
+     * swapping one for the other equivalent rather than surviving, and that is
+     * the honest version of a result this PR first claimed by fixture. */
     uint8_t     sends;
 } panel_tier_op_t;
 

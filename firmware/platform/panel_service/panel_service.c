@@ -1,6 +1,9 @@
 #include "panel_service.h"
 
 #include <ctype.h>
+#include "panel_probe.h"   /* PANEL_LEDGER_MAX: a bundle bigger than the ledger
+                            * can never pass, so it is refused rather than
+                            * shipped as a rung that always reads PARTIAL. */
 #include <stdio.h>
 #include <string.h>
 
@@ -330,6 +333,31 @@ _Static_assert(sizeof "DOME POSITION" <= PANEL_OP_NAME_LEN, "a row name is too l
  * is a control the operator cannot reach and cannot tell is missing. */
 _Static_assert(READ_OPS_N + 1u <= PANEL_TIER_OPS_MAX,
                "READ's op list no longer fits PANEL_TIER_OPS_MAX");
+
+/* ONE ENUMERATOR PER ROW, BECAUSE main.c's SEND SWITCH MAPS THEM BY HAND. A
+ * fourth row sharing an existing enumerator would fire the wrong command with
+ * `sent` still matching `expected` and a green verdict on top -- nothing on
+ * the glass or in the log would look different, which is why this fails the
+ * build instead. PANEL_OP__COUNT counts PANEL_OP_ALL, which is not a row. */
+_Static_assert(READ_OPS_N == PANEL_OP__COUNT - 1u,
+               "an op was added to the enum or the table but not both -- "
+               "run_op's send switch maps them by hand");
+
+/* A BUNDLE MUST FIT THE LEDGER, AND THIS IS AN ASSERT BECAUSE A RUNTIME CHECK
+ * COULD NOT FIRE. panel_probe strikes replies off a table of PANEL_LEDGER_MAX
+ * seqs; a bundle sending more than that is a test that CANNOT PASS however
+ * well it goes, because the extra requests have nowhere to be written down and
+ * their answers match nothing. It would show as a rung that always reads
+ * PARTIAL, with nothing pointing at the cause.
+ *
+ * The bundle can never exceed PANEL_TIER_OPS_MAX - 1 rows, so while that stays
+ * under the ledger no runtime input can reach the condition -- a check there
+ * was a guard whose false branch is unreachable, which a mutation battery
+ * caught surviving and which is the shape of error this file has now made
+ * three times. Raising PANEL_TIER_OPS_MAX past the ledger is the move that
+ * breaks it, and this is what stops that move. */
+_Static_assert(PANEL_TIER_OPS_MAX - 1 <= PANEL_LEDGER_MAX,
+               "a bundle can now ask more than the probe ledger can hold");
 /* THE SUM IS WHAT IS CAST, AND IT IS BOUNDED AT RUNTIME, not here. The assert
  * this replaces bounded the ROW COUNT -- not the quantity that gets narrowed
  * to uint8_t, and three rows sending 100 each overflow it with the count at 3.
@@ -355,6 +383,23 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
      * yes and the row would be drawn plain rather than amber and fire it. The
      * ops themselves get a veto, so the rule cannot be wrong about a list the
      * table has never seen. */
+    /* THE WHOLE LIST IS REFUSED, NOT THE BAD ROW DROPPED. A catalogue with an
+     * illegal row is a bug in that catalogue, and serving the rest of it would
+     * hide the bug behind a screen that works. */
+    for (int i = 0; i < n_ops; i++) {
+        /* ONE SEND PER NAMED ROW. A row firing five commands on one tap is a
+         * bundled test wearing a name -- what CLAUDE.md forbids, reached
+         * without going near the RUN ALL row, which the `moves` veto below
+         * does nothing about. It is also the only value run_op honours. */
+        if (ops[i].op != PANEL_OP_ALL && ops[i].sends != 1) return 0;
+        /* A NAME MUST END INSIDE ITS FIELD. `char name[N]` initialised from a
+         * literal of exactly N characters drops the NUL -- silently, with no
+         * warning under -Wall -Wextra -Werror -- and the label would then be
+         * read on into `moves` and `sends`. */
+        if (memchr(ops[i].name, '\0', sizeof ops[i].name) == NULL) return 0;
+        if (ops[i].name[0] == '\0') return 0;   /* a row nobody can identify */
+    }
+
     bool bundled = panel_service_tier_may_bundle(tier) && n_ops > 1;
     for (int i = 0; bundled && i < n_ops; i++)
         if (ops[i].moves) bundled = false;
@@ -372,13 +417,10 @@ int panel_service_ops_rows(int tier, const panel_tier_op_t *ops, int n_ops,
      * two controls for one action, and the operator has to work out that they
      * are the same one. */
     if (bundled) {
-        unsigned sends = 0;
-        for (int i = 0; i < n_ops; i++) sends += ops[i].sends;
-        /* THE PUBLIC ENTRY POINT TAKES ARBITRARY OPS, so the shipped table's
-         * compile-time bound proves nothing about this call. A sum that does
-         * not fit is refused rather than wrapped: a bundle row claiming to
-         * send 4 when it sends 260 is a control lying about what it does. */
-        if (sends > 255u) return 0;
+        /* ONE PER ROW, because a row may only send one. The sum and the row
+         * count are the same number here and that is not a coincidence to be
+         * tested around -- see the struct's comment. */
+        const unsigned sends = (unsigned)n_ops;
         out[n].op    = PANEL_OP_ALL;
         /* THE LABEL NAMES THE COUNT because it is the count the operator is
          * consenting to. Built from the list rather than written down beside

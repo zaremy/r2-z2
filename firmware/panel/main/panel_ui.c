@@ -314,11 +314,20 @@ static lv_obj_t *make_page(lv_obj_t *parent)
 #define INT_RUNG_H   48                   /* 47 + hairline: shrunk so the
                                           * STOP can be a bar, not a row */
 #define INT_LADDER_BOTTOM 364             /* where the body stops, STOP below */
+#define OP_INDENT    14                   /* one level in: see open_ops */
 /* EXACTLY, not comfortably. A seventh rung or a top inset makes the ladder
  * scrollable, and the guards that make a scrolling list safe exist only
  * for the SERVICE list. Fail the build instead. */
 _Static_assert(PANEL_LADDER_RUNGS * INT_RUNG_H <= INT_LADDER_BOTTOM - INT_BODY_Y,
                "the ladder no longer fits without scrolling");
+/* AND THE OP LIST OVER IT, which had no such guard. s_ops_panel is bare() and
+ * so does not scroll: at PANEL_TIER_OPS_MAX = 6 the last rows would be drawn
+ * outside the panel and simply not appear -- an unreachable control, which is
+ * the exact failure panel_service_ops_rows refuses-rather-than-truncates to
+ * prevent. Raising that constant to fit a bigger catalogue is the obvious move
+ * for whoever catalogues LEDS; it must fail the build, not the operator. */
+_Static_assert(PANEL_TIER_OPS_MAX * INT_KV_H <= INT_LADDER_BOTTOM - INT_BODY_Y,
+               "the op list no longer fits without scrolling");
 #define CHEVRONS     "\xE2\x80\xBA\xE2\x80\xBA"       /* U+203A x2 */
 #define BACK         "\xE2\x80\xB9\xE2\x80\xB9 "      /* U+2039 x2 */
 
@@ -846,7 +855,15 @@ static bool open_ops(int tier)
 {
     s_op_n = panel_service_tier_ops(tier, s_op);
     if (s_op_n <= 0) {
-        ESP_LOGW("panel", "rung %d has no op catalogue -- refused", tier);
+        /* NOT NECESSARILY "NOBODY WROTE ITS ROWS". panel_service_tier_ops
+         * answers 0 for an uncatalogued tier AND for a catalogue it refuses --
+         * too many rows for PANEL_TIER_OPS_MAX, a row claiming more than one
+         * send, a name that fills its field. Whoever catalogues LEDS and gets
+         * a rung flashing REFUSED needs to know which, and D-029 defines the
+         * flash as meaning only the first. Say both. */
+        ESP_LOGW("panel", "rung %d offers no runnable ops -- either nothing is "
+                          "catalogued for it, or its catalogue was refused "
+                          "(see panel_service_ops_rows)", tier);
         return false;
     }
 
@@ -869,21 +886,38 @@ static bool open_ops(int tier)
     for (int i = 0; i < s_op_n; i++) {
         lv_obj_t *row = lv_obj_create(s_ops_panel);
         bare(row);
-        lv_obj_set_size(row, SVC_W, INT_KV_H);
-        lv_obj_set_pos(row, 0, i * INT_KV_H);
-        if (i < s_op_n - 1) {
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-            lv_obj_set_style_border_width(row, 1, 0);
-            lv_obj_set_style_border_color(row, lv_color_hex(V5_HAIRLINE), 0);
-        }
+        lv_obj_set_size(row, SVC_W - OP_INDENT, INT_KV_H);
+        lv_obj_set_pos(row, OP_INDENT, i * INT_KV_H);
+        /* INDENTED, AND THE RUNG ROWS ARE NOT. The two levels were otherwise
+         * the same row: same font, same size, the same green "RUN" in the same
+         * place, 5 px apart in height. Once the ceiling rises, a tap at level
+         * one is free and a tap at level two fires an actuator -- and the
+         * habit the operator learns at level one is the dangerous one.
+         *
+         * A STRUCTURAL CUE, NOT A COLOUR ONE. Amber is already doing three
+         * jobs on this screen (a moving op, the REFUSED flash, a verdict that
+         * did not pass) and could not carry a fourth meaning. The indent and
+         * the rule down the left edge say "you are one level in" without
+         * spending a colour. */
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT |
+                                     (i < s_op_n - 1 ? LV_BORDER_SIDE_BOTTOM : 0), 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(V5_HAIRLINE), 0);
+
         /* A ROW THAT MOVES HIM IS AMBER, one that only asks is the text
          * colour. Per-op, not per-tier: a DOME list holds both a read-back and
          * a turn, and drawing them alike would be the bundle's dishonesty at a
          * smaller scale. Nothing at READ is amber, which is the point. */
+        /* COORDINATES ARE INSIDE THE ROW, and the row is already indented.
+         * Indenting the text as well double-indented it, and right-aligning
+         * the verdict at SVC_W inside a row SVC_W - OP_INDENT wide pushed it
+         * 14 px off the panel: "3/3 OK" rendered as "3/3 O". Caught by looking
+         * at the screen, which is the only place it was visible -- it builds,
+         * it runs, the tour reports green and the log is identical. */
         text(row, &techmono_24, 1, s_op[i].moves ? PANEL_C_AMBER : V5_TEXT,
              0, 6, s_op[i].name);
         s_op_word[i] = text_r(row, &techmono_18, 1, PANEL_C_GREEN,
-                              SVC_W, 120, 18, "RUN");
+                              SVC_W - OP_INDENT, 120, 18, "RUN");
         s_op_row[i] = row;
     }
     s_ops_tier = tier;
@@ -1630,9 +1664,11 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     if (start)
         /* THE RUNG INDEX IS THE TIER INDEX -- the ladder walks the gate's own
          * order. It picks the window, and refuses a tier nobody has timed.
-         * s_probe_rung is written on tap-accept and read here, both on
-         * ui_task, so it needs no lock; it is -1 only when no test is
-         * running, and `start` cannot be true then. */
+         * s_probe_rung is written in open_ops -- on RUNG-open, not on
+         * tap-accept, which is where it used to be written and what this
+         * comment used to say -- and read here, both on ui_task, so it needs
+         * no lock. It is -1 only when no op list is open, and `start` cannot
+         * be true then. */
         panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e, was_up,
                           s_probe_rung);
 

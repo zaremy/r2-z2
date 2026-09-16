@@ -15,7 +15,7 @@ PORT="${1:-/dev/cu.usbmodem2101}"
 OUT="${2:-tour}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${3:-}"
-NAMES=(status service r2-link diagnostics hardware-test provisioning voice camera about)
+NAMES=(status service r2-link diagnostics hw-test-ops provisioning voice camera about)
 SLOTS=${#NAMES[@]}
 
 if [ -z "$IDF_PATH" ]; then

@@ -675,6 +675,19 @@ static const char *const k_tour_name[] = {
 static void tour_task(void *arg)
 {
     (void)arg;
+    /* THE TOUR IS LONGER THAN IT WAS. Walking every op row adds three more
+     * PANEL_PROBE_TIMEOUT_MS + 600 waits, about 7.8 s, on top of the one the
+     * ladder's single run already cost. Measured end to end on the board at
+     * ~24 s from the first frame to TOUR COMPLETE, so the claim below still
+     * holds -- re-derived rather than carried, because it was a claim about a
+     * duration this change lengthened.
+     *
+     * AND IT IS NOW RED ON A BENCH WITH NO DROID. Every op settles NO REPLY,
+     * s_op_passed stays 0, and slot 4 is left empty by design. That is honest
+     * and it collapses "no droid present" with "rendering broken" into one
+     * verdict -- the rig's old green-on-a-bench property is gone, deliberately,
+     * because a picture of an op list with no verdicts proves nothing about
+     * the thing this slice changed. */
     /* Long enough for the link to settle: a STATUS frame taken before that is
      * a picture of WAKING, which is a real state but not the resting one. It
      * is also past the wake frame that fires ~5 s in when no droid answers.
@@ -782,8 +795,19 @@ static void tour_task(void *arg)
                  * every earlier step's failure, and suppressing THIS picture
                  * because the VOICE interior had a bad moment would lose the
                  * evidence for the thing being changed. */
-                if (rows_ok)
+                if (rows_ok) {
                     tour_shot(2 + i, "HW TEST ops after RUN", PANEL_TOUR_OPS);
+                } else {
+                    /* THE SLOT IS ERASED, NOT LEFT HOLDING THE LADDER. Both
+                     * views share slot 4 and grab_tour.sh files it under one
+                     * name; a ladder sitting there when the ops failed to run
+                     * would be the right filename over the wrong picture --
+                     * the exact failure this rig exists to prevent, relocated
+                     * into the naming script. Empty is a finding. */
+                    ESP_LOGE(TAG, "TOUR: the ops did not run -- erasing slot %u "
+                                  "rather than leaving the ladder in it", 2 + i);
+                    panel_shot_erase_slot(2 + i);
+                }
             }
         } else {
             /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh

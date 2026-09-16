@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "panel_service.h"
+#include "panel_probe.h"    /* PANEL_LEDGER_MAX */
 
 static int failures = 0, checks = 0;
 #define CHECK(cond, ...) do {                                \
@@ -567,13 +568,21 @@ static const panel_tier_op_t k_fake_ops[] = {
     { PANEL_OP_VERSION, "WHERE ARE YOU", false, 1 },
 };
 
-/* EVERY OP IN EVERY OTHER FIXTURE SENDS EXACTLY ONE, which made the sum of
- * `sends` indistinguishable from the row count -- so `sends += ops[i].sends`
- * mutated to `sends = n_ops` SURVIVED, and so did building the label from
- * n_ops. Both tests read as though they pinned the arithmetic and neither
- * could fail. A review's mutation battery found it; this fixture is the fix.
+/* A ROW THAT CLAIMS MORE THAN ONE SEND, which is now refused outright.
  *
- * 2 + 3 = 5 is not 2, so the count and the sum finally disagree. */
+ * THIS FIXTURE USED TO BE THE FIX FOR SOMETHING ELSE. A mutation battery found
+ * that `sends += ops[i].sends` mutated to `sends = n_ops` survived, because
+ * every op in every fixture sent exactly one -- so a two-and-three fixture was
+ * added to make the sum and the count disagree. That was the wrong repair. The
+ * sender ignores the field for single rows, so the distinction lived nowhere
+ * but in the struct, and a row firing five commands on one tap is a bundled
+ * actuator test wearing a name: the thing CLAUDE.md forbids, reached without
+ * going near the RUN ALL row.
+ *
+ * The rule is now "a named row sends exactly one", and the mutation is
+ * EQUIVALENT rather than surviving -- the sum and the count are the same
+ * number because they are the same thing. The fixture stays, to assert the
+ * refusal. */
 static const panel_tier_op_t k_multi_ops[] = {
     { PANEL_OP_BATTERY, "TWO THINGS",   false, 2 },
     { PANEL_OP_HEAD,    "THREE THINGS", false, 3 },
@@ -724,35 +733,51 @@ static void test_the_bundle_sends_what_the_single_rows_add_up_to(void)
           "the bundle sends %u, its rows send %u", (unsigned)ops[0].sends, singles);
 }
 
-/* THE SUM, NOT THE COUNT. Two rows sending 2 and 3 must bundle to 5 and read
- * "RUN ALL 5" -- with a one-per-row fixture both of those are 2 either way,
- * which is how the arithmetic shipped untested. */
-static void test_the_bundle_sums_sends_rather_than_counting_rows(void)
+/* A NAMED ROW THAT CLAIMS MORE THAN ONE SEND IS A BUNDLED ACTUATOR TEST, and
+ * the `moves` veto does not touch it -- that veto removes the RUN ALL row and
+ * says nothing about a single row firing five commands. Refused as a LIST:
+ * a catalogue with an illegal row is a bug in the catalogue, and serving the
+ * rest of it hides that bug behind a screen that works. */
+static void test_a_row_claiming_more_than_one_send_is_refused(void)
 {
     panel_tier_op_t out[PANEL_TIER_OPS_MAX];
-    const int n = panel_service_ops_rows(0, k_multi_ops, 2, out);
-    CHECK(n == 3, "a 2-op list assembled %d rows", n);
-    if (n != 3) return;
-    CHECK(out[0].op == PANEL_OP_ALL, "row 0 is not the bundle");
-    CHECK(out[0].sends == 5, "the bundle sends %u, wanted 5",
-          (unsigned)out[0].sends);
-    CHECK(strcmp(out[0].name, "RUN ALL 5") == 0,
-          "the bundle is labelled \"%s\", wanted RUN ALL 5", out[0].name);
+    CHECK(panel_service_ops_rows(0, k_multi_ops, 2, out) == 0,
+          "a list with a 2-send row was not refused");
+    /* And on a tier that moves him, where it matters most. */
+    CHECK(panel_service_ops_rows(3, k_multi_ops, 2, out) == 0,
+          "an actuator list with a multi-send row was not refused");
+    /* One row, one send, is fine. */
+    const panel_tier_op_t ok = { PANEL_OP_BATTERY, "ASK", false, 1 };
+    CHECK(panel_service_ops_rows(3, &ok, 1, out) == 1,
+          "a legal one-send row was refused");
 }
 
-/* A SUM THAT WOULD NOT FIT A uint8_t IS REFUSED, NOT WRAPPED. A bundle row
- * claiming to send 4 while sending 260 is a control lying about what it does,
- * and the compile-time bound on the shipped table says nothing about this
- * function's arbitrary-ops contract. */
-static void test_a_bundle_whose_sum_overflows_is_refused(void)
+/* THE LEDGER BOUND IS A _Static_assert, NOT A TEST, and the test that used to
+ * be here is why. It built a list of PANEL_LEDGER_MAX + 2 ops and asserted the
+ * refusal -- but PANEL_TIER_OPS_MAX is 4 and the ledger is 8, so the capacity
+ * check refused it first and the ledger check never ran. A mutation battery
+ * caught it: deleting the ledger check left the suite green.
+ *
+ * No runtime input can reach that condition while PANEL_TIER_OPS_MAX stays
+ * under PANEL_LEDGER_MAX, which makes a runtime check a guard whose false
+ * branch is unreachable -- this file's most-repeated mistake. The assert in
+ * panel_service.c fires on the edit that would actually break it. */
+
+/* A NAME THAT FILLS ITS FIELD EXACTLY IS NOT NUL-TERMINATED, and C does that
+ * silently -- no warning under -Wall -Wextra -Werror. The label would be read
+ * on into `moves` and `sends`. Refused rather than rendered. */
+static void test_a_name_that_fills_its_field_is_refused(void)
 {
-    const panel_tier_op_t big[] = {
-        { PANEL_OP_BATTERY, "A", false, 200 },
-        { PANEL_OP_HEAD,    "B", false, 200 },
-    };
+    panel_tier_op_t bad = { PANEL_OP_BATTERY, "", false, 1 };
+    memset(bad.name, 'X', sizeof bad.name);      /* every byte, no NUL */
     panel_tier_op_t out[PANEL_TIER_OPS_MAX];
-    CHECK(panel_service_ops_rows(0, big, 2, out) == 0,
-          "a bundle summing to 400 was not refused");
+    CHECK(panel_service_ops_rows(0, &bad, 1, out) == 0,
+          "an unterminated row name was not refused");
+
+    /* And an empty one: a control the operator cannot identify. */
+    panel_tier_op_t blank = { PANEL_OP_BATTERY, "", false, 1 };
+    CHECK(panel_service_ops_rows(0, &blank, 1, out) == 0,
+          "a row with an empty name was not refused");
 }
 
 /* A ROW'S NAME BELONGS TO THE ROW. The bundle's label used to point into one
@@ -770,9 +795,16 @@ static void test_a_held_row_keeps_its_own_name(void)
     char held[PANEL_OP_NAME_LEN];
     snprintf(held, sizeof held, "%s", a[0].name);
 
-    /* A different list, with a different sum, through the same function. */
-    const int nb = panel_service_ops_rows(0, k_multi_ops, 2, b);
+    /* A different list, with a different COUNT, through the same function --
+     * so the bundle row it builds carries a different label. */
+    const panel_tier_op_t two[] = {
+        { PANEL_OP_BATTERY, "ASK ONE", false, 1 },
+        { PANEL_OP_HEAD,    "ASK TWO", false, 1 },
+    };
+    const int nb = panel_service_ops_rows(0, two, 2, b);
     CHECK(nb == 3, "the second list assembled %d rows", nb);
+    CHECK(strcmp(b[0].name, "RUN ALL 2") == 0,
+          "the second bundle is labelled \"%s\"", b[0].name);
     CHECK(strcmp(a[0].name, held) == 0,
           "the held row's name became \"%s\" (was \"%s\")", a[0].name, held);
 }
@@ -945,8 +977,8 @@ int main(void)
     test_the_bundle_alone_exercises_the_tier();
     test_an_actuator_tiers_gate_is_reachable_without_a_bundle();
     test_a_tier_with_no_rows_is_never_exercised();
-    test_the_bundle_sums_sends_rather_than_counting_rows();
-    test_a_bundle_whose_sum_overflows_is_refused();
+    test_a_row_claiming_more_than_one_send_is_refused();
+    test_a_name_that_fills_its_field_is_refused();
     test_a_held_row_keeps_its_own_name();
     test_a_full_actuator_list_fits_because_it_needs_no_bundle();
     test_a_moving_op_refuses_the_bundle_whatever_the_tier_says();

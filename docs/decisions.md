@@ -2395,7 +2395,12 @@ last week. He has no resting posture, parks himself in bipod about a minute
 after the link drops, and an authored animation has already put him on the
 floor once (`CLAUDE.md`). A persisted bit records that a test *once* passed; it
 cannot speak for the droid in front of you. Re-walking the ladder after a boot
-costs one tap per rung and re-proves what the bit only remembers.
+~~costs one tap per rung~~ and re-proves what the bit only remembers.
+
+> **Superseded by D-029.** Per-op consent gives an actuator tier no legal
+> bundle, so re-walking one costs **one tap per op** and every op must pass.
+> The argument above is unchanged and the price is higher than it says — worth
+> knowing before the ceiling is raised, since it is paid at every boot.
 
 ### The rung says which barrier it hit
 
@@ -2412,8 +2417,10 @@ STANCE sends them at the wrong lever.
   the gate's allowlist, the gate's ceiling, and now the ladder's order. The
   ladder still never decides what is safe — it decides what is *offered*, and
   `r2_gate` refuses anything above the ceiling regardless.
-- A rung unlocked by a passing probe shows `NOT YET` until the interior is
-  reopened, because the ladder is built on open. Unobservable at the shipped
+- ~~A rung unlocked by a passing probe shows `NOT YET` until the interior is
+  reopened, because the ladder is built on open.~~ **Fixed in D-029**:
+  `relabel_ladder` recomputes the words in place on the tick the bit changes.
+  Unobservable at the shipped
   `READ` ceiling (one rung, no sequence) and folded into #168 part 2, which
   rebuilds these rows for per-op consent.
 - ~~**Two of #168's four findings remain open**: consent is still per *tier*
@@ -2692,7 +2699,15 @@ should be red**, and this ADR should be revisited rather than cited.
 ## D-029 — A rung opens its ops, and consent is given per named op
 
 **Status:** accepted, 2026-09-15 · closes #168 part 2
-**Completes D-025's consequence list. Does not change the ceiling or the gate.**
+**Completes D-025's consequence list. Does not change the ceiling.**
+
+**IT DOES CHANGE WHAT THE GATE COSTS.** D-025 says *"re-walking the ladder
+after a boot costs one tap per rung"*. Under this ADR an actuator tier has no
+legal bundle, so re-walking it costs **one tap per op, and every one of them
+must pass**. An earlier draft of this header said "does not change the ceiling
+or the gate", which was a material change to a sequence-gate cost asserted as a
+non-change — the shape of error this repo ranks worst. D-025's line is struck
+below rather than left to be believed.
 
 ### The decision
 
