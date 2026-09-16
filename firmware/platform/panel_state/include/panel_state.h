@@ -44,7 +44,11 @@ extern "C" {
  * D-012's light language, not shades -- what luminance and hue deliver each
  * meaning is the panel's business (D-012 Amendment A), which is why the values
  * differ from the body's and the names do not. */
-#define PANEL_C_RED     0xF0574A   /* danger and stop, ONLY (IEC 60073) */
+/* A DANGEROUS STATE, and only that. NOT the colour of a control that ends
+ * one: the panel's STOP bar is amber, ruled in D-028 with the IEC 60073
+ * conflict on the table. Red here is what the FACE reports, and a red bar
+ * sitting permanently on the ladder would read as a standing fault. */
+#define PANEL_C_RED     0xF0574A   /* danger (IEC 60073) */
 #define PANEL_C_AMBER   0xF2B23C   /* needs monitoring */
 #define PANEL_C_BLUE    0x4A7BE8   /* neutral, on, waiting */
 #define PANEL_C_CYAN    0x3FD8E8   /* engaged */
