@@ -282,6 +282,23 @@ little entity is continuously present in the household.
   observation; if you find yourself writing "necessary but not sufficient",
   that is usually the tell that only one of the two was tested.
 
+- **`firmware/panel` has TWO build configurations and only one of them ships,
+  and the one you run while iterating is the other one.** `idf.py
+  -DPANEL_SHOT_TOUR=OFF` is what goes on the droid; `=ON` drives the panel
+  through nine screenshots. **The flag is sticky in the CMake cache**, so a
+  bare `idf.py build` after a tour build is *still a tour build*.
+
+  That combination broke the shipping build for **nine consecutive green
+  builds, a flash, a live hardware run with R2 linked, and a negative control**
+  — a constant moved into `panel_ui.h` landed inside the tour's own `#ifdef`
+  while `panel_ui.c` used it unconditionally. Every compile in that stretch was
+  of the one configuration that could not see it. The merge check found it.
+
+  Run **`firmware/panel/tools/build_both.sh`** before pushing anything under
+  `firmware/panel`. It builds both and leaves the cache on the SHIPPING
+  configuration, so the next bare `flash` is not a tour build going on the
+  droid by accident. "It builds" is not a fact here until you say which one.
+
 - **Panel brightness is a CO5300 register that SURVIVES A REFLASH, so a black
   screen is not a dead app.** `bsp_display_start()` does not set a level and
   `bsp_display_backlight_on()` was not enough; the panel came up black on a
