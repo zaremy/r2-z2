@@ -115,6 +115,20 @@ void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);
 
+/* HOW LONG A REFUSED TAP'S WORD STAYS UP.
+ *
+ * OUTSIDE THE TOUR'S #ifdef, and it spent one commit inside it: panel_ui.c
+ * uses this unconditionally, so the SHIPPING build stopped compiling while
+ * every tour build kept passing. Nine consecutive green builds and a hardware
+ * run, all of the one configuration that could not see it -- the plain build
+ * was not compiled again until the merge check.
+ *
+ * It lives in the header rather than in panel_ui.c because the tour has to
+ * wait the flash out before asking what a row says, and a tour holding its own
+ * copy of the interval would pass or fail on whether two numbers still agreed,
+ * which is not the thing being tested. */
+#define PANEL_REFUSE_FLASH_MS 1200u
+
 #ifdef PANEL_SHOT_TOUR
 /* Screenshot-tour build only. `panel_ui_debug_open_row` scrolls a SERVICE row
  * into view and taps its centre through the real hit test, returning false if
@@ -137,12 +151,6 @@ bool        panel_ui_debug_open_row(int row);
 bool        panel_ui_debug_open_rung(int rung);
 bool        panel_ui_debug_run_op(int row);
 int         panel_ui_debug_op_count(void);
-
-/* HOW LONG A REFUSED TAP'S WORD STAYS UP. Here rather than inside panel_ui.c
- * because the screenshot tour has to wait it out before asking what a row says
- * -- and a tour that waited its own hardcoded interval would pass or fail on
- * whether two numbers still agreed, which is not the thing being tested. */
-#define PANEL_REFUSE_FLASH_MS 1200u
 const char *panel_ui_debug_op_says(int row);
 bool        panel_ui_debug_tap_op_expect_refusal(int row);
 bool        panel_ui_debug_probe_settled(void);
