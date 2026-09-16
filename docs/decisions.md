@@ -2626,3 +2626,66 @@ guard that cannot fire reads exactly like one that can — this repo has the sca
   assertion that tied the two index spaces did not run where the table is
   tested.
 
+## D-028 — The panel's STOP is amber, and red keeps its meaning for state
+
+**Status:** accepted, 2026-09-15 · **operator's ruling, taken with the conflict on the table**
+**Narrows the parenthetical in `panel_state.h`'s `PANEL_C_RED`. Does not touch D-012's body scheme.**
+
+### The decision
+
+The STOP bar on the HARDWARE TEST ladder is `PANEL_C_AMBER` filled, with
+`0xB07A1F` as its pressed fill. Red is **not** used for it.
+
+`panel_state.h` reads:
+
+```c
+#define PANEL_C_RED     0xF0574A   /* danger and stop, ONLY (IEC 60073) */
+#define PANEL_C_AMBER   0xF2B23C   /* needs monitoring */
+```
+
+That comment is narrowed to: **red means a DANGEROUS STATE. It does not claim
+the colour of a control that ends one.**
+
+### Why this needed a ruling rather than a default
+
+The conflict is real and was put to the operator before the button was built:
+IEC 60073 makes red the emergency-stop colour, the palette's own comment says
+"danger and stop, ONLY", and D-012 Amendment B says *"what a colour means is
+the shared language and must not fork"*. An amber halt control is a fork on its
+face.
+
+The operator chose amber anyway. Recorded because an undocumented choice that
+contradicts a written rule is the failure mode this repo already has a name for
+— *amend the rule, do not quietly break it*. The next person reads
+`panel_state.h:47` and believes it.
+
+### The reasoning behind the choice
+
+- **Red on this panel is a STATE colour, and states are what the face reports.**
+  The status square, the state word and the wake frame all use red to mean
+  *something is wrong right now*. A red bar sitting permanently at the bottom
+  of the ladder would read as a standing fault rather than an available action
+  — the panel would look alarmed whenever the ladder was open.
+- **The bar is present continuously, not on an alarm.** IEC 60073's red is for
+  an emergency-stop actuator on a machine where red appears nowhere else. Here
+  it appears constantly and means something else first.
+- **Amber already carries "this is the one that acts".** It is the colour of
+  the REFUSED flash and the PARTIAL verdict — the panel's existing vocabulary
+  for *pay attention to this control*.
+
+### What this does not claim
+
+That amber is the better ergonomic choice in the abstract; IEC 60073 exists for
+good reasons and a first-time operator reaching for a stop looks for red. The
+mitigation is that this is not a machine's emergency stop — it is a service
+panel's abort, two levels into a diagnostics menu, operated by the person who
+built it. **If this panel ever gains a stop reachable from the face, that one
+should be red**, and this ADR should be revisited rather than cited.
+
+### Consequences
+
+- `STOP_AMBER_DEEP 0xB07A1F` is a fourth hue outside `panel_state.h`'s palette.
+  It exists only as a pressed-state shade of an existing colour and is scoped to
+  `panel_ui.c`; it is not a new state colour and must not be used as one.
+- `panel_state.h`'s red comment is now narrower than it reads. Corrected there.
+

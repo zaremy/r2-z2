@@ -311,7 +311,14 @@ static lv_obj_t *make_page(lv_obj_t *parent)
 #define INT_HEAD_H   74
 #define INT_BODY_Y   76
 #define INT_KV_H     53                   /* 52 + hairline */
-#define INT_RUNG_H   54                   /* 53 + hairline: see the ladder */
+#define INT_RUNG_H   48                   /* 47 + hairline: shrunk so the
+                                          * STOP can be a bar, not a row */
+#define INT_LADDER_BOTTOM 364             /* where the body stops, STOP below */
+/* EXACTLY, not comfortably. A seventh rung or a top inset makes the ladder
+ * scrollable, and the guards that make a scrolling list safe exist only
+ * for the SERVICE list. Fail the build instead. */
+_Static_assert(PANEL_LADDER_RUNGS * INT_RUNG_H <= INT_LADDER_BOTTOM - INT_BODY_Y,
+               "the ladder no longer fits without scrolling");
 #define CHEVRONS     "\xE2\x80\xBA\xE2\x80\xBA"       /* U+203A x2 */
 #define BACK         "\xE2\x80\xB9\xE2\x80\xB9 "      /* U+2039 x2 */
 
@@ -393,13 +400,63 @@ static bool        s_stop_request;        /* tapped; link_task has not taken it 
 static bool        s_stop_reported;       /* a verdict is waiting to be drawn */
 static unsigned    s_stop_sent;           /* how many halts got out */
 static bool        s_stop_link;           /* was he there */
-static uint32_t    s_stop_at;             /* when the verdict was reported */
-static char        s_stop_word[16] = "STOP";   /* ui_task only */
-static lv_obj_t   *s_stop_row, *s_stop_label;
+static char        s_stop_word[24] = "";       /* ui_task only */
+static lv_obj_t   *s_stop_row, *s_stop_label, *s_stop_result;
 
-/* How long the outcome stays on the button before it says STOP again. Long
- * enough to read at arm's length, short enough that the control is back. */
-#define PANEL_STOP_SHOW_MS 3000u
+/* THE STOP'S THREE STATES, defined together so none of them is an accident.
+ * A control with one appearance is not a defined control: the operator cannot
+ * tell a press that registered from one that did not, and cannot tell a button
+ * that will reach him from one that will not.
+ *
+ *   READY        filled, full weight. It will be sent and he is there.
+ *   PRESSED      the fill deepens the moment the tap lands, before the radio
+ *                has done anything. 100 ms of link-task latency is long enough
+ *                to press twice wondering if the first one took.
+ *   UNREACHABLE  outlined rather than filled, with the fill's weight removed.
+ *                The link is down.
+ *
+ * UNREACHABLE IS NOT "DISABLED", and the difference is deliberate. It stays
+ * tappable: a halt with him away costs three refused frames and tells the
+ * operator the link is down, which beats a dead button while he is moving.
+ * Styling it as unavailable-but-pressable would be the dishonest option; this
+ * says "this will not reach him" without saying "you may not try". */
+typedef enum {
+    STOP_READY = 0,
+    STOP_PRESSED,
+    STOP_UNREACHABLE,
+} stop_visual_t;
+
+/* WHAT IS CURRENTLY PAINTED, so the per-tick derive can skip a redundant
+ * repaint and can tell PRESSED (which it must not stomp) from a settled
+ * state. */
+static stop_visual_t s_stop_visual = STOP_UNREACHABLE;
+
+#define STOP_AMBER_DEEP 0xB07A1F   /* PANEL_C_AMBER pressed down */
+#define STOP_INK        0x0A0C0D   /* near-black, for text on the fill */
+
+static void stop_paint(stop_visual_t v)
+{
+    if (s_stop_row == NULL || s_stop_label == NULL) return;
+    s_stop_visual = v;
+
+    const bool filled = (v != STOP_UNREACHABLE);
+    const uint32_t fill = (v == STOP_PRESSED) ? STOP_AMBER_DEEP : PANEL_C_AMBER;
+    const uint32_t ink  = filled ? STOP_INK : PANEL_C_AMBER;
+
+    lv_obj_set_style_bg_opa(s_stop_row, filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(s_stop_row, lv_color_hex(fill), 0);
+    /* The outline carries the shape when the fill is gone, so the control does
+     * not vanish into the background on a dead link. */
+    lv_obj_set_style_border_width(s_stop_row, filled ? 0 : 2, 0);
+    lv_obj_set_style_border_color(s_stop_row, lv_color_hex(PANEL_C_AMBER), 0);
+    lv_obj_set_style_border_opa(s_stop_row, LV_OPA_COVER, 0);
+
+    lv_obj_set_style_text_color(s_stop_label, lv_color_hex(ink), 0);
+    if (s_stop_result != NULL)
+        lv_obj_set_style_text_color(s_stop_result, lv_color_hex(ink), 0);
+}
+
+
 
 /* THE HANDOVER, and it crosses tasks on two cores: the touch tap and the
  * renderer live in ui_task, the send in link_task. Three words that must be
@@ -626,13 +683,55 @@ static void build_interior(lv_obj_t *pg)
      *
      * 44 px tall: the tap target the rest of this file measures itself
      * against, and the one a thumb finds without aiming. */
+    /* A FILLED BAR, NOT A SEVENTH ROW. The first version was amber text at
+     * the same size and left margin as the rung names, with no fill, no border
+     * and no rule above it -- so next to six rows reading LOCKED it read as a
+     * label describing a state rather than a control. Seen on the glass, not
+     * reasoned about.
+     *
+     * Full width, 68 px, filled: the biggest thing on the screen, because it
+     * is the only one that halts him, and comfortably past the 38 px target
+     * this board's own touch survey measured as reliable. */
     s_stop_row = lv_obj_create(s_int);
     bare(s_stop_row);
-    lv_obj_set_size(s_stop_row, SVC_W, 44);
-    lv_obj_set_pos(s_stop_row, SVC_X, 404);
+    lv_obj_set_size(s_stop_row, SVC_W, 68);
+    lv_obj_set_pos(s_stop_row, SVC_X, 372);
+    lv_obj_set_style_radius(s_stop_row, 6, 0);
     lv_obj_add_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
-    s_stop_label = text(s_stop_row, &techmono_24, 1, PANEL_C_AMBER, 0, 10,
-                        "STOP");
+
+    /* THE WORD STAYS "STOP", ALWAYS. Making the control's label double as the
+     * result display meant it stopped being a control for three seconds and
+     * then silently forgot what happened -- glance away and the outcome is
+     * gone; glance back mid-revert and you cannot tell whether it fired.
+     *
+     * MICHROMA, NOT SHARE TECH MONO. Neither family ships a bold weight, so
+     * "bold" here is the heavier FACE rather than a heavier cut of the same
+     * one -- and Michroma is already what this panel uses for its loudest
+     * element, the state word. The button borrows the typography of the thing
+     * that shouts, which is the right borrow.
+     *
+     * CENTRED BY ALIGNMENT, not by a hardcoded y. The first pass positioned it
+     * for two lines and showed one, so it sat high in the bar in the state the
+     * operator sees almost always. LV_ALIGN_CENTER keeps it centred whether or
+     * not a result is under it; the result hangs off the bottom edge instead of
+     * pushing the word around. */
+    s_stop_label = text(s_stop_row, &michroma_30, 1, STOP_INK, 0, 0, "STOP");
+    lv_obj_set_width(s_stop_label, SVC_W);
+    lv_obj_set_style_text_align(s_stop_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_stop_label, LV_ALIGN_CENTER, 0, 0);
+
+    /* The outcome, along the bottom edge of the bar. Persists -- no timer. */
+    s_stop_result = text(s_stop_row, &techmono_14, 1, STOP_INK, 0, 0, "");
+    lv_obj_set_width(s_stop_result, SVC_W);
+    lv_obj_set_style_text_align(s_stop_result, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_stop_result, LV_ALIGN_BOTTOM_MID, 0, -4);
+    /* UNREACHABLE UNTIL PROVEN OTHERWISE. Painting READY here asserted "he is
+     * there" at build time, before any link had ever existed -- on a panel
+     * that has never connected, the halt control claimed it would reach him.
+     * The per-tick derive below corrects it within one frame; starting from
+     * the pessimistic state means the wrong claim is never on the glass, not
+     * even for that frame. CLAUDE.md: assert the status, never inherit it. */
+    stop_paint(STOP_UNREACHABLE);
     lv_obj_add_flag(s_int, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -806,19 +905,22 @@ static void open_interior(panel_svc_t s)
          * one rung whose lock matters most. 53 px rungs and a body that runs
          * to the footer fit all six; each is still far above the 44 pt tap
          * target for when RUN arrives. */
-        /* 404, NOT 398, AND THE RUNGS START AT 0. Six rungs are 6*54 = 324 px
-         * and the body is 404-76 = 328, so the ladder still does not scroll --
-         * the same 4 px of slack it had before the STOP took the footer band.
-         * At 398 with a 6 px inset the content was 330 against 322 and the
-         * ladder became scrollable for the first time, which would have put
-         * LOCOMOTION's LOCKED under a scroll on the one screen that arms
-         * actuators -- and neither the moving-list guard nor the bounding-box
-         * check that protect the service list has a ladder equivalent. */
-        lv_obj_set_size(s_int_body, 334, 404 - INT_BODY_Y);   /* STOP below */
+        /* THE LADDER MUST NOT SCROLL, and the margin is now zero rather than
+         * four pixels: six 48 px rungs are exactly the 288 px this body has.
+         * That is fine and it is fragile, so the arithmetic is asserted at
+         * compile time below rather than left to whoever adds a seventh rung.
+         *
+         * Why it matters: a scrollable ladder puts LOCOMOTION's LOCKED under a
+         * scroll on the one screen that arms actuators, and neither the
+         * moving-list guard nor the bounding-box check that protect the
+         * service list has a ladder equivalent. */
+        /* Six 48 px rungs are 288 px in 288: no scroll, and the bar gets
+         * the bottom 68 with a margin under it. */
+        lv_obj_set_size(s_int_body, 334, INT_LADDER_BOTTOM - INT_BODY_Y);
         /* THE CAPTION GIVES UP ITS BAND TO THE STOP. Both cannot have it, and
          * a rule the rungs already state loses to a control that halts him. */
         lv_obj_remove_flag(s_stop_row, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_stop_label, s_stop_word);
+        if (s_stop_result != NULL) lv_label_set_text(s_stop_result, s_stop_word);
 
         panel_rung_t r[PANEL_LADDER_RUNGS];
         const int n = panel_service_ladder(ceiling, s_tiers_run, r);
@@ -836,7 +938,8 @@ static void open_interior(panel_svc_t s)
              * lock word is 18 px, centred on the rung. ALLOWED is in the
              * text colour, not green: with no RUN yet it states what the gate
              * would admit, and green would read as armed. */
-            text(row, &techmono_24, 1, r[i].allowed ? V5_TEXT : V5_DIM, 0, 6, r[i].tier);
+            /* y for a 48 px row, not the 54 it was drawn for. */
+            text(row, &techmono_24, 1, r[i].allowed ? V5_TEXT : V5_DIM, 0, 3, r[i].tier);
             /* RUN in green on a rung the gate would admit -- it is a control
              * now, and the reference greens it. Every shut word (LOCKED, NOT
              * YET) stays the no-claim grey: none of them is a control. */
@@ -864,6 +967,10 @@ static void close_interior(void)
     /* The rung labels belong to the body about to be cleaned. Forgetting to
      * forget them left svc_refresh dereferencing freed LVGL objects on the
      * next tick -- on a panel bolted to the droid. */
+    /* The stop's verdict belongs to the visit that produced it. */
+    s_stop_word[0] = '\0';
+    if (s_stop_result != NULL) lv_label_set_text(s_stop_result, "");
+
     for (int i = 0; i < PANEL_LADDER_RUNGS; i++) {
         s_rung_row[i] = NULL;
         s_rung_word[i] = NULL;
@@ -932,11 +1039,16 @@ void panel_ui_tap(int x, int y)
             s_stop_request = true;
             portEXIT_CRITICAL(&s_probe_mux);
             ESP_LOGW("panel", "STOP requested");
+            /* BEFORE THE RADIO HAS DONE ANYTHING. link_task is up to 100 ms
+             * away, which is long enough to press again wondering whether the
+             * first one landed. */
+            stop_paint(STOP_PRESSED);
             /* The WORD as well as the label: open_interior repaints from
              * s_stop_word, so closing and reopening before the report landed
              * would otherwise show the PREVIOUS stop's verdict. */
-            snprintf(s_stop_word, sizeof s_stop_word, "...");
-            lv_label_set_text(s_stop_label, s_stop_word);
+            snprintf(s_stop_word, sizeof s_stop_word, "SENDING...");
+            if (s_stop_result != NULL)
+                lv_label_set_text(s_stop_result, s_stop_word);
             return;
         }
 
@@ -1121,8 +1233,8 @@ bool panel_ui_take_stop_request(void)
     /* ATOMIC TAKE-AND-CLEAR. Unlocked, link_task can load false, ui_task can
      * store true, and link_task's store of false then erases a tap nobody
      * will ever hear about -- on the one control whose whole job is to be
-     * heard. The button would sit reading "..." forever, because no report
-     * arrives and the decay's sentinel is never set either. */
+     * heard. The button would sit reading SENDING... forever, because no
+     * report ever arrives to repaint it. */
     portENTER_CRITICAL(&s_probe_mux);
     const bool want = s_stop_request;
     s_stop_request = false;
@@ -1140,7 +1252,7 @@ void panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms)
     s_stop_sent     = sent;
     s_stop_link     = link_up;
     s_stop_reported = true;
-    s_stop_at       = now_ms ? now_ms : 1u;   /* 0 would defeat the decay */
+    (void)now_ms;               /* the verdict no longer decays on a clock */
     portEXIT_CRITICAL(&s_probe_mux);
 }
 
@@ -1299,25 +1411,36 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     portEXIT_CRITICAL(&s_probe_mux);
     if (draw_stop) {
         if (!st_link)         snprintf(s_stop_word, sizeof s_stop_word, "NO LINK");
-        else if (st_sent >= 3u) snprintf(s_stop_word, sizeof s_stop_word, "STOPPED");
-        else snprintf(s_stop_word, sizeof s_stop_word, "%u/3 SENT", st_sent);
-        if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
+        else if (st_sent >= 3u) snprintf(s_stop_word, sizeof s_stop_word, "ALL 3 HALTS SENT");
+        else snprintf(s_stop_word, sizeof s_stop_word, "ONLY %u OF 3 SENT", st_sent);
+        if (s_stop_result != NULL) lv_label_set_text(s_stop_result, s_stop_word);
+    }
+
+    /* THE STATE IS DERIVED FROM THE LINK, EVERY TICK -- never left behind by
+     * the last thing that happened. Painted once at the report, it was a claim
+     * about the past wearing the present tense: press with him away and the
+     * bar said "this will not reach him" for as long as you left the screen
+     * open, including after he came back. The reverse was worse -- a filled
+     * bar promising to reach a droid that had since dropped.
+     *
+     * PRESSED is not stomped: it is the one state that is about this tap
+     * rather than about the link, and it ends when the report lands. */
+    if (s_stop_visual != STOP_PRESSED || draw_stop) {
+        const stop_visual_t want = (t->link == R2_TM_UP) ? STOP_READY
+                                                         : STOP_UNREACHABLE;
+        if (want != s_stop_visual) stop_paint(want);
     }
 
     /* The stop's verdict decays, so the control goes back to being a
      * control. Nothing else on this panel is time-limited; this is, because a
      * button stuck reading STOPPED is a button that looks spent. */
-    uint32_t stop_at;
-    portENTER_CRITICAL(&s_probe_mux);
-    stop_at = s_stop_at;
-    portEXIT_CRITICAL(&s_probe_mux);
-    if (stop_at != 0u && (now_ms - stop_at) >= PANEL_STOP_SHOW_MS) {
-        portENTER_CRITICAL(&s_probe_mux);
-        s_stop_at = 0u;
-        portEXIT_CRITICAL(&s_probe_mux);
-        snprintf(s_stop_word, sizeof s_stop_word, "STOP");
-        if (s_stop_label != NULL) lv_label_set_text(s_stop_label, s_stop_word);
-    }
+    /* NO TIMED REVERT: the outcome stays while the ladder is open, because a
+     * result that erases itself after three seconds is one you miss by doing
+     * the thing you pressed it for -- looking at the droid. It is cleared on
+     * CLOSE instead (close_interior), which is what "until the operator leaves
+     * the screen" has to mean in code. Left uncleared, reopening the ladder an
+     * hour later showed ALL 3 HALTS SENT with no timestamp, as though it had
+     * just happened. */
 
     if (s_int_open != PANEL_SVC_COUNT &&
         panel_service_kind(s_int_open) == PANEL_SVC_LADDER &&
