@@ -997,6 +997,12 @@ static void tour_task(void *arg)
                                       "the LADDER, which grab_tour.sh will "
                                       "file as hw-test-ops. Do NOT trust it.",
                                  2 + i);
+                        /* ALREADY false on every path that reaches here --
+                         * `asked` failing sets it, and so does every
+                         * `rows_ok = false`. Set again so this branch does not
+                         * depend on an invariant held two hundred lines away
+                         * by four separate assignments. Redundant today, and
+                         * said so rather than left reading load-bearing. */
                         s_tour_ok = false;
                     }
                 }
