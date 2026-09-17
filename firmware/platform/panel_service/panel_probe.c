@@ -5,7 +5,11 @@
 bool panel_probe_may_start(panel_probe_gate_t g)
 {
     return !g.queued && !g.in_flight && !g.pending &&
-           g.state != PANEL_PROBE_RUNNING;
+           g.state != PANEL_PROBE_RUNNING &&
+           /* HE HAS TO HAVE STOPPED, not merely to have been judged. The four
+            * conditions above all ask about the test; this one asks about the
+            * droid, and on a moving tier it outlasts every one of them. */
+           g.motion_settled;
 }
 
 /* ---- the ledger: which of THIS test's questions have been answered ------- */
@@ -79,6 +83,56 @@ uint32_t panel_probe_timeout_ms(int tier)
     return 0u;
 }
 
+uint32_t panel_probe_move_ms(int tier)
+{
+    /* Same tier order as above. DOME is the only tier that both moves him and
+     * has a measured duration; READ is 0 because reading cannot move him at
+     * all. Every other tier is 0 here AND 0 above, so panel_probe_start
+     * refuses it before this is ever consulted. */
+    switch (tier) {
+    case 3: return PANEL_PROBE_DOME_MOVE_MS;  /* measured: D-013, longest 2.19 s */
+    default: break;
+    }
+    return 0u;
+}
+
+bool panel_probe_needs_completion(int tier)
+{
+    /* The tiers that move him. STANCE is here even though its window is
+     * unmeasured and it is refused upstream: this predicate must describe the
+     * tier, not the current build's ceiling, or it goes quietly wrong on the
+     * commit that measures STANCE. */
+    return tier == 3 || tier == 4;      /* DOME, STANCE */
+}
+
+bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms)
+{
+    if (p == NULL) return true;
+    uint32_t move = panel_probe_move_ms(p->tier);
+    if (move == 0u) return true;        /* this tier cannot move him */
+    if (p->state == PANEL_PROBE_IDLE) return true;   /* nothing was started */
+    return now_ms - p->started_ms >= move;
+}
+
+bool panel_probe_busy(const panel_probe_t *p, uint32_t now_ms)
+{
+    if (p == NULL) return false;
+    return p->state == PANEL_PROBE_RUNNING ||
+           !panel_probe_motion_settled(p, now_ms);
+}
+
+void panel_probe_arm_completion(panel_probe_t *p, bool armed)
+{
+    if (p == NULL) return;
+    p->completion_armed = armed;
+}
+
+void panel_probe_note_complete(panel_probe_t *p)
+{
+    if (p == NULL) return;
+    p->completed = true;
+}
+
 void panel_probe_init(panel_probe_t *p)
 {
     if (p == NULL) return;
@@ -86,6 +140,12 @@ void panel_probe_init(panel_probe_t *p)
     p->started_ms = 0;
     p->expected = 0;
     p->got = 0;
+    p->tier = 0;
+    /* CLEARED, SO THE DEFAULT REFUSES. An un-armed completion channel makes a
+     * moving tier refuse to run; leaving this set across runs would let one
+     * armed test vouch for the next unarmed one. */
+    p->completion_armed = false;
+    p->completed = false;
 }
 
 void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
@@ -93,6 +153,21 @@ void panel_probe_start(panel_probe_t *p, uint32_t now_ms, uint8_t expected,
 {
     if (p == NULL) return;
     p->tier = tier;
+    p->completed = false;               /* last run's completion is not this one's */
+    if (panel_probe_needs_completion(tier) && !p->completion_armed) {
+        /* THE CHANNEL WAS NEVER ARMED. `leg_action_complete` does not fire
+         * unless the notify went out, and a test that never armed it would
+         * wait out its whole window, see silence, and report NO REPLY for a
+         * move that worked -- or, worse, be "fixed" later by dropping the
+         * completion requirement. Refuse instead: prove the channel live,
+         * then believe its silence. Same refusal shape, and the same reason,
+         * as an unmeasured window. */
+        p->state = PANEL_PROBE_NO_REPLY;
+        p->started_ms = now_ms;
+        p->expected = expected;
+        p->got = 0;
+        return;
+    }
     if (panel_probe_timeout_ms(tier) == 0u) {
         /* NOBODY HAS MEASURED THIS TIER. Running it on a borrowed constant is
          * how the single 2 s window came to call a 2.0-2.2 s dome move
@@ -141,7 +216,11 @@ panel_probe_state_t panel_probe_step(panel_probe_t *p, uint32_t now_ms,
 
     p->got = (answered > 255u) ? 255u : (uint8_t)answered;
 
-    if (p->got >= p->expected) {
+    if (p->got >= p->expected &&
+        /* ANSWERS ARE NOT ARRIVAL. On a moving tier the replies say the op was
+         * heard; only the completion says he finished the move. Passing on the
+         * reply count alone is what let a verdict settle mid-travel. */
+        (!panel_probe_needs_completion(p->tier) || p->completed)) {
         p->state = PANEL_PROBE_PASS;
     } else if (!link_up) {
         /* THE LINK IS ITS OWN ANSWER. Saying NO REPLY here would blame him

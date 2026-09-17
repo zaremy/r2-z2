@@ -2388,6 +2388,10 @@ measured 2.0–2.2 s dome move, so a moving tier will report PARTIAL for a move
 that worked. Keying the sequence on PASS means that bug blocks bring-up loudly
 instead of waving it through.
 
+> **Since (#184, 2026-09-17):** the window is per-tier and DOME's is 4 s, so
+> that particular PARTIAL is gone. Keying the sequence on PASS still holds for
+> the reason given — it is just no longer load-bearing against this bug.
+
 ### Why per session, and never persisted
 
 A stored "DOME ran fine" unlocks STANCE on a droid nobody has looked at since
@@ -2779,4 +2783,9 @@ directly rather than through the shipped table.
 - **#168 part 4 is still open.** The one-at-a-time guard still releases when
   the verdict settles at 2 s, and D-013 measured a dome move at 2.0–2.2 s. Per-op
   consent does not fix that, and nothing here should be read as having done so.
+  > **Since (#184, 2026-09-17):** the guard's release is no longer the
+  > verdict. `panel_probe_motion_settled` holds it for the tier's own measured
+  > move duration (`PANEL_PROBE_DOME_MOVE_MS`, D-013's longest at 2.19 s), and
+  > a moving tier's PASS now needs a completion event on a channel the caller
+  > armed. The abort this bullet's issue also asks for is **still** absent.
 

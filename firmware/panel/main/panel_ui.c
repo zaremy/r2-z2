@@ -1291,12 +1291,14 @@ void panel_ui_tap(int x, int y)
                  * hole and opened the 2 s one, because a tap during a running
                  * test still armed a request the link task then sent.
                  *
-                 * IT IS NOT SUFFICIENT FOR A TIER THAT MOVES HIM. This guard
-                 * releases when the verdict settles, at 2 s, and D-013
-                 * measured a dome move at 2.0-2.2 s -- so above READ it would
-                 * release while he was still travelling. Said here as well as
-                 * in panel_probe.h because whoever raises the ceiling may read
-                 * only one of them. See #168 part 4, which is still open. */
+                 * AND IT NOW HOLDS THROUGH THE MOVE. The verdict settling is
+                 * not him stopping: it settled at 2 s while D-013's measured
+                 * dome move ran to 2.19 s, so above READ this guard used to
+                 * release mid-travel and a second tap fired a move into the
+                 * first. `motion_settled` is the fifth condition, keyed on
+                 * that tier's own measured move duration. On READ it is
+                 * always true -- reading cannot move him -- so nothing about
+                 * today's only runnable tier changes. See #184. */
                 bool taken;
                 portENTER_CRITICAL(&s_probe_mux);
                 taken = panel_probe_may_start((panel_probe_gate_t){
@@ -1304,6 +1306,10 @@ void panel_ui_tap(int x, int y)
                     .in_flight = s_probe_in_flight,
                     .pending   = s_probe_pending,
                     .state     = s_probe.state,
+                    /* NAMED AS THE SAFE CONDITION, so omitting it here would
+                     * refuse taps rather than admit them mid-move. */
+                    .motion_settled =
+                        panel_probe_motion_settled(&s_probe, s_last_now),
                 });
                 if (taken) {
                     /* THE TIER AND THE OP, ARMED TOGETHER. A tier with a stale
