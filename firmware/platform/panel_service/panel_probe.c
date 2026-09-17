@@ -111,14 +111,18 @@ bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms)
     uint32_t move = panel_probe_move_ms(p->tier);
     if (move == 0u) return true;        /* this tier cannot move him */
     if (p->state == PANEL_PROBE_IDLE) return true;   /* nothing was started */
+    /* A CLOCK BEHIND THE START IS "STILL MOVING", not "long since finished".
+     * These are uint32_t, so `now_ms - started_ms` on a now_ms EARLIER than
+     * the start wraps to roughly 4.3e9 and clears any window -- the guard
+     * opens mid-travel, silently, in the one direction that matters.
+     *
+     * It cannot happen today: the caller passes s_last_now, written every
+     * panel_ui_update with no early return above it, and a probe's started_ms
+     * comes from a send that preceded the refresh which started it. That is a
+     * property of a file with no host harness, held together by the absence of
+     * a `return` in ninety lines of LVGL. Cheaper to not depend on it. */
+    if (now_ms < p->started_ms) return false;
     return now_ms - p->started_ms >= move;
-}
-
-bool panel_probe_busy(const panel_probe_t *p, uint32_t now_ms)
-{
-    if (p == NULL) return false;
-    return p->state == PANEL_PROBE_RUNNING ||
-           !panel_probe_motion_settled(p, now_ms);
 }
 
 void panel_probe_arm_completion(panel_probe_t *p, bool armed)

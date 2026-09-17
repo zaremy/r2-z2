@@ -264,26 +264,28 @@ static void test_motion_outlasts_the_verdict_on_a_moving_tier(void)
     /* And he is STILL MOVING, by his own measured duration. */
     CHECK(!panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS - 1),
           "he was called stopped one ms before the measured move ends");
-    CHECK(panel_probe_busy(&dome, 1000 + PANEL_PROBE_TIMEOUT_MS),
-          "busy went false at the READ window while the move was still running");
-    CHECK(panel_probe_busy(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS - 1),
-          "busy went false one ms before the measured move ends");
 
     /* Only then does it release. */
     CHECK(panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS),
           "he was still called moving after the measured move ended");
-    CHECK(!panel_probe_busy(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS),
-          "busy stayed true after both the verdict and the move were done");
+
+    /* A CLOCK BEHIND THE START MUST READ AS MOVING. The subtraction is
+     * unsigned, so the wrong answer here is not "slightly early" -- it is
+     * ~4.3e9 ms of apparent elapsed time, which clears every window and opens
+     * the guard while he travels. The illegal case, asserted first. */
+    CHECK(!panel_probe_motion_settled(&dome, 999),
+          "a clock one ms behind the start reported him stopped");
+    CHECK(!panel_probe_motion_settled(&dome, 0),
+          "a zeroed clock reported him stopped");
 
     /* A READ test has no move to outlast: busy tracks the verdict alone. */
     panel_probe_t read;
     panel_probe_init(&read);
     panel_probe_start(&read, 1000, 1, true, 0);
-    CHECK(panel_probe_busy(&read, 1001), "a running READ test was not busy");
     CHECK(panel_probe_step(&read, 1010, 1, true) == PANEL_PROBE_PASS,
           "READ did not pass on its answers alone");
-    CHECK(!panel_probe_busy(&read, 1011),
-          "a settled READ test stayed busy -- reading cannot move him");
+    CHECK(panel_probe_motion_settled(&read, 1011),
+          "a settled READ test read as still moving -- reading cannot move him");
 }
 
 static void test_a_moving_tier_needs_a_completion_not_a_reply_count(void)

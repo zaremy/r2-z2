@@ -160,10 +160,6 @@ bool panel_probe_needs_completion(int tier);
  * and answers it at 2 s while a 2.19 s move is still running. */
 bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms);
 
-/* IS ANYTHING STILL GOING ON -- the clock, or him. The union of RUNNING and
- * still-moving, which is what a second tap must be refused against. */
-bool panel_probe_busy(const panel_probe_t *p, uint32_t now_ms);
-
 /* THE COMPLETION CHANNEL IS ARMED, and the caller is saying so on the same
  * path that enabled it. `leg_action_complete` does not fire unless
  * `notify --params '{"leg":true}'` went out; a session that forgets still
