@@ -50,6 +50,16 @@ extern "C" {
  * and this is it, rounded up with room for the answer to come back. */
 #define PANEL_PROBE_DOME_TIMEOUT_MS 4000u
 
+/* HOW LONG HE IS ACTUALLY MOVING, which is not how long the verdict takes.
+ * D-013 clocked four dome moves and the longest was 2.19 s (8.35 deg took
+ * 2.19 s, 22.61 deg took 2.07 s -- fixed duration, not a slew rate), so 2200
+ * is the measured upper bound rounded up to the next 100 ms, not a guess.
+ *
+ * This is a SEPARATE number from the timeout above and must stay separate.
+ * The timeout is "how long may the answer take"; this is "how long until he
+ * has stopped". They are close today only by coincidence of one tier. */
+#define PANEL_PROBE_DOME_MOVE_MS 2200u
+
 typedef enum {
     PANEL_PROBE_IDLE = 0,   /* nothing has been asked */
     PANEL_PROBE_RUNNING,    /* asked; waiting for replies */
@@ -67,6 +77,8 @@ typedef struct {
     uint8_t  expected;      /* how many answers a pass needs */
     uint8_t  got;
     int      tier;          /* which rung, for its own timeout */
+    bool     completion_armed;  /* the notify went out on this same path */
+    bool     completed;         /* and the completion event came back */
 } panel_probe_t;
 
 /* WHAT THIS TEST ASKED, AND WHAT HAS COME BACK.
@@ -124,6 +136,44 @@ unsigned panel_ledger_answered(const panel_ledger_t *l);
  * without asking anything, rather than running on a number nobody measured. */
 uint32_t panel_probe_timeout_ms(int tier);
 
+/* HOW LONG THAT TIER MOVES HIM, or 0 for a tier that cannot move him at all.
+ *
+ * READ is 0 because reading cannot move him -- structural, not measured. DOME
+ * is PANEL_PROBE_DOME_MOVE_MS because D-013 measured it. Everything else is 0
+ * and is ALSO refused by panel_probe_timeout_ms returning 0, which is what
+ * keeps a 0 here from ever meaning "unmeasured mover": a tier gets past
+ * panel_probe_start only if its timeout is non-zero, and the only such tiers
+ * are READ and DOME. test_panel_probe asserts that pairing directly, so
+ * adding a moving tier with a window but no move duration fails the suite
+ * rather than releasing the guard early. */
+uint32_t panel_probe_move_ms(int tier);
+
+/* DOES A PASS ON THIS TIER NEED A COMPLETION EVENT? True for every tier that
+ * moves him. A reply count says the op was heard; only a completion says he
+ * finished doing it, and for a tier that moves him those are different
+ * questions with different answers. */
+bool panel_probe_needs_completion(int tier);
+
+/* HAS HE STOPPED? True once the tier's measured move duration has elapsed
+ * since the test started, and always true for a tier that cannot move him.
+ * This is the guard's question -- NOT `settled`, which asks about the verdict
+ * and answers it at 2 s while a 2.19 s move is still running. */
+bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms);
+
+/* THE COMPLETION CHANNEL IS ARMED, and the caller is saying so on the same
+ * path that enabled it. `leg_action_complete` does not fire unless
+ * `notify --params '{"leg":true}'` went out; a session that forgets still
+ * gets `animation_complete`, still measures durations, and sees ZERO leg
+ * events -- a wrong answer in the safe-looking direction (CLAUDE.md). So a
+ * tier that needs a completion is REFUSED unless this was called with true.
+ *
+ * panel_probe_init clears it. Omission therefore refuses rather than runs,
+ * which is the only direction a default may fail in here. */
+void panel_probe_arm_completion(panel_probe_t *p, bool armed);
+
+/* THE COMPLETION EVENT ARRIVED. Idempotent; ignored when nothing is running. */
+void panel_probe_note_complete(panel_probe_t *p);
+
 /* MAY A TAP START A TEST? The renderer's guard, lifted out of the renderer so
  * a test can reach it -- the repo's own rule is to test the guard rather than
  * the data, and a guard living inside an LVGL callback is a guard with no
@@ -139,20 +189,30 @@ uint32_t panel_probe_timeout_ms(int tier);
  * task taking the request and it reporting the send. On READ that is harmless
  * -- READ cannot move him.
  *
- * IT IS NOT YET ADEQUATE FOR A TIER THAT MOVES HIM, and saying otherwise here
- * would be the reassuring kind of wrong. The guard releases when the VERDICT
- * settles, which is PANEL_PROBE_TIMEOUT_MS = 2 s; D-013 measured a dome move
- * at 2.0-2.2 s regardless of distance. So the first moving tier would release
- * this guard while he is still travelling, and would report PARTIAL or NO
- * REPLY for a move that worked -- the timeout is calibrated on read latency
- * (138/138 sub-second) and is the wrong constant for every tier above READ.
- * Raising the ceiling needs a per-tier timeout, a completion signal rather
- * than a reply count, and an abort. None of those are here. */
+ * AND IT NOW HOLDS THROUGH THE MOVE, which is the fifth state and the one
+ * this guard was missing (#184). The verdict settling is not him stopping:
+ * the verdict settled at PANEL_PROBE_TIMEOUT_MS = 2 s while D-013's measured
+ * dome move ran to 2.19 s, so the guard released mid-travel and a second tap
+ * fired a move into the first. `motion_settled` is now part of the decision,
+ * and it is keyed on the tier's own MEASURED move duration
+ * (panel_probe_move_ms), not on the read-latency constant.
+ *
+ * WHAT IS STILL NOT HERE: an abort. The STOP bar reaches him (D-026) but
+ * nothing ties it to an op already in flight, so backing out of the op list
+ * disowns the display and not the command. #184 carries that; raising the
+ * ceiling above READ still needs it. */
 typedef struct {
     bool queued;                /* tapped; the link task has not taken it */
     bool in_flight;             /* taken; its ops are going out RIGHT NOW */
     bool pending;               /* the ops went; the clock has not started */
     panel_probe_state_t state;  /* and what the clock says */
+    /* HAS HE STOPPED MOVING? Phrased as the SAFE condition, not the unsafe
+     * one, because C zero-fills a designated initializer: a caller that
+     * forgets this field gets false, which reads as "still moving" and
+     * REFUSES the tap. The unsafe default was the whole defect -- a `.moving`
+     * field omitted would have read as "not moving" and released the guard
+     * mid-travel. Fail closed by construction, not by remembering. */
+    bool motion_settled;
 } panel_probe_gate_t;
 
 /* NAMED FIELDS, NOT THREE POSITIONAL BOOLS. The caller lives in an LVGL file

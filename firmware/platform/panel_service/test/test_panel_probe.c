@@ -160,7 +160,7 @@ static void test_a_settled_test_lets_the_next_tap_through(void)
     /* Nothing under way: the tap is admitted. A panel that refused forever
      * after one test would be worse than one that never ran a test, because
      * it would look identical to a working one. */
-    CHECK(panel_probe_may_start((panel_probe_gate_t){0}),
+    CHECK(panel_probe_may_start((panel_probe_gate_t){.motion_settled = true}),
           "a fresh panel refused the first tap");
 
     /* EVERY settled verdict must let the operator try again -- including the
@@ -170,7 +170,8 @@ static void test_a_settled_test_lets_the_next_tap_through(void)
         PANEL_PROBE_NO_REPLY, PANEL_PROBE_LINK_LOST,
     };
     for (unsigned i = 0; i < sizeof settled / sizeof settled[0]; i++)
-        CHECK(panel_probe_may_start((panel_probe_gate_t){.state = settled[i]}),
+        CHECK(panel_probe_may_start((panel_probe_gate_t){
+                  .state = settled[i], .motion_settled = true}),
               "a settled test (%u) refused the next tap", (unsigned)settled[i]);
 }
 
@@ -181,7 +182,8 @@ static void test_a_pass_is_not_mistaken_for_a_test_in_progress(void)
      * verdict. If this ever starts refusing, the operator gets a rung that
      * looks tappable, reads a cheerful green, and does nothing when pressed --
      * indistinguishable from a working panel. */
-    CHECK(panel_probe_may_start((panel_probe_gate_t){.state = PANEL_PROBE_PASS}),
+    CHECK(panel_probe_may_start((panel_probe_gate_t){
+              .state = PANEL_PROBE_PASS, .motion_settled = true}),
           "a settled PASS refused the next tap");
     CHECK(!panel_probe_may_start((panel_probe_gate_t){
               .queued = true, .state = PANEL_PROBE_PASS}),
@@ -194,7 +196,7 @@ static void test_the_guard_covers_the_whole_life_of_a_test(void)
      * The point of this one is that there is no seam between the steps: a tap
      * is refused continuously from the moment it is accepted until the verdict
      * settles. Checking the states one at a time cannot show that. */
-    panel_probe_gate_t g = {0};
+    panel_probe_gate_t g = {.motion_settled = true};
 
     CHECK(panel_probe_may_start(g), "step 0");
 
@@ -208,10 +210,192 @@ static void test_the_guard_covers_the_whole_life_of_a_test(void)
     CHECK(!panel_probe_may_start(g), "step 3");
 
     g.pending = false; g.state = PANEL_PROBE_RUNNING;/* the clock starts */
+    g.motion_settled = false;                        /* and so does he */
     CHECK(!panel_probe_may_start(g), "step 4");
 
     g.state = PANEL_PROBE_PASS;                      /* and it settles */
-    CHECK(panel_probe_may_start(g), "step 5");
+    CHECK(!panel_probe_may_start(g),
+          "step 5 -- the verdict settled but he is still moving");
+
+    g.motion_settled = true;                         /* and he stops */
+    CHECK(panel_probe_may_start(g), "step 6");
+}
+
+/* ---- #184: the guard has to outlast the move, not the verdict ------------ */
+
+static void test_the_guard_holds_while_he_is_still_moving(void)
+{
+    /* THE ILLEGAL CASE FIRST. Everything about the TEST says done -- nothing
+     * queued, nothing in flight, nothing pending, a settled PASS on the glass
+     * -- and he is still travelling. This is the exact state the old guard
+     * admitted a second tap in, and a second dome move fired into the first. */
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){
+              .state = PANEL_PROBE_PASS, .motion_settled = false}),
+          "a settled PASS admitted a tap while he was still moving");
+
+    /* AND OMITTING THE FIELD MUST REFUSE, not admit. C zero-fills a
+     * designated initializer, so the caller that forgets is the caller this
+     * has to be safe for -- the tap handler lives in an LVGL file with no
+     * host harness, where a forgotten field compiles silently. Phrasing the
+     * field as the SAFE condition is what makes the zero the refusal. */
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){.state = PANEL_PROBE_PASS}),
+          "omitting motion_settled admitted the tap -- the default is unsafe");
+}
+
+static void test_motion_outlasts_the_verdict_on_a_moving_tier(void)
+{
+    /* THE WHOLE DEFECT IN ONE ASSERTION. READ's window is 2000 ms and D-013
+     * measured the longest dome move at 2190 ms, so between those two numbers
+     * the old guard was open and he was moving. */
+    CHECK(PANEL_PROBE_DOME_MOVE_MS > PANEL_PROBE_TIMEOUT_MS,
+          "the move no longer outlasts the read window -- this test is moot");
+
+    panel_probe_t dome;
+    panel_probe_init(&dome);
+    panel_probe_arm_completion(&dome, true);
+    panel_probe_start(&dome, 1000, 1, true, 3);
+
+    /* Answered immediately and completed: the VERDICT is done at once. */
+    panel_probe_note_complete(&dome);
+    CHECK(panel_probe_step(&dome, 1010, 1, true) == PANEL_PROBE_PASS,
+          "an answered, completed dome test did not pass");
+    CHECK(panel_probe_settled(&dome), "a passed test is not settled");
+
+    /* And he is STILL MOVING, by his own measured duration. */
+    CHECK(!panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS - 1),
+          "he was called stopped one ms before the measured move ends");
+
+    /* Only then does it release. */
+    CHECK(panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS),
+          "he was still called moving after the measured move ended");
+
+    /* A CLOCK BEHIND THE START MUST READ AS MOVING. The subtraction is
+     * unsigned, so the wrong answer here is not "slightly early" -- it is
+     * ~4.3e9 ms of apparent elapsed time, which clears every window and opens
+     * the guard while he travels. The illegal case, asserted first. */
+    CHECK(!panel_probe_motion_settled(&dome, 999),
+          "a clock one ms behind the start reported him stopped");
+    CHECK(!panel_probe_motion_settled(&dome, 0),
+          "a zeroed clock reported him stopped");
+
+    /* A READ test has no move to outlast: busy tracks the verdict alone. */
+    panel_probe_t read;
+    panel_probe_init(&read);
+    panel_probe_start(&read, 1000, 1, true, 0);
+    CHECK(panel_probe_step(&read, 1010, 1, true) == PANEL_PROBE_PASS,
+          "READ did not pass on its answers alone");
+    CHECK(panel_probe_motion_settled(&read, 1011),
+          "a settled READ test read as still moving -- reading cannot move him");
+}
+
+static void test_a_moving_tier_needs_a_completion_not_a_reply_count(void)
+{
+    /* THE ILLEGAL CASE: every answer is in, and he never said he finished.
+     * A reply says the op was heard. On a tier that moves him that is not the
+     * same question as whether the move happened, and answering it as though
+     * it were is how a PASS gets awarded to a droid that never turned. */
+    panel_probe_t p;
+    panel_probe_init(&p);
+    panel_probe_arm_completion(&p, true);
+    panel_probe_start(&p, 1000, 2, true, 3);
+    CHECK(panel_probe_step(&p, 1010, 2, true) == PANEL_PROBE_RUNNING,
+          "a dome test passed on replies alone, with no completion");
+    CHECK(!panel_probe_passed(&p), "it reported passed with no completion");
+
+    /* The completion arrives and it passes. */
+    panel_probe_note_complete(&p);
+    CHECK(panel_probe_step(&p, 1020, 2, true) == PANEL_PROBE_PASS,
+          "a dome test with answers AND a completion did not pass");
+
+    /* And without one it times out rather than hanging -- PARTIAL, because
+     * the answers did arrive; the move is what did not report. */
+    panel_probe_t q;
+    panel_probe_init(&q);
+    panel_probe_arm_completion(&q, true);
+    panel_probe_start(&q, 1000, 2, true, 3);
+    CHECK(panel_probe_step(&q, 1000 + PANEL_PROBE_DOME_TIMEOUT_MS, 2, true)
+              == PANEL_PROBE_PARTIAL,
+          "a dome test with no completion never gave up");
+
+    /* READ needs no completion -- it cannot move him, so there is nothing to
+     * complete, and requiring one would deadlock the only runnable tier. */
+    CHECK(!panel_probe_needs_completion(0), "READ was made to need a completion");
+    CHECK(panel_probe_needs_completion(3), "DOME does not need a completion");
+    CHECK(panel_probe_needs_completion(4), "STANCE does not need a completion");
+}
+
+static void test_an_unarmed_completion_channel_is_refused(void)
+{
+    /* PROVE THE CHANNEL LIVE BEFORE TRUSTING ITS SILENCE. leg_action_complete
+     * does not fire unless the notify went out, and a session that forgets
+     * still gets animation_complete and still measures durations -- it just
+     * sees zero leg events, which is a wrong answer in the reassuring
+     * direction. So a moving tier whose channel was never armed is REFUSED,
+     * the same way an unmeasured window is, rather than run and blamed on
+     * him. */
+    panel_probe_t p;
+    panel_probe_init(&p);
+    /* no panel_probe_arm_completion -- the default */
+    panel_probe_start(&p, 1000, 3, true, 3);
+    CHECK(p.state == PANEL_PROBE_NO_REPLY,
+          "an unarmed dome test ran anyway");
+    CHECK(!panel_probe_passed(&p), "an unarmed dome test passed");
+
+    /* Armed, it runs. */
+    panel_probe_t q;
+    panel_probe_init(&q);
+    panel_probe_arm_completion(&q, true);
+    panel_probe_start(&q, 1000, 3, true, 3);
+    CHECK(q.state == PANEL_PROBE_RUNNING, "an armed dome test did not run");
+
+    /* Arming is not sticky across init: one armed run must not vouch for the
+     * next. */
+    panel_probe_init(&q);
+    panel_probe_start(&q, 2000, 3, true, 3);
+    CHECK(q.state == PANEL_PROBE_NO_REPLY,
+          "arming survived init and vouched for the next run");
+
+    /* Nor is a completion itself sticky across runs. */
+    panel_probe_t r;
+    panel_probe_init(&r);
+    panel_probe_arm_completion(&r, true);
+    panel_probe_start(&r, 1000, 1, true, 3);
+    panel_probe_note_complete(&r);
+    CHECK(panel_probe_step(&r, 1010, 1, true) == PANEL_PROBE_PASS, "first run");
+    panel_probe_start(&r, 5000, 1, true, 3);       /* second run, same probe */
+    CHECK(panel_probe_step(&r, 5010, 1, true) == PANEL_PROBE_RUNNING,
+          "the previous run's completion passed the next one");
+
+    /* READ is unaffected: it needs no completion, so it never needs arming. */
+    panel_probe_t read;
+    panel_probe_init(&read);
+    panel_probe_start(&read, 1000, 3, true, 0);
+    CHECK(read.state == PANEL_PROBE_RUNNING,
+          "READ was refused for an unarmed completion channel it does not use");
+}
+
+static void test_no_tier_can_move_him_without_a_measured_duration(void)
+{
+    /* THE PAIRING THAT KEEPS A 0 HONEST. panel_probe_move_ms returns 0 for
+     * two different reasons -- "cannot move him" and "nobody timed it" -- and
+     * only the first is safe. What separates them is that every tier with an
+     * unmeasured move is ALSO refused by a 0 window. Assert that directly, so
+     * a future tier given a window but no move duration fails here instead of
+     * releasing the guard mid-travel. */
+    for (int tier = 0; tier <= 5; tier++) {
+        if (panel_probe_timeout_ms(tier) == 0u) continue;   /* refused upstream */
+        if (!panel_probe_needs_completion(tier)) continue;  /* cannot move him */
+        CHECK(panel_probe_move_ms(tier) > 0u,
+              "tier %d is runnable and moves him but has no measured move "
+              "duration", tier);
+    }
+    CHECK(panel_probe_move_ms(0) == 0u, "READ was given a move duration");
+    CHECK(panel_probe_move_ms(3) == PANEL_PROBE_DOME_MOVE_MS,
+          "DOME's move duration is not the measured one");
+    CHECK(PANEL_PROBE_DOME_MOVE_MS >= 2200u,
+          "the move window dropped below D-013's longest measured move");
+    CHECK(PANEL_PROBE_DOME_TIMEOUT_MS > PANEL_PROBE_DOME_MOVE_MS,
+          "the reply window no longer clears the move it has to contain");
 }
 
 /* ---- a tap made while he is away ---------------------------------------- */
@@ -372,6 +556,11 @@ static void test_an_unmeasured_tier_is_refused_not_defaulted(void)
     for (int tier = 0; tier < 6; tier++) {
         panel_probe_t p;
         panel_probe_init(&p);
+        /* Armed, so this test keeps measuring the WINDOW. An unarmed moving
+         * tier is refused too, for a different reason, and that refusal has
+         * its own test -- leaving it in play here would let this one pass for
+         * the wrong reason on the day the window gets measured. */
+        panel_probe_arm_completion(&p, true);
         panel_probe_start(&p, 1000, 3, true, tier);
         if (panel_probe_timeout_ms(tier) == 0u) {
             CHECK(p.state == PANEL_PROBE_NO_REPLY,
@@ -394,6 +583,7 @@ static void test_each_tier_times_out_on_its_own_window(void)
     panel_probe_t read, dome;
     panel_probe_init(&read);
     panel_probe_init(&dome);
+    panel_probe_arm_completion(&dome, true);   /* a moving tier is refused unarmed */
     panel_probe_start(&read, 0, 3, true, 0);
     panel_probe_start(&dome, 0, 3, true, 3);
 
@@ -425,6 +615,11 @@ int main(void)
     test_a_settled_test_lets_the_next_tap_through();
     test_a_pass_is_not_mistaken_for_a_test_in_progress();
     test_the_guard_covers_the_whole_life_of_a_test();
+    test_the_guard_holds_while_he_is_still_moving();
+    test_motion_outlasts_the_verdict_on_a_moving_tier();
+    test_a_moving_tier_needs_a_completion_not_a_reply_count();
+    test_an_unarmed_completion_channel_is_refused();
+    test_no_tier_can_move_him_without_a_measured_duration();
     test_asking_nothing_is_not_running();
     test_a_dead_link_is_not_his_silence();
     test_answers_that_arrive_late_do_not_pass();
