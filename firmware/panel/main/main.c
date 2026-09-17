@@ -698,9 +698,22 @@ static void tour_shot(unsigned slot, const char *what, int want)
         const bool still = panel_ui_debug_showing(want);
         bsp_display_unlock();
         if (!still) {
-            ESP_LOGE(TAG, "TOUR %u/%u: %s moved DURING the capture -- slot "
-                          "erased", slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
-            panel_shot_erase_slot(slot);
+            /* ERASE FIRST, THEN SAY SO. The old line announced "slot erased"
+             * above a call whose answer it threw away, so a failed erase
+             * published the mid-capture frame under the right filename while
+             * the log said the slot was empty -- the rig's own failure mode,
+             * asserted in its own words. */
+            const bool cleared = panel_shot_erase_slot(slot);
+            if (cleared) {
+                ESP_LOGE(TAG, "TOUR %u/%u: %s moved DURING the capture -- slot "
+                              "erased", slot + 1, (unsigned)PANEL_SHOT_SLOTS,
+                         what);
+            } else {
+                ESP_LOGE(TAG, "TOUR %u/%u: %s moved DURING the capture AND the "
+                              "slot could not be erased -- it still holds a "
+                              "frame, do NOT trust this picture",
+                         slot + 1, (unsigned)PANEL_SHOT_SLOTS, what);
+            }
             s_tour_ok = false;
             return;
         }
@@ -750,8 +763,20 @@ static void tour_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(12000));
 
     /* Blank every slot first, so a tour that dies half way leaves EMPTY slots
-     * rather than the tail of the last one, which would decode perfectly. */
-    if (!panel_shot_erase_all()) s_tour_ok = false;
+     * rather than the tail of the last one, which would decode perfectly.
+     *
+     * A FAILURE HERE IS NOT FATAL, and the reason is worth stating so nobody
+     * "fixes" it into a return. Every slot a tour_shot reaches is erased again
+     * at the top of tour_shot, which checks its own answer; the branches that
+     * never reach a tour_shot now erase and check for themselves. So the tour
+     * remains honest slot by slot, and this flag is what keeps the run's
+     * overall verdict from reading clean. */
+    if (!panel_shot_erase_all()) {
+        ESP_LOGE(TAG, "TOUR: could not blank the slots up front -- every "
+                      "picture below is still erased and checked on its own "
+                      "path, but the run is not clean");
+        s_tour_ok = false;
+    }
 
     if (!tour_lock("STATUS")) vTaskDelete(NULL);
     panel_ui_show_page(0);
@@ -957,17 +982,43 @@ static void tour_task(void *arg)
                      * would be the right filename over the wrong picture --
                      * the exact failure this rig exists to prevent, relocated
                      * into the naming script. Empty is a finding. */
-                    ESP_LOGE(TAG, "TOUR: the ops did not run -- erasing slot %u "
-                                  "rather than leaving the ladder in it", 2 + i);
-                    panel_shot_erase_slot(2 + i);
+                    if (panel_shot_erase_slot(2 + i)) {
+                        ESP_LOGE(TAG, "TOUR: the ops did not run -- slot %u "
+                                      "erased rather than left holding the "
+                                      "ladder", 2 + i);
+                    } else {
+                        /* THE ONE CASE THE COMMENT ABOVE DEPENDS ON. A failed
+                         * erase leaves the LADDER in the slot grab_tour.sh
+                         * files as hw-test-ops.png -- the right filename over
+                         * the wrong picture, which is the whole reason this
+                         * branch exists. Say it, and fail the tour. */
+                        ESP_LOGE(TAG, "TOUR: the ops did not run AND slot %u "
+                                      "could not be erased -- it still holds "
+                                      "the LADDER, which grab_tour.sh will "
+                                      "file as hw-test-ops. Do NOT trust it.",
+                                 2 + i);
+                        s_tour_ok = false;
+                    }
                 }
             }
         } else {
-            /* NO PICTURE AT ALL. The slot stays erased, so grab_tour.sh
-             * reports NO FRAME: a missing picture is a finding, while one
-             * filed under the wrong name is a lie the tool exists to avoid. */
-            ESP_LOGE(TAG, "TOUR: tapping row %d did NOT open %s -- slot %u "
-                          "left EMPTY", k_tour_row[i], k_tour_name[i], 2 + i);
+            /* NO PICTURE AT ALL, AND NOTHING ERASED THIS SLOT ON THIS
+             * PATH. tour_shot is what erases per slot, and this branch never
+             * reaches it -- so "stays erased" rested entirely on the
+             * erase_all at the top of the tour, whose failure only sets
+             * s_tour_ok and lets the tour run on. Erase it here and report
+             * what actually happened, rather than asserting an emptiness
+             * nothing on this path established. */
+            if (panel_shot_erase_slot(2 + i)) {
+                ESP_LOGE(TAG, "TOUR: tapping row %d did NOT open %s -- slot %u "
+                              "left EMPTY", k_tour_row[i], k_tour_name[i],
+                         2 + i);
+            } else {
+                ESP_LOGE(TAG, "TOUR: tapping row %d did NOT open %s AND slot %u "
+                              "could not be erased -- it may still hold an "
+                              "older frame. Do NOT trust it.",
+                         k_tour_row[i], k_tour_name[i], 2 + i);
+            }
             s_tour_ok = false;
         }
 
