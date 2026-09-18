@@ -87,8 +87,8 @@ uint32_t panel_probe_move_ms(int tier)
 {
     /* Same tier order as above. DOME is the only tier that both moves him and
      * has a measured duration; READ is 0 because reading cannot move him at
-     * all. Every other tier is 0 here AND 0 above, so panel_probe_start
-     * refuses it before this is ever consulted. */
+     * all. A 0 on a tier that moves him is "unmeasured", and
+     * panel_motion_settled holds on it rather than releasing. */
     switch (tier) {
     case 3: return PANEL_PROBE_DOME_MOVE_MS;  /* measured: D-013, longest 2.19 s */
     default: break;
@@ -98,31 +98,62 @@ uint32_t panel_probe_move_ms(int tier)
 
 bool panel_probe_needs_completion(int tier)
 {
-    /* The tiers that move him. STANCE is here even though its window is
-     * unmeasured and it is refused upstream: this predicate must describe the
-     * tier, not the current build's ceiling, or it goes quietly wrong on the
-     * commit that measures STANCE. */
-    return tier == 3 || tier == 4;      /* DOME, STANCE */
+    /* The tiers that move him. STANCE and LOCOMOTION are here although
+     * neither is timed and LOCOMOTION is not even a gate tier: this predicate
+     * must describe the tier, not the current build's ceiling, or it goes
+     * quietly wrong on the commit that opens one. It also decides what the
+     * guard holds for (panel_motion_note_sent), so a mover left out of it is a
+     * mover the guard releases on. */
+    return tier == 3 || tier == 4 || tier == 5;   /* DOME, STANCE, LOCOMOTION */
 }
 
-bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms)
+void panel_motion_note_sent(panel_motion_t *m, int tier, unsigned sent,
+                            uint32_t sent_ms)
 {
-    if (p == NULL) return true;
-    uint32_t move = panel_probe_move_ms(p->tier);
-    if (move == 0u) return true;        /* this tier cannot move him */
-    if (p->state == PANEL_PROBE_IDLE) return true;   /* nothing was started */
+    if (m == NULL) return;
+    /* NOTHING THAT MOVES HIM: leave the record alone. A READ sent a second
+     * after a dome move must not overwrite the dome's stamp with a tier that
+     * cannot move him -- that would release the hold on the move still running.
+     * A tier that DOES move him is recorded whether or not its move is
+     * measured; panel_motion_settled decides what an unmeasured one means.
+     * NOTHING WENT OUT: leave it alone too -- nothing is moving, so there is
+     * nothing to hold for. */
+    if (sent == 0u || !panel_probe_needs_completion(tier)) return;
+    m->sent = true;
+    m->tier = tier;
+    m->sent_ms = sent_ms;
+}
+
+bool panel_motion_settled(const panel_motion_t *m, uint32_t now_ms)
+{
+    if (m == NULL) return false;        /* lost track of it: still moving */
+    if (!m->sent) return true;          /* nothing that moves him went out */
+    const uint32_t move = panel_probe_move_ms(m->tier);
+    /* A TIER THAT MOVES HIM WITH NO MEASURED MOVE HOLDS -- until reboot. It is
+     * NOT refused before it is sent: the only refusal is panel_probe_start's
+     * zero window, on ui_task, after link_task has already sent the ops, and
+     * it settles NO REPLY. Releasing here would open the guard straight after
+     * an untimed stance change. The lock is the friction: measure the tier. */
+    if (move == 0u) return false;
     /* A CLOCK BEHIND THE START IS "STILL MOVING", not "long since finished".
-     * These are uint32_t, so `now_ms - started_ms` on a now_ms EARLIER than
+     * These are uint32_t, so `now_ms - sent_ms` on a now_ms EARLIER than
      * the start wraps to roughly 4.3e9 and clears any window -- the guard
      * opens mid-travel, silently, in the one direction that matters.
      *
-     * It cannot happen today: the caller passes s_last_now, written every
-     * panel_ui_update with no early return above it, and a probe's started_ms
-     * comes from a send that preceded the refresh which started it. That is a
-     * property of a file with no host harness, held together by the absence of
-     * a `return` in ninety lines of LVGL. Cheaper to not depend on it. */
-    if (now_ms < p->started_ms) return false;
-    return now_ms - p->started_ms >= move;
+     * And it CAN happen: sent_ms is stamped on link_task and now_ms is
+     * ui_task's last tick, so a tap landing between a send and the next
+     * refresh compares a fresh stamp against an older clock.
+     *
+     * BEHIND BY A LITTLE, NOT BY ANY AMOUNT. Two cheaper forms each fail
+     * closed for weeks. `now_ms < sent_ms` calls a clock that has WRAPPED
+     * behind: a send in the last 2.2 s before the ~49.7-day wrap held every
+     * row shut for the next 49 days. A signed difference goes negative 2^31 ms
+     * after ANY send, and nothing clears `sent`, so every row locked for 24.8
+     * days on any board left up that long after one dome move. Bounding
+     * "behind" by the skew the two tasks can actually produce fixes both. */
+    const uint32_t behind = m->sent_ms - now_ms;
+    if (behind != 0u && behind <= PANEL_MOTION_SKEW_MS) return false;
+    return now_ms - m->sent_ms >= move;
 }
 
 void panel_probe_arm_completion(panel_probe_t *p, bool armed)
@@ -135,6 +166,16 @@ void panel_probe_note_complete(panel_probe_t *p)
 {
     if (p == NULL) return;
     p->completed = true;
+}
+
+void panel_probe_abort(panel_probe_t *p)
+{
+    if (p == NULL) return;
+    /* IDLE counts: the caller aborts a test that was tapped and cancelled
+     * before its ops went, and that row must say so rather than fall back to
+     * a fresh RUN as though nothing had been asked. */
+    if (p->state == PANEL_PROBE_IDLE || p->state == PANEL_PROBE_RUNNING)
+        p->state = PANEL_PROBE_STOPPED;
 }
 
 void panel_probe_init(panel_probe_t *p)
@@ -250,6 +291,7 @@ const char *panel_probe_word(const panel_probe_t *p, char *buf, unsigned n)
                                          (unsigned)p->got, (unsigned)p->expected); break;
     case PANEL_PROBE_NO_REPLY:  snprintf(buf, n, "NO REPLY"); break;
     case PANEL_PROBE_LINK_LOST: snprintf(buf, n, "LINK LOST"); break;
+    case PANEL_PROBE_STOPPED:   snprintf(buf, n, "STOPPED"); break;
     default:                    snprintf(buf, n, "RUN"); break;
     }
     return buf;

@@ -114,6 +114,14 @@ bool        panel_ui_take_stop_request(void);
 void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);
+/* WHAT WENT OUT, FOR THE GUARD -- separate from the verdict, and never
+ * disowned. panel_ui_probe_sent's report is dropped when the operator has left
+ * the screen; this one is not, because the op moved him whether or not anyone
+ * is still looking. Call it BEFORE panel_ui_probe_sent: that call clears
+ * in_flight, and if the operator has left the screen its generation is stale
+ * so it sets no `pending` either -- a tap landing between the two would then
+ * find nothing in flight, nothing pending and no hold, and go. */
+void        panel_ui_motion_sent(int tier, unsigned sent, uint32_t now_ms);
 
 /* HOW LONG A REFUSED TAP'S WORD STAYS UP.
  *

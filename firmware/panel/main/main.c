@@ -237,6 +237,9 @@ static void link_task(void *arg)
              * separate statements rather than one call. */
             const unsigned sent = run_op(probe_tier, probe_op);
             const bool up = r2_link_is_up();
+            /* THE HOLD FIRST, stamped after the sends so it errs long. Before
+             * panel_ui_probe_sent, which clears in_flight -- see panel_ui.h. */
+            panel_ui_motion_sent(probe_tier, sent, now_ms());
             panel_ui_probe_sent(sent, at, probe_gen, up);
         }
 
