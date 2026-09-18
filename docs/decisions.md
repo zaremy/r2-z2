@@ -2788,4 +2788,15 @@ directly rather than through the shipped table.
   > move duration (`PANEL_PROBE_DOME_MOVE_MS`, D-013's longest at 2.19 s), and
   > a moving tier's PASS now needs a completion event on a channel the caller
   > armed. The abort this bullet's issue also asks for is **still** absent.
+  >
+  > **Since (#184 abort, 2026-09-17):** that hold was read off the probe, and
+  > the probe is the display's — leaving the op list re-inits it, so backing
+  > out and straight back in reopened the guard mid-move. The hold now lives in
+  > `panel_motion_t`, stamped where the ops went and untouched by any close;
+  > `panel_probe_motion_settled` is gone. STOP now takes back a queued op
+  > (link_task sends a queued op *before* the halts) and settles an unfinished
+  > test as STOPPED, which never passes. STOP does **not** release the guard:
+  > none of the three halts stops the dome. A moving tier with no measured
+  > move (STANCE) holds the guard until reboot rather than releasing it — it is
+  > not refused before it is sent.
 

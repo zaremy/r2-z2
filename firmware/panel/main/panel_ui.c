@@ -553,6 +553,22 @@ static unsigned s_probe_gen;
  * than by timing. */
 static bool     s_probe_in_flight;
 
+/* WHAT WENT OUT THAT CAN MOVE HIM (#184). The guard's hold, kept off the
+ * probe because the probe is the display's -- every close and every open
+ * re-inits it, and a guard reading it opened the moment the operator backed
+ * out mid-move. Written on link_task by panel_ui_motion_sent, read by the tap
+ * guard on ui_task, both under s_probe_mux. Nothing that closes a screen
+ * touches it. */
+static panel_motion_t s_motion;
+
+/* A STOP LANDED ON A TEST THAT HAD NOT SETTLED, and the verdict still has to
+ * say so. Deferred rather than applied at the tap because the test may not
+ * have a verdict yet: its ops can be going out right now, and a probe started
+ * after the STOP would otherwise run and score answers to a test the operator
+ * halted. Applied by the refresh once nothing is in flight -- the same tick
+ * that consumes the start, when there is one. Under s_probe_mux. */
+static bool     s_probe_abort;
+
 /* A REFUSED TAP, SHOWN. The refusals were ESP_LOGI only, on a board whose
  * serial cannot be read without resetting it into the ROM downloader
  * (CLAUDE.md) -- so the operator standing at the droid saw nothing at all,
@@ -851,10 +867,19 @@ static void close_ops(void)
         s_op_row[i] = NULL;
         s_op_word[i] = NULL;
     }
+    /* THE VERDICT IS DISOWNED; THE COMMAND IS NOT. s_motion and in_flight are
+     * left alone, so an op being sent or still moving him keeps the guard shut
+     * across the close and the re-open -- which is the half #187 missed, and why backing out and
+     * straight back in used to buy a second dome move into the first. */
     portENTER_CRITICAL(&s_probe_mux);
     s_probe_request = -1;
     s_probe_pending = false;
-    s_probe_in_flight = false;
+    /* s_probe_in_flight IS LEFT ALONE. Its ops really are still going out,
+     * and until they are out s_motion has not been stamped -- this flag is the
+     * only hold. Clearing it let back-out, back-in and a tap admit a second
+     * move while the first was mid-send. panel_ui_probe_sent clears it; the
+     * generation drops the rest. */
+    s_probe_abort = false;          /* no verdict left to mark */
     s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
     panel_probe_init(&s_probe);
@@ -1203,7 +1228,12 @@ static void close_interior(void)
     portENTER_CRITICAL(&s_probe_mux);
     s_probe_request = -1;
     s_probe_pending = false;
-    s_probe_in_flight = false;
+    /* s_probe_in_flight IS LEFT ALONE. Its ops really are still going out,
+     * and until they are out s_motion has not been stamped -- this flag is the
+     * only hold. Clearing it let back-out, back-in and a tap admit a second
+     * move while the first was mid-send. panel_ui_probe_sent clears it; the
+     * generation drops the rest. */
+    s_probe_abort = false;
     s_refuse_rung = -1;             /* its label is about to be freed */
     s_probe_gen++;                  /* disown a send already in flight */
     portEXIT_CRITICAL(&s_probe_mux);
@@ -1262,8 +1292,26 @@ void panel_ui_tap(int x, int y)
             hit(s_stop_row, x, y)) {
             portENTER_CRITICAL(&s_probe_mux);
             s_stop_request = true;
+            /* AND IT OWNS THE TEST UNDER WAY (#184). A tap the link task has
+             * not taken yet is taken back: link_task sends a queued op BEFORE
+             * it sends the halts, so leaving it queued would have the STOP
+             * fire the very thing it was pressed to prevent. Anything already
+             * out -- or going out -- is marked, and its verdict will read
+             * STOPPED instead of scoring answers that arrive after the halt.
+             * (Unless it settled the moment it started -- LINK LOST or NO
+             * REPLY stand, being true and never a pass.)
+             *
+             * THE GUARD'S HOLD IS NOT RELEASED. The halts are animation, audio
+             * and legs; none is a dome halt, so a move under way runs its
+             * measured course and s_motion keeps the next tap out until it
+             * has. */
+            const bool cancelled = s_probe_request >= 0;
+            s_probe_request = -1;
+            if (cancelled || s_probe_in_flight || s_probe_pending ||
+                s_probe.state == PANEL_PROBE_RUNNING)
+                s_probe_abort = true;
             portEXIT_CRITICAL(&s_probe_mux);
-            ESP_LOGW("panel", "STOP requested");
+            ESP_LOGW("panel", "STOP requested%s", cancelled ? " -- queued op taken back" : "");
             /* BEFORE THE RADIO HAS DONE ANYTHING. link_task is up to 100 ms
              * away, which is long enough to press again wondering whether the
              * first one landed. */
@@ -1309,7 +1357,7 @@ void panel_ui_tap(int x, int y)
                     /* NAMED AS THE SAFE CONDITION, so omitting it here would
                      * refuse taps rather than admit them mid-move. */
                     .motion_settled =
-                        panel_probe_motion_settled(&s_probe, s_last_now),
+                        panel_motion_settled(&s_motion, s_last_now),
                 });
                 if (taken) {
                     /* THE TIER AND THE OP, ARMED TOGETHER. A tier with a stale
@@ -1319,6 +1367,9 @@ void panel_ui_tap(int x, int y)
                     s_probe_request    = s_ops_tier;
                     s_probe_request_op = s_op[i].op;
                     s_probe_accepted++;
+                    /* A STOP still waiting to mark the LAST test must not land
+                     * on this one: it is a new tap, made after the halt. */
+                    s_probe_abort = false;
                 }
                 portEXIT_CRITICAL(&s_probe_mux);
 
@@ -1662,6 +1713,16 @@ void panel_ui_probe_sent(unsigned expected, uint32_t sent_at_ms, unsigned gen,
     portEXIT_CRITICAL(&s_probe_mux);
 }
 
+void panel_ui_motion_sent(int tier, unsigned sent, uint32_t now_ms)
+{
+    /* NO GENERATION TEST, deliberately -- that is the whole point of this
+     * being a separate call. The generation decides whether anyone is still
+     * looking at the verdict; whether he is moving does not depend on that. */
+    portENTER_CRITICAL(&s_probe_mux);
+    panel_motion_note_sent(&s_motion, tier, sent, now_ms);
+    portEXIT_CRITICAL(&s_probe_mux);
+}
+
 void panel_ui_note_press(void)
 {
     /* Compared with the previous tick's sample: if the list moved between
@@ -1736,6 +1797,11 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
         at = s_probe_pending_ms;
         was_up = s_probe_pending_link;
     }
+    /* A STOP WAITS OUT A SEND IN FLIGHT, and is taken in the same breath as
+     * the start it follows -- so the probe that send produces is started and
+     * stopped in one tick, and never gets a tick to score an answer. */
+    const bool halted = s_probe_abort && !s_probe_in_flight;
+    if (halted) s_probe_abort = false;
     portEXIT_CRITICAL(&s_probe_mux);
     if (start)
         /* THE RUNG INDEX IS THE TIER INDEX -- the ladder walks the gate's own
@@ -1747,6 +1813,7 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
          * be true then. */
         panel_probe_start(&s_probe, at, e > 255u ? 255u : (uint8_t)e, was_up,
                           s_probe_rung);
+    if (halted) panel_probe_abort(&s_probe);
 
     /* THE RUNNING TEST'S VERDICT, counted from the ledger: only replies that
      * struck one of this test's own requests. The panel's periodic polls ask

@@ -60,6 +60,15 @@ extern "C" {
  * has stopped". They are close today only by coincidence of one tier. */
 #define PANEL_PROBE_DOME_MOVE_MS 2200u
 
+/* HOW FAR BEHIND A SEND'S STAMP THE GUARD'S CLOCK CAN LEGITIMATELY BE. The
+ * stamp is taken on link_task and the guard reads ui_task's last tick, so the
+ * gap is one refresh -- tens of ms. Anything within this reads as "still
+ * moving"; anything further is elapsed time that has wrapped, not a clock
+ * behind. Generous on purpose: the cost of the margin is a false hold of at
+ * most this plus the move (~12.2 s for DOME), when a tap lands just short of a
+ * multiple of 2^32 ms (~49.7 days) after the last moving send. */
+#define PANEL_MOTION_SKEW_MS 10000u
+
 typedef enum {
     PANEL_PROBE_IDLE = 0,   /* nothing has been asked */
     PANEL_PROBE_RUNNING,    /* asked; waiting for replies */
@@ -69,6 +78,9 @@ typedef enum {
     PANEL_PROBE_LINK_LOST,  /* he was away when we asked, or went while we
                              * waited -- either way the question never
                              * reached him, and the silence is ours */
+    PANEL_PROBE_STOPPED,    /* the operator hit STOP before it settled. Never
+                             * a pass: whatever came back afterwards answers a
+                             * test that was halted, not one that ran */
 } panel_probe_state_t;
 
 typedef struct {
@@ -139,13 +151,17 @@ uint32_t panel_probe_timeout_ms(int tier);
 /* HOW LONG THAT TIER MOVES HIM, or 0 for a tier that cannot move him at all.
  *
  * READ is 0 because reading cannot move him -- structural, not measured. DOME
- * is PANEL_PROBE_DOME_MOVE_MS because D-013 measured it. Everything else is 0
- * and is ALSO refused by panel_probe_timeout_ms returning 0, which is what
- * keeps a 0 here from ever meaning "unmeasured mover": a tier gets past
- * panel_probe_start only if its timeout is non-zero, and the only such tiers
- * are READ and DOME. test_panel_probe asserts that pairing directly, so
- * adding a moving tier with a window but no move duration fails the suite
- * rather than releasing the guard early. */
+ * is PANEL_PROBE_DOME_MOVE_MS because D-013 measured it. Everything else is 0.
+ *
+ * SO 0 MEANS TWO THINGS -- "cannot move him" and "nobody timed it" -- and only
+ * the first is safe to release on. panel_probe_needs_completion tells them
+ * apart, and panel_motion_settled holds the guard for a moving tier whose
+ * move is 0. That hold is the safety; a 0 window is NOT, because
+ * panel_probe_start refuses the VERDICT after link_task has already sent the
+ * ops. test_panel_probe asserts that every tier given a WINDOW and a move has
+ * a measured duration. It does not see a tier made runnable in main.c without
+ * a window: that one's first send locks every row until reboot and reads NO
+ * REPLY. Fail-closed, and loud -- but found on the droid, not by the suite. */
 uint32_t panel_probe_move_ms(int tier);
 
 /* DOES A PASS ON THIS TIER NEED A COMPLETION EVENT? True for every tier that
@@ -154,11 +170,41 @@ uint32_t panel_probe_move_ms(int tier);
  * questions with different answers. */
 bool panel_probe_needs_completion(int tier);
 
+/* WHAT WENT OUT THAT CAN MOVE HIM, AND WHEN -- kept apart from the verdict.
+ *
+ * #187 keyed the guard on the PROBE, and the probe is the display's: leaving
+ * the op list calls panel_probe_init, and a send still in flight when the
+ * operator backs out is disowned by generation and never starts a probe at
+ * all. Either way the probe read IDLE, IDLE read "nothing was started", and
+ * the guard opened -- so backing out and straight back in bought a second
+ * dome move into the first. Disowning the display had disowned the command.
+ *
+ * This record is written where the ops actually went, whatever the display
+ * did meanwhile, and nothing that closes a screen touches it. The zero value
+ * means "nothing has been sent", which is true at boot and only then. */
+typedef struct {
+    bool     sent;      /* something went out on a tier that can move him */
+    int      tier;
+    uint32_t sent_ms;   /* stamped AFTER the sends, so the hold errs long */
+} panel_motion_t;
+
+/* The ops for `tier` went out and `sent` of them reached the transport.
+ *
+ * A tier that cannot move him leaves the record alone: a READ sent mid-move
+ * would otherwise restamp it and release a hold the dome is still owed. A
+ * tier that moves him with no measured move (STANCE today) is recorded and
+ * holds the guard shut until reboot -- see panel_motion_settled. A send of 0 leaves it alone too, for a different reason --
+ * nothing went out, so nothing is moving, and a DOME tap with the link down
+ * must not lock every row out for a move that never happened. */
+void panel_motion_note_sent(panel_motion_t *m, int tier, unsigned sent,
+                            uint32_t sent_ms);
+
 /* HAS HE STOPPED? True once the tier's measured move duration has elapsed
- * since the test started, and always true for a tier that cannot move him.
+ * since its ops went out, and always true when nothing that moves him has.
  * This is the guard's question -- NOT `settled`, which asks about the verdict
- * and answers it at 2 s while a 2.19 s move is still running. */
-bool panel_probe_motion_settled(const panel_probe_t *p, uint32_t now_ms);
+ * and answers it at 2 s while a 2.19 s move is still running. A NULL record
+ * is "still moving": a caller that lost track of the command must refuse. */
+bool panel_motion_settled(const panel_motion_t *m, uint32_t now_ms);
 
 /* THE COMPLETION CHANNEL IS ARMED, and the caller is saying so on the same
  * path that enabled it. `leg_action_complete` does not fire unless
@@ -173,6 +219,19 @@ void panel_probe_arm_completion(panel_probe_t *p, bool armed);
 
 /* THE COMPLETION EVENT ARRIVED. Idempotent; ignored when nothing is running. */
 void panel_probe_note_complete(panel_probe_t *p);
+
+/* THE OPERATOR HIT STOP. A test that has not settled -- running, or tapped and
+ * not yet started -- becomes STOPPED, and STOPPED never becomes a pass: an
+ * answer or a completion arriving after the halt is about a test that was
+ * interrupted, and scoring it would award a PASS to the tap the operator
+ * tried to take back. A test that had already settled keeps its verdict; the
+ * STOP came after it and says nothing about it.
+ *
+ * THIS DOES NOT RELEASE THE GUARD, and must not. The three halts are
+ * animation, audio and legs (D-026); none of them is a dome halt, so a dome
+ * move already under way runs its measured course regardless. The guard's
+ * hold is panel_motion_t's, which a STOP does not touch. */
+void panel_probe_abort(panel_probe_t *p);
 
 /* MAY A TAP START A TEST? The renderer's guard, lifted out of the renderer so
  * a test can reach it -- the repo's own rule is to test the guard rather than
@@ -197,10 +256,9 @@ void panel_probe_note_complete(panel_probe_t *p);
  * and it is keyed on the tier's own MEASURED move duration
  * (panel_probe_move_ms), not on the read-latency constant.
  *
- * WHAT IS STILL NOT HERE: an abort. The STOP bar reaches him (D-026) but
- * nothing ties it to an op already in flight, so backing out of the op list
- * disowns the display and not the command. #184 carries that; raising the
- * ceiling above READ still needs it. */
+ * `motion_settled` comes from panel_motion_settled, NOT from the probe: the
+ * probe belongs to the display and is reset whenever a screen closes, and a
+ * guard fed from it opened the moment the operator backed out mid-move. */
 typedef struct {
     bool queued;                /* tapped; the link task has not taken it */
     bool in_flight;             /* taken; its ops are going out RIGHT NOW */

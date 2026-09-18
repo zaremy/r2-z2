@@ -262,30 +262,213 @@ static void test_motion_outlasts_the_verdict_on_a_moving_tier(void)
     CHECK(panel_probe_settled(&dome), "a passed test is not settled");
 
     /* And he is STILL MOVING, by his own measured duration. */
-    CHECK(!panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS - 1),
+    panel_motion_t m = {0};
+    panel_motion_note_sent(&m, 3, 1, 1000);
+    CHECK(!panel_motion_settled(&m, 1000 + PANEL_PROBE_DOME_MOVE_MS - 1),
           "he was called stopped one ms before the measured move ends");
 
     /* Only then does it release. */
-    CHECK(panel_probe_motion_settled(&dome, 1000 + PANEL_PROBE_DOME_MOVE_MS),
+    CHECK(panel_motion_settled(&m, 1000 + PANEL_PROBE_DOME_MOVE_MS),
           "he was still called moving after the measured move ended");
 
     /* A CLOCK BEHIND THE START MUST READ AS MOVING. The subtraction is
      * unsigned, so the wrong answer here is not "slightly early" -- it is
      * ~4.3e9 ms of apparent elapsed time, which clears every window and opens
      * the guard while he travels. The illegal case, asserted first. */
-    CHECK(!panel_probe_motion_settled(&dome, 999),
-          "a clock one ms behind the start reported him stopped");
-    CHECK(!panel_probe_motion_settled(&dome, 0),
+    CHECK(!panel_motion_settled(&m, 999),
+          "a clock one ms behind the send reported him stopped");
+    CHECK(!panel_motion_settled(&m, 0),
           "a zeroed clock reported him stopped");
 
-    /* A READ test has no move to outlast: busy tracks the verdict alone. */
+    /* AND ACROSS THE ~49.7-DAY WRAP, both ways. Sent 256 ms before the ms
+     * clock wraps: mid-move just after the wrap, released once the measured
+     * move has really elapsed -- not 49 days later. */
+    panel_motion_t w = {0};
+    panel_motion_note_sent(&w, 3, 1, 0xFFFFFF00u);
+    CHECK(!panel_motion_settled(&w, 0x00000100u),
+          "512 ms into a move that straddled the clock wrap read as stopped");
+    CHECK(panel_motion_settled(&w, 0xFFFFFF00u + PANEL_PROBE_DOME_MOVE_MS),
+          "a move that straddled the clock wrap held the guard past its end");
+
+    /* AND A LONG IDLE IS NOT A CLOCK BEHIND. Nothing clears the record, so it
+     * is compared against every later tap: 2^31 ms after the send a signed
+     * difference goes negative and would lock every row for 24.8 days. */
+    const uint32_t gaps[] = { 0x7FFFFFFFu, 0x80000000u, 0x80000001u,
+                              0xC0000000u, 0xFFFFFFFFu - PANEL_MOTION_SKEW_MS };
+    for (unsigned i = 0; i < sizeof gaps / sizeof gaps[0]; i++)
+        CHECK(panel_motion_settled(&m, 1000u + gaps[i]),
+              "a tap %u ms after a finished move was refused", (unsigned)gaps[i]);
+    CHECK(!panel_motion_settled(&m, 1000u - PANEL_MOTION_SKEW_MS),
+          "a clock behind by the full skew reported him stopped");
+
+    /* A READ has no move to outlast: busy tracks the verdict alone. */
     panel_probe_t read;
     panel_probe_init(&read);
     panel_probe_start(&read, 1000, 1, true, 0);
     CHECK(panel_probe_step(&read, 1010, 1, true) == PANEL_PROBE_PASS,
           "READ did not pass on its answers alone");
-    CHECK(panel_probe_motion_settled(&read, 1011),
-          "a settled READ test read as still moving -- reading cannot move him");
+    panel_motion_t r = {0};
+    panel_motion_note_sent(&r, 0, 1, 1000);
+    CHECK(panel_motion_settled(&r, 1000),
+          "a READ send held the guard -- reading cannot move him");
+}
+
+static void test_the_hold_is_not_kept_on_the_probe(void)
+{
+    /* THE ILLEGAL CASE FIRST, and it is the defect #187 shipped. The guard
+     * read its hold off the probe; leaving the op list calls panel_probe_init
+     * and re-opening it calls it again, so the probe said IDLE and IDLE said
+     * "nothing was started". Back out and straight back in, and a second dome
+     * move went into the first.
+     *
+     * The hold now lives in a record the display cannot reset. This test does
+     * to the probe everything a close does, and asks the record.
+     *
+     * WHAT IT CANNOT CATCH: panel_motion_settled never reads the probe, so the
+     * init calls below prove the TYPES are separate, nothing more. A close
+     * path in panel_ui.c that zeroed s_motion would pass here -- that wiring
+     * has no host harness. The half that is real is the disowned send below. */
+    panel_motion_t m = {0};
+    panel_probe_t p;
+    panel_probe_init(&p);
+    panel_probe_arm_completion(&p, true);
+    panel_probe_start(&p, 1000, 1, true, 3);
+    panel_motion_note_sent(&m, 3, 1, 1000);
+
+    panel_probe_init(&p);                         /* close_ops */
+    panel_probe_init(&p);                         /* open_ops, the rung again */
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){
+              .state = p.state,
+              .motion_settled = panel_motion_settled(&m, 1500)}),
+          "backing out and back in admitted a second move mid-travel");
+
+    /* A SEND WHOSE DISPLAY WAS DISOWNED STILL HOLDS. The generation drops the
+     * verdict of a send that was in flight when the operator left; it must
+     * not drop the fact that the op went. No probe was ever started here. */
+    panel_motion_t d = {0};
+    panel_motion_note_sent(&d, 3, 1, 5000);
+    CHECK(!panel_motion_settled(&d, 5001),
+          "a send nobody displayed did not hold the guard");
+
+    /* And it releases on the measured move, not before and not never. */
+    CHECK(panel_motion_settled(&m, 1000 + PANEL_PROBE_DOME_MOVE_MS),
+          "the hold outlived the measured move");
+}
+
+static void test_the_motion_record_is_not_overwritten_by_what_cannot_move_him(void)
+{
+    /* THE ILLEGAL CASES FIRST. Both would release a hold that is still owed. */
+
+    /* A READ sent mid-move must not overwrite the dome's stamp with a tier
+     * whose move is 0. */
+    panel_motion_t m = {0};
+    panel_motion_note_sent(&m, 3, 1, 1000);
+    panel_motion_note_sent(&m, 0, 3, 1100);
+    CHECK(!panel_motion_settled(&m, 1200),
+          "a READ sent mid-move released the dome's hold");
+
+    /* A DOME SEND WHERE NOTHING WENT OUT MOVED NOTHING. With the link down
+     * every op fails; holding the guard for a move that never happened would
+     * lock every row out for 2.2 s after a tap that did nothing. The wrong
+     * answer here is a refusal, not a hazard -- but a guard that refuses for
+     * no reason is one people learn to wait out rather than read. */
+    panel_motion_t z = {0};
+    panel_motion_note_sent(&z, 3, 0, 1000);
+    CHECK(panel_motion_settled(&z, 1001),
+          "a dome send that reached nobody held the guard");
+
+    /* A NULL RECORD IS "STILL MOVING". A caller that lost track of the
+     * command has to refuse, not admit. */
+    CHECK(!panel_motion_settled(NULL, 99999), "a NULL record admitted the tap");
+
+    /* The zero value is "nothing has been sent", which is boot. */
+    panel_motion_t fresh = {0};
+    CHECK(panel_motion_settled(&fresh, 0), "a fresh record held the guard");
+
+    /* AN UNMEASURED MOVING TIER HOLDS -- it is NOT refused before it is sent.
+     * panel_probe_start's zero-window refusal runs after link_task has sent
+     * the ops and settles NO REPLY, so if this released, the guard would open
+     * straight after an untimed stance change. */
+    panel_motion_t s = {0};
+    panel_motion_note_sent(&s, 4, 1, 1000);
+    CHECK(!panel_motion_settled(&s, 1000u + 600000u),
+          "an unmeasured STANCE send released the guard");
+    panel_motion_note_sent(NULL, 3, 1, 1000);     /* must not crash */
+}
+
+static void test_stop_ends_a_test_and_never_passes_it(void)
+{
+    /* THE ILLEGAL CASE FIRST: the answers and the completion both arrive
+     * after the halt. Scoring them would award a PASS to the tap the operator
+     * tried to take back. */
+    panel_probe_t p;
+    panel_probe_init(&p);
+    panel_probe_arm_completion(&p, true);
+    panel_probe_start(&p, 1000, 1, true, 3);
+    panel_probe_abort(&p);
+    panel_probe_note_complete(&p);
+    CHECK(panel_probe_step(&p, 1010, 1, true) == PANEL_PROBE_STOPPED,
+          "a stopped test was scored by answers that came after the STOP");
+    CHECK(!panel_probe_passed(&p), "a stopped test reported passed");
+    CHECK(panel_probe_settled(&p), "a stopped test still reads as running");
+    CHECK(strcmp(word(&p), "STOPPED") == 0,
+          "a stopped test says \"%s\", not STOPPED", word(&p));
+
+    /* AND IT DOES NOT TIME OUT INTO SOMETHING ELSE later. */
+    CHECK(panel_probe_step(&p, 1000 + PANEL_PROBE_DOME_TIMEOUT_MS, 0, false)
+              == PANEL_PROBE_STOPPED,
+          "a stopped test turned into another verdict when the clock ran out");
+
+    /* A TEST CANCELLED BEFORE ITS OPS WENT is stopped too, not a fresh RUN. */
+    panel_probe_t q;
+    panel_probe_init(&q);
+    panel_probe_abort(&q);
+    CHECK(q.state == PANEL_PROBE_STOPPED,
+          "a cancelled tap fell back to RUN as though nothing was asked");
+
+    /* A VERDICT THAT HAD ALREADY SETTLED STANDS. The STOP came after it. */
+    const panel_probe_state_t done[] = {
+        PANEL_PROBE_PASS, PANEL_PROBE_PARTIAL,
+        PANEL_PROBE_NO_REPLY, PANEL_PROBE_LINK_LOST,
+    };
+    for (unsigned i = 0; i < sizeof done / sizeof done[0]; i++) {
+        panel_probe_t r;
+        panel_probe_init(&r);
+        r.state = done[i];
+        panel_probe_abort(&r);
+        CHECK(r.state == done[i], "a settled verdict %u was rewritten by STOP",
+              (unsigned)done[i]);
+    }
+    panel_probe_abort(NULL);                      /* must not crash */
+}
+
+static void test_a_stopped_verdict_is_not_a_stopped_droid(void)
+{
+    /* THE HALTS ARE ANIMATION, AUDIO AND LEGS -- none of them stops the dome.
+     * A STOPPED verdict is settled, and a guard that read "settled" as "he
+     * has stopped" would admit a second move into a dome still turning.
+     *
+     * BY CONSTRUCTION TODAY: panel_probe_abort and panel_motion_t share no
+     * state, so this pins the gate's composition -- a STOPPED state with the
+     * hold still owed refuses -- not the STOP branch in panel_ui.c, which has
+     * no host harness. */
+    panel_probe_t p;
+    panel_probe_init(&p);
+    panel_probe_arm_completion(&p, true);
+    panel_probe_start(&p, 1000, 1, true, 3);
+    panel_motion_t m = {0};
+    panel_motion_note_sent(&m, 3, 1, 1000);
+    panel_probe_abort(&p);
+
+    CHECK(!panel_probe_may_start((panel_probe_gate_t){
+              .state = p.state,
+              .motion_settled = panel_motion_settled(&m, 1100)}),
+          "STOP released the guard while the dome was still turning");
+    CHECK(panel_probe_may_start((panel_probe_gate_t){
+              .state = p.state,
+              .motion_settled =
+                  panel_motion_settled(&m, 1000 + PANEL_PROBE_DOME_MOVE_MS)}),
+          "a stopped test held the guard after the move ended");
 }
 
 static void test_a_moving_tier_needs_a_completion_not_a_reply_count(void)
@@ -322,6 +505,12 @@ static void test_a_moving_tier_needs_a_completion_not_a_reply_count(void)
     CHECK(!panel_probe_needs_completion(0), "READ was made to need a completion");
     CHECK(panel_probe_needs_completion(3), "DOME does not need a completion");
     CHECK(panel_probe_needs_completion(4), "STANCE does not need a completion");
+    /* LOCOMOTION TOO, though it is not a gate tier today. Left out, the
+     * guard would record no hold for a send that drives him away. */
+    CHECK(panel_probe_needs_completion(5), "LOCOMOTION does not need a completion");
+    for (int tier = 1; tier <= 2; tier++)
+        CHECK(!panel_probe_needs_completion(tier),
+              "tier %d, which cannot move him, was made to need a completion", tier);
 }
 
 static void test_an_unarmed_completion_channel_is_refused(void)
@@ -383,7 +572,7 @@ static void test_no_tier_can_move_him_without_a_measured_duration(void)
      * a future tier given a window but no move duration fails here instead of
      * releasing the guard mid-travel. */
     for (int tier = 0; tier <= 5; tier++) {
-        if (panel_probe_timeout_ms(tier) == 0u) continue;   /* refused upstream */
+        if (panel_probe_timeout_ms(tier) == 0u) continue;   /* verdict refused */
         if (!panel_probe_needs_completion(tier)) continue;  /* cannot move him */
         CHECK(panel_probe_move_ms(tier) > 0u,
               "tier %d is runnable and moves him but has no measured move "
@@ -617,6 +806,10 @@ int main(void)
     test_the_guard_covers_the_whole_life_of_a_test();
     test_the_guard_holds_while_he_is_still_moving();
     test_motion_outlasts_the_verdict_on_a_moving_tier();
+    test_the_hold_is_not_kept_on_the_probe();
+    test_the_motion_record_is_not_overwritten_by_what_cannot_move_him();
+    test_stop_ends_a_test_and_never_passes_it();
+    test_a_stopped_verdict_is_not_a_stopped_droid();
     test_a_moving_tier_needs_a_completion_not_a_reply_count();
     test_an_unarmed_completion_channel_is_refused();
     test_no_tier_can_move_him_without_a_measured_duration();
