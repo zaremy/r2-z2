@@ -151,8 +151,8 @@ bool panel_motion_settled(const panel_motion_t *m, uint32_t now_ms)
      * after ANY send, and nothing clears `sent`, so every row locked for 24.8
      * days on any board left up that long after one dome move. Bounding
      * "behind" by the skew the two tasks can actually produce fixes both. */
-    const uint32_t behind = m->sent_ms - now_ms;
-    if (behind != 0u && behind <= PANEL_MOTION_SKEW_MS) return false;
+    const uint32_t behind = m->sent_ms - now_ms;   /* 0 when now == sent */
+    if (behind <= PANEL_MOTION_SKEW_MS) return false;
     return now_ms - m->sent_ms >= move;
 }
 

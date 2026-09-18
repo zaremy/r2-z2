@@ -313,7 +313,7 @@ static void test_motion_outlasts_the_verdict_on_a_moving_tier(void)
           "a READ send held the guard -- reading cannot move him");
 }
 
-static void test_leaving_the_screen_does_not_release_the_hold(void)
+static void test_the_hold_is_not_kept_on_the_probe(void)
 {
     /* THE ILLEGAL CASE FIRST, and it is the defect #187 shipped. The guard
      * read its hold off the probe; leaving the op list calls panel_probe_init
@@ -322,7 +322,12 @@ static void test_leaving_the_screen_does_not_release_the_hold(void)
      * move went into the first.
      *
      * The hold now lives in a record the display cannot reset. This test does
-     * to the probe everything a close does, and asks the record. */
+     * to the probe everything a close does, and asks the record.
+     *
+     * WHAT IT CANNOT CATCH: panel_motion_settled never reads the probe, so the
+     * init calls below prove the TYPES are separate, nothing more. A close
+     * path in panel_ui.c that zeroed s_motion would pass here -- that wiring
+     * has no host harness. The half that is real is the disowned send below. */
     panel_motion_t m = {0};
     panel_probe_t p;
     panel_probe_init(&p);
@@ -437,11 +442,16 @@ static void test_stop_ends_a_test_and_never_passes_it(void)
     panel_probe_abort(NULL);                      /* must not crash */
 }
 
-static void test_stop_does_not_release_the_guard(void)
+static void test_a_stopped_verdict_is_not_a_stopped_droid(void)
 {
     /* THE HALTS ARE ANIMATION, AUDIO AND LEGS -- none of them stops the dome.
      * A STOPPED verdict is settled, and a guard that read "settled" as "he
-     * has stopped" would admit a second move into a dome still turning. */
+     * has stopped" would admit a second move into a dome still turning.
+     *
+     * BY CONSTRUCTION TODAY: panel_probe_abort and panel_motion_t share no
+     * state, so this pins the gate's composition -- a STOPPED state with the
+     * hold still owed refuses -- not the STOP branch in panel_ui.c, which has
+     * no host harness. */
     panel_probe_t p;
     panel_probe_init(&p);
     panel_probe_arm_completion(&p, true);
@@ -796,10 +806,10 @@ int main(void)
     test_the_guard_covers_the_whole_life_of_a_test();
     test_the_guard_holds_while_he_is_still_moving();
     test_motion_outlasts_the_verdict_on_a_moving_tier();
-    test_leaving_the_screen_does_not_release_the_hold();
+    test_the_hold_is_not_kept_on_the_probe();
     test_the_motion_record_is_not_overwritten_by_what_cannot_move_him();
     test_stop_ends_a_test_and_never_passes_it();
-    test_stop_does_not_release_the_guard();
+    test_a_stopped_verdict_is_not_a_stopped_droid();
     test_a_moving_tier_needs_a_completion_not_a_reply_count();
     test_an_unarmed_completion_channel_is_refused();
     test_no_tier_can_move_him_without_a_measured_duration();

@@ -64,8 +64,9 @@ extern "C" {
  * stamp is taken on link_task and the guard reads ui_task's last tick, so the
  * gap is one refresh -- tens of ms. Anything within this reads as "still
  * moving"; anything further is elapsed time that has wrapped, not a clock
- * behind. Generous on purpose: the cost of the margin is one false hold of at
- * most this long, once per ~49.7-day clock wrap. */
+ * behind. Generous on purpose: the cost of the margin is a false hold of at
+ * most this plus the move (~12.2 s for DOME), when a tap lands just short of a
+ * multiple of 2^32 ms (~49.7 days) after the last moving send. */
 #define PANEL_MOTION_SKEW_MS 10000u
 
 typedef enum {
@@ -157,9 +158,10 @@ uint32_t panel_probe_timeout_ms(int tier);
  * apart, and panel_motion_settled holds the guard for a moving tier whose
  * move is 0. That hold is the safety; a 0 window is NOT, because
  * panel_probe_start refuses the VERDICT after link_task has already sent the
- * ops. test_panel_probe still asserts that every tier with a window and a
- * move has a measured duration, so a tier made runnable gets timed rather
- * than locking the panel until reboot. */
+ * ops. test_panel_probe asserts that every tier given a WINDOW and a move has
+ * a measured duration. It does not see a tier made runnable in main.c without
+ * a window: that one's first send locks every row until reboot and reads NO
+ * REPLY. Fail-closed, and loud -- but found on the droid, not by the suite. */
 uint32_t panel_probe_move_ms(int tier);
 
 /* DOES A PASS ON THIS TIER NEED A COMPLETION EVENT? True for every tier that
