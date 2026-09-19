@@ -30,9 +30,9 @@
 extern "C" {
 #endif
 
-/* The SERVICE rows, top to bottom. NETWORK is first and is NOT an interior:
- * the epic is explicit that it jumps to the lateral NETWORK page rather than
- * being a second copy of it. The reference's last row, EXIT TO OS, is absent
+/* The SERVICE rows, top to bottom. NETWORK is an interior like every other
+ * row -- operator ruling 2026-09-19, which retired the lateral NETWORK page
+ * the epic had it jump to. The reference's last row, EXIT TO OS, is absent
  * on purpose -- D-022 removed the vendor launcher, so there is no OS to exit
  * to, and a row that promised one would be a door painted on a wall. */
 typedef enum {
@@ -48,9 +48,9 @@ typedef enum {
 } panel_svc_t;
 
 typedef enum {
-    PANEL_SVC_JUMP = 0,    /* goes somewhere else (NETWORK) */
+    PANEL_SVC_NOTE = 0,    /* a null state: two lines, nothing to list. Zero,
+                            * so a kind nobody set asks for no rows. */
     PANEL_SVC_LIST,        /* key / value rows */
-    PANEL_SVC_NOTE,        /* a null state: two lines, nothing to list */
     PANEL_SVC_LADDER,      /* HARDWARE TEST */
 } panel_svc_kind_t;
 

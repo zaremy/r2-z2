@@ -326,7 +326,7 @@ static void test_bundling_and_actuator_are_one_fact(void)
 static void test_every_row_has_a_title_and_the_right_kind(void)
 {
     static const struct { panel_svc_t s; const char *t; panel_svc_kind_t k; } want[] = {
-        { PANEL_SVC_NETWORK,      "NETWORK",       PANEL_SVC_JUMP   },
+        { PANEL_SVC_NETWORK,      "NETWORK",       PANEL_SVC_LIST   },
         { PANEL_SVC_R2_LINK,      "R2 LINK",       PANEL_SVC_LIST   },
         { PANEL_SVC_DIAGNOSTICS,  "DIAGNOSTICS",   PANEL_SVC_LIST   },
         { PANEL_SVC_HW_TEST,      "HARDWARE TEST", PANEL_SVC_LADDER },
@@ -343,6 +343,29 @@ static void test_every_row_has_a_title_and_the_right_kind(void)
     }
     CHECK(panel_service_title(PANEL_SVC_COUNT)[0] == '\0', "out of range has a title");
     CHECK(panel_service_kind((panel_svc_t)-1) == PANEL_SVC_NOTE, "out of range is listable");
+}
+
+static void test_network_is_an_interior_that_claims_nothing(void)
+{
+    /* It used to jump to a lateral page; now it opens like every other row
+     * (operator ruling 2026-09-19). No Wi-Fi in this build, so every value
+     * is the no-claim grey -- a GOOD or PLAIN here would be invented. */
+    r2_telemetry_t t = up_with_everything(1000);
+    panel_svc_facts_t f = facts(&t, 2000);
+    panel_kv_t kv[PANEL_SVC_MAX_ROWS];
+    const int n = panel_service_rows(PANEL_SVC_NETWORK, &f, kv, PANEL_SVC_MAX_ROWS);
+    CHECK(n == 4, "NETWORK gave %d rows", n);
+    static const char *keys[] = { "SSID", "SIGNAL", "ADDRESS", "PROVISIONED" };
+    for (int i = 0; i < n && i < 4; i++) {
+        CHECK(strcmp(kv[i].key, keys[i]) == 0, "row %d is '%s'", i, kv[i].key);
+        CHECK(kv[i].tone == PANEL_TONE_NONE, "row %s claims a tone", kv[i].key);
+    }
+}
+
+static void test_a_zero_kind_asks_for_no_rows(void)
+{
+    /* A kind nobody set must not be a LIST. */
+    CHECK(PANEL_SVC_NOTE == 0, "the zero kind is not NOTE");
 }
 
 static void test_only_lists_have_rows_and_only_notes_have_lines(void)
@@ -1139,6 +1162,8 @@ int main(void)
     test_an_unknown_tier_is_assumed_to_move_him();
     test_bundling_and_actuator_are_one_fact();
     test_every_row_has_a_title_and_the_right_kind();
+    test_network_is_an_interior_that_claims_nothing();
+    test_a_zero_kind_asks_for_no_rows();
     test_only_lists_have_rows_and_only_notes_have_lines();
     test_rows_respect_max();
     test_every_glyph_is_in_the_font();

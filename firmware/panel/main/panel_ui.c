@@ -71,19 +71,16 @@
 static lv_obj_t *s_screen;
 static lv_obj_t *s_root;
 
-/* THE THREE LATERAL PAGES: STATUS, SERVICE, NETWORK.
+/* THE LATERAL PAGES: STATUS and SERVICE.
  *
- * Named in the vault's Prototypes/README.md:18 -- "Three lateral pages --
- * STATUS / SERVICE / NETWORK, swipe or tap the dots." I spent two loop ticks
- * calling these undefined and building around the gap, because I had assumed
- * the gitignored vault was unreachable. It is a directory.
+ * The vault's Prototypes/README.md:18 named three -- STATUS / SERVICE /
+ * NETWORK. NETWORK was retired as a page by operator ruling, 2026-09-19: it
+ * is a SERVICE row that opens an interior like the other seven, rather than
+ * the one row that jumped sideways to a page of its own.
  *
  * What is built here is the FRAME of each page and the navigation between
- * them. SERVICE's rows and its seven interiors are child 6 and are built
- * below; what each one may honestly say is decided in `panel_service`.
- * NETWORK's contents are not defined in any source I can find, so the page
- * says so rather than inventing them -- the same choice as STORAGE and BRAIN
- * on the status page, and the one D-017 Amendment B just ruled for. */
+ * them. SERVICE's rows and their interiors are built below; what each one may
+ * honestly say is decided in `panel_service`. */
 /* THE STATE FACE, from v5. This is what the STATUS page actually is, and
  * getting it wrong is why the panel "looked nothing like the spec".
  *
@@ -156,12 +153,12 @@ static const char *k_chain_label[4] = { "MIC", "R2", "NET", "LLM" };
 static void set_face(panel_state_t st, panel_offline_mode_t mode,
                      const r2_telemetry_t *t, uint32_t now_ms);
 
-enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_NETWORK, PAGE_COUNT };
+enum { PAGE_STATUS = 0, PAGE_SERVICE, PAGE_COUNT };
 static lv_obj_t *s_page[PAGE_COUNT];
 static lv_obj_t *s_pip[PAGE_COUNT];
 static int s_page_at = PAGE_STATUS;
 
-static const char *k_page_name[PAGE_COUNT] = { "STATUS", "SERVICE", "NETWORK" };
+static const char *k_page_name[PAGE_COUNT] = { "STATUS", "SERVICE" };
 
 static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
 static lv_obj_t *s_waking_fill;       /* AC8: the rule, filling while waking */
@@ -1467,10 +1464,7 @@ void panel_ui_tap(int x, int y)
     if (!hit(s_svc_list, x, y)) return;
     for (int i = 0; i < PANEL_SVC_COUNT; i++) {
         if (!hit(s_svc_row[i], x, y)) continue;
-        if (panel_service_kind((panel_svc_t)i) == PANEL_SVC_JUMP)
-            panel_ui_show_page(PAGE_NETWORK);
-        else
-            open_interior((panel_svc_t)i);
+        open_interior((panel_svc_t)i);
         ESP_LOGI("panel", "tap -> %s", panel_service_title((panel_svc_t)i));
         return;
     }
@@ -1988,48 +1982,6 @@ static void svc_refresh(const r2_telemetry_t *t, uint32_t now_ms)
     }
 }
 
-static void build_network_page(lv_obj_t *pg)
-{
-    lv_obj_t *t = lv_label_create(pg);
-    lv_label_set_text(t, "NETWORK");
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(t, lv_color_hex(0xF0F0F4), 0);
-    lv_obj_set_pos(t, ROW_PAD, 20);
-
-    /* Wi-Fi status and provisioning state. Operator ruling, 2026-09-07,
-     * replacing the "not specified" placeholder.
-     *
-     * EVERY FIELD READS "not wired", and that is accurate rather than lazy:
-     * this firmware compiles NO Wi-Fi stack at all. The panel holds its own
-     * BLE link to R2 (D-006) and nothing else, so there is no SSID to show
-     * and no provisioning state to read.
-     *
-     * The fields are drawn anyway because the page now has a defined SHAPE,
-     * and a reader deserves to see what will appear here rather than a blank.
-     * Same choice as STORAGE and BRAIN on the status page: name the thing,
-     * admit it is not connected, never invent a plausible value. */
-    static const char *k_fields[] = { "SSID", "SIGNAL", "ADDRESS", "PROVISIONED" };
-    for (unsigned i = 0; i < 4; i++) {
-        lv_obj_t *k = lv_label_create(pg);
-        lv_label_set_text(k, k_fields[i]);
-        lv_obj_set_style_text_font(k, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(k, lv_color_hex(0x8A8A98), 0);
-        lv_obj_set_pos(k, ROW_PAD, 78 + (int)i * 72);
-
-        lv_obj_t *v = lv_label_create(pg);
-        lv_label_set_text(v, "not wired");
-        lv_obj_set_style_text_font(v, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(v, lv_color_hex(0x606060), 0);
-        lv_obj_set_pos(v, ROW_PAD, 78 + (int)i * 72 + 24);
-    }
-
-    lv_obj_t *n = lv_label_create(pg);
-    lv_label_set_text(n, "no Wi-Fi in this build");
-    lv_obj_set_style_text_font(n, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(n, lv_color_hex(0x505058), 0);
-    lv_obj_set_pos(n, ROW_PAD, PANEL_H - 52);
-}
-
 static void close_interior(void);
 
 void panel_ui_show_page(int page)
@@ -2229,8 +2181,8 @@ static void build_status_face(lv_obj_t *pg)
      * BUT: this build has NO Wi-Fi stack, NO LLM client and NO battery ADC.
      * The first version of this bar drew LV_SYMBOL_WIFI and
      * LV_SYMBOL_BATTERY_2 -- a half-full battery glyph is a QUANTITATIVE
-     * claim -- in normal text colour, one swipe away from a NETWORK page that
-     * says "no Wi-Fi in this build" in so many words. The panel would have
+     * claim -- in normal text colour, one tap away from a NETWORK interior
+     * that says NOT IN BUILD in so many words. The panel would have
      * contradicted itself inside one build, in exactly the way the dome
      * needle below refuses to.
      *
@@ -2697,9 +2649,7 @@ void panel_ui_create(void)
 
     s_page[PAGE_STATUS] = make_page(s_root);
     s_page[PAGE_SERVICE] = make_page(s_root);
-    s_page[PAGE_NETWORK] = make_page(s_root);
     build_service_page(s_page[PAGE_SERVICE]);
-    build_network_page(s_page[PAGE_NETWORK]);
 
     build_status_face(s_page[PAGE_STATUS]);
 
