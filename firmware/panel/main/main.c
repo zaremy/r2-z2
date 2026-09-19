@@ -36,6 +36,7 @@
 #include "panel_shot.h"
 #include "panel_touch.h"
 #include "panel_ui.h"
+#include "panel_face.h"
 #include "r2_gate.h"
 #include "r2_lights.h"
 #include "r2_link.h"
@@ -611,6 +612,10 @@ static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent
  * telemetry struct, which is written on the NimBLE host task and read here --
  * every field is word-sized or smaller and a torn read shows one stale value
  * for one frame, which is a redraw away from correct. */
+/* The press in progress, for the gesture table. Starts spent, so an input
+ * that arrives before any landing has been seen does nothing. */
+static panel_face_press_t s_face_press = { .spent = true };
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -646,44 +651,61 @@ static void ui_task(void *arg)
              * SERVICE -- would otherwise dismiss a frame nobody saw, and its
              * release would then move the page. The dismissing press is voided
              * too, so lifting it does nothing either. */
-            panel_swipe_t sw = swiped;
-            /* A BLANKED FACE IS WOKEN, NOT OPERATED. The press that lights it
-             * is voided the same way a wake-frame dismissal is: nobody can see
-             * what their finger is on, so it may not start a hold or a tap. */
-            if (panel_ui_blank_showing() && (pressed || touched || tapped ||
-                                             swiped != PANEL_SWIPE_NONE)) {
-                sw = PANEL_SWIPE_NONE;
-                tapped = false;
-                panel_touch_void_gesture();
-            }
-            if (panel_ui_wake_showing()) {
-                sw = PANEL_SWIPE_NONE;
-                tapped = false;
-                if (pressed) {
+            /* WHAT THE TOUCH MEANS is the gesture table's call (panel_face.h,
+             * E2E v0 slice 3.0b), not this loop's: every landing, completed
+             * hold, tap and swipe is stepped through one press record, and the
+             * first that means anything spends the press -- the wake frame's
+             * dismissal and the blank's unblank (D-017, panel spec §10) can no
+             * longer also start a hold, and nothing can do two things. Where a
+             * gesture then goes -- which page, which row -- stays the
+             * renderer's. */
+            int16_t hx = 0, hy = 0;
+            int32_t hdev = 0;
+            bool hvoid = false;
+            const bool down = panel_touch_down(&hx, &hy, &hdev, &hvoid);
+            const int pg = panel_ui_page();
+            const panel_face_ctx_t fc = {
+                .page = pg == 0 ? PANEL_PAGE_STATUS
+                      : (pg > 0 && pg < panel_ui_page_count()) ? PANEL_PAGE_OTHER
+                      : PANEL_PAGE_UNKNOWN,
+                .blanked = panel_ui_blank_showing(),
+                .wake_frame = panel_ui_wake_showing(),
+                .awake = r2_link_wanted(),
+                /* No exchange exists yet (slice 3.2+): nothing listens,
+                 * thinks or answers, so no TALK or face STOP can resolve. */
+            };
+            if (pressed) {
+                /* Where it LANDED fixes the zone. A press so short it is
+                 * already up is placed by its tap. */
+                panel_face_begin(&s_face_press, down ? hy : tap_y);
+                switch (panel_face_step(&s_face_press, &fc, PANEL_IN_LAND)) {
+                case PANEL_ACT_UNBLANK:
+                    panel_touch_void_gesture();
+                    break;
+                case PANEL_ACT_DISMISS_WAKE:
                     panel_ui_wake_dismiss();
                     panel_touch_void_gesture();
                     ESP_LOGI(TAG, "wake frame dismissed by touch");
+                    break;
+                default:
+                    break;
                 }
             }
-            /* Where a gesture goes -- which page, whether it is BACK inside a
-             * SERVICE interior, which row a tap hit -- is the renderer's to
-             * decide; this loop only reports that one happened. */
-            if (sw != PANEL_SWIPE_NONE)
-                panel_ui_swipe(sw == PANEL_SWIPE_LEFT ? 1 : -1);
-            if (tapped)
+            if (swiped != PANEL_SWIPE_NONE &&
+                panel_face_step(&s_face_press, &fc, PANEL_IN_SWIPE) == PANEL_ACT_PAGE)
+                panel_ui_swipe(swiped == PANEL_SWIPE_LEFT ? 1 : -1);
+            if (tapped &&
+                panel_face_step(&s_face_press, &fc, PANEL_IN_TAP) == PANEL_ACT_ROW)
                 panel_ui_tap(tap_x, tap_y);
 
-            /* The press IN PROGRESS, for WAKE / GOODNIGHT's hold. A completed
-             * hold voids the gesture so lifting the finger does nothing more. */
-            {
-                int16_t hx = 0, hy = 0;
-                int32_t hdev = 0;
-                bool hvoid = false;
-                const bool down = panel_touch_down(&hx, &hy, &hdev, &hvoid);
-                /* A press that dismissed the wake frame above is voided, and
-                 * must stay a dismissal: D-017, a glance arms nothing. */
-                if (panel_ui_hold(down, hx, hy, hvoid, hdev, now_ms()))
-                    panel_touch_void_gesture();
+            /* The press IN PROGRESS, for WAKE / GOODNIGHT's hold. The hold
+             * draws its fill and reports completion; the table decides whether
+             * that completion is a request. A voided press (the dismissal
+             * above) is spent in the hold too, so it never completes. */
+            if (panel_ui_hold(down, hx, hy, hvoid, hdev, now_ms())) {
+                if (panel_face_step(&s_face_press, &fc, PANEL_IN_HOLD) == PANEL_ACT_POWER)
+                    panel_ui_request_power();
+                panel_touch_void_gesture();
             }
 
             /* A HUMAN TOUCHING IT COUNTS AS ACTIVITY. Without this the dim

@@ -126,6 +126,10 @@ bool        panel_ui_take_stop_request(void);
 bool        panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
                           uint32_t now_ms);
 bool        panel_ui_take_power_request(void);
+/* Ask for WAKE / GOODNIGHT. ui_task calls this when the gesture table
+ * resolves a completed hold to PANEL_ACT_POWER; panel_ui_hold only draws the
+ * fill and reports completion. */
+void        panel_ui_request_power(void);
 /* The state the face is SHOWING, as of the last panel_ui_update -- the one
  * value his lights are driven from too (E2E v0 slice 2), so the glass and the
  * LEDs cannot disagree about what state he is in. PANEL_ST_COUNT until the
