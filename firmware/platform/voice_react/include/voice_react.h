@@ -51,7 +51,15 @@ typedef enum {
  * Strings carry their LENGTH and are matched on it exactly. JSON can encode a
  * NUL (`"happy\u0000evil"`), and a NUL-terminated compare would read that as
  * `happy`. Adapters pass the decoded length; the validator never calls strlen
- * on model output. */
+ * on model output.
+ *
+ * AN ADAPTER BUILT ON cJSON CANNOT MEET THAT DIRECTLY: cJSON exposes `string`
+ * and `valuestring` as NUL-terminated only, with no decoded length, so
+ * strlen() on them is exactly the shortening this guards against. Such an
+ * adapter must return VOICE_TRANSPORT_FAILED for any raw reply whose text
+ * contains a `\u0000` escape (in any hex case), BEFORE parsing. With no NUL
+ * possible, strlen() is then the true decoded length. A parser that reports
+ * decoded lengths needs no such check. */
 typedef enum {
     VOICE_FIELD_STRING,
     VOICE_FIELD_NUMBER,
