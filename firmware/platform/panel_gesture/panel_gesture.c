@@ -46,3 +46,40 @@ panel_gesture_t panel_gesture_classify(const panel_press_t *p)
      * is dead on purpose. */
     return PANEL_GESTURE_NONE;
 }
+
+unsigned panel_hold_step(panel_hold_t *h, bool down, bool in_target,
+                         int32_t max_dev, uint32_t now_ms, bool *fire)
+{
+    if (fire) *fire = false;
+    if (h == NULL) return 0;
+
+    if (!down) {                       /* a lift re-arms everything */
+        h->active = false;
+        h->spent  = false;
+        return 0;
+    }
+    if (h->spent) return 0;
+
+    if (!h->active) {
+        if (!in_target || max_dev > PANEL_TAP_PX) {
+            h->spent = true;           /* this press is not ours; ignore it whole */
+            return 0;
+        }
+        h->active = true;
+        h->since_ms = now_ms;
+    }
+    if (max_dev > PANEL_TAP_PX) {      /* became a drag: cancel, no restart */
+        h->active = false;
+        h->spent  = true;
+        return 0;
+    }
+
+    const uint32_t held = now_ms - h->since_ms;    /* unsigned: wrap-safe */
+    if (held >= PANEL_HOLD_MS) {
+        h->active = false;
+        h->spent  = true;
+        if (fire) *fire = true;
+        return 1000u;
+    }
+    return (unsigned)(held * 1000u / PANEL_HOLD_MS);
+}

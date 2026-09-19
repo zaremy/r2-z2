@@ -98,14 +98,34 @@ void r2_link_adverts(uint32_t *count, uint32_t *last_ms);
  * PROVEN on hardware rather than only in host tests: a reading cannot be shown
  * to outlive its link unless something can make the link end on demand.
  *
- * And it is the primitive D-023's panel RELEASE control needs. That ADR's
- * finding was that powering him down is us STOPPING -- our keepalive is his
- * wake command, so he has no idle timeout in practice because we suppress it
- * every three seconds. Releasing him is letting go, and this is the letting
- * go. It is deliberately NOT called "sleep": sleep (DID 0x13 / CID 0x01) is a
- * command in the gate's FORBIDDEN table at every tier, and this sends nothing
- * to R2 at all. */
+ * NOT a release on its own. This used to claim it was "the letting go" that
+ * D-023's GOODNIGHT needs, and it was not: the disconnect handler rescanned
+ * unconditionally, so the link came straight back -- which is exactly why P2
+ * could use it to time reconnects. Letting go is r2_link_release() below. */
 int r2_link_disconnect(void);
+
+/* WANTED: whether we are trying to hold him at all (D-023, E2E v0 slice 1).
+ *
+ * While wanted, every drop rescans and a failed connect retries -- the
+ * behaviour this module always had. While NOT wanted, nothing reconnects: a
+ * drop stays down, a scan in flight is cancelled, and an advert that arrives
+ * in the gap is ignored. Our keepalive is his wake command, so this flag is
+ * the only thing that lets him reach his own idle sleep.
+ *
+ * Defaults to TRUE, so the diagnostic apps that call r2_link_start() and
+ * expect a link keep working unchanged. The panel sets it false before the
+ * host syncs and boots released.
+ *
+ *   r2_link_set_wanted  flag only; safe before the NimBLE host has synced
+ *   r2_link_wake        wanted, and start looking now
+ *   r2_link_release     not wanted, and let go of whatever is in flight
+ *
+ * Release sends NOTHING to R2 -- no sleep command, which the gate forbids at
+ * every tier. Stopping is the whole mechanism. */
+void r2_link_set_wanted(bool on);
+bool r2_link_wanted(void);
+void r2_link_wake(void);
+void r2_link_release(void);
 
 /* Frames queued, and frames refused because the link was down. */
 void r2_link_stats(uint32_t *sent, uint32_t *dropped);

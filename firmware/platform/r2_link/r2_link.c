@@ -49,6 +49,7 @@ static bool     s_magic_written = false;
 
 static r2_stream_t s_rx;
 static bool s_scan_only;
+static bool s_wanted = true;   /* see r2_link_set_wanted */
 static uint32_t s_adverts, s_last_advert_ms;
 
 static const ble_uuid128_t k_main_svc    = { .u = {.type=BLE_UUID_TYPE_128}, .value = R2D2_MAIN_SVC };
@@ -179,6 +180,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         const uint8_t n = f.name_len < 31 ? f.name_len : 31;
         memcpy(name, f.name, n);
         if (strncmp(name, R2D2_NAME, strlen(R2D2_NAME)) != 0) break;
+        if (!s_wanted && !s_scan_only) break;   /* released: seen, not taken */
 
         if (s_scan_only) {
             /* Log and keep scanning. RSSI is included because a droid that has
@@ -204,12 +206,23 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (ev->connect.status == 0) {
             s_conn = ev->connect.conn_handle;
+            if (!s_wanted) {
+                /* Released while the connect was in flight. Keeping it would
+                 * run the magic write and the keepalive would follow -- the
+                 * one thing release exists to prevent. */
+                ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+                break;
+            }
             set_state(R2_LINK_HANDSHAKING, 0);
             s_pending_n = s_pending_i = 0;
             ble_gattc_disc_all_svcs(s_conn, svc_disc_cb, NULL);
         } else {
-            ESP_LOGW(TAG, "connect failed (%d), rescanning", ev->connect.status);
-            r2_link_start();
+            if (s_wanted) {
+                ESP_LOGW(TAG, "connect failed (%d), rescanning", ev->connect.status);
+                r2_link_start();
+            } else {
+                set_state(R2_LINK_DOWN, 0);
+            }
         }
         break;
 
@@ -220,7 +233,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         s_pending_n = s_pending_i = 0;
         r2_stream_reset(&s_rx);
         set_state(R2_LINK_DOWN, ev->disconnect.reason);
-        r2_link_start();
+        if (s_wanted) r2_link_start();
         break;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -316,6 +329,39 @@ int r2_link_disconnect(void)
 }
 
 void r2_link_set_scan_only(bool on) { s_scan_only = on; }
+
+void r2_link_set_wanted(bool on) { s_wanted = on; }
+bool r2_link_wanted(void)        { return s_wanted; }
+
+void r2_link_wake(void)
+{
+    s_wanted = true;
+    if (s_state == R2_LINK_DOWN) r2_link_start();
+}
+
+void r2_link_release(void)
+{
+    s_wanted = false;
+    switch (s_state) {
+    case R2_LINK_SCANNING:
+        ble_gap_disc_cancel();
+        set_state(R2_LINK_DOWN, 0);
+        break;
+    case R2_LINK_CONNECTING:
+        /* If the cancel loses the race the CONNECT event lands anyway, and
+         * the !s_wanted branch there terminates it. */
+        ble_gap_conn_cancel();
+        set_state(R2_LINK_DOWN, 0);
+        break;
+    case R2_LINK_HANDSHAKING:
+    case R2_LINK_UP:
+        /* DOWN arrives with the DISCONNECT event, which now does not rescan. */
+        r2_link_disconnect();
+        break;
+    case R2_LINK_DOWN:
+        break;
+    }
+}
 
 void r2_link_adverts(uint32_t *count, uint32_t *last_ms)
 {

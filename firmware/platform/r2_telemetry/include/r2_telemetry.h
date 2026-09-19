@@ -64,6 +64,11 @@ typedef struct {
      * long he has been gone, and a panel that rebooted while he was off for
      * hours must not report that as "down 4 s". */
     bool          attempt_from_up;
+    /* We have let go of him on purpose (D-023 GOODNIGHT). While set, no
+     * attempt is open and none opens: being released is not failing to reach
+     * him, and an attempt clock running through it would make the first WAKE
+     * after an hour read as an hour-long outage -- OFFLINE instead of WAKING. */
+    bool          released;
 
     r2_tm_stamp_t battery;
     uint16_t      battery_centivolts;
@@ -85,6 +90,11 @@ void r2_telemetry_reset(r2_telemetry_t *t);
 /* Link transitions. Falling out of UP invalidates every reading -- that is the
  * single most important line in this module. */
 void r2_telemetry_link(r2_telemetry_t *t, r2_tm_link_t state, uint32_t now_ms);
+
+/* GOODNIGHT sets it, WAKE clears it. Clearing opens a FRESH attempt timed from
+ * now, as a boot does -- attempt_from_up is false, because we are looking,
+ * not recovering from a loss. */
+void r2_telemetry_released(r2_telemetry_t *t, bool released, uint32_t now_ms);
 
 void r2_telemetry_battery(r2_telemetry_t *t, uint16_t centivolts, uint32_t now_ms);
 void r2_telemetry_dome(r2_telemetry_t *t, float degrees, uint32_t now_ms);

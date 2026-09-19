@@ -111,6 +111,18 @@ int         panel_ui_take_probe_request(unsigned *gen, panel_op_t *op);
  * comes back the other way. `sent` is how many of the three halts reached the
  * transport -- 3 is the only complete stop. */
 bool        panel_ui_take_stop_request(void);
+
+/* WAKE / GOODNIGHT (E2E v0 slice 1, D-023). A finger HELD on the STATUS
+ * face's state word for PANEL_HOLD_MS asks for the opposite of whatever the
+ * link task currently wants -- the request is a toggle, and the link task
+ * resolves it against r2_link_wanted(), because that is where the truth is
+ * and a direction chosen here could be stale by the time it is taken.
+ *
+ * panel_ui_hold runs on the ui task with the press in progress; it draws the
+ * fill and returns true on the look that completes the hold, so the caller
+ * can void the gesture and the lift does not also arrive as a tap. */
+bool        panel_ui_hold(bool down, int x, int y, int32_t max_dev, uint32_t now_ms);
+bool        panel_ui_take_power_request(void);
 void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);

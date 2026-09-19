@@ -247,6 +247,23 @@ static void link_task(void *arg)
          * point is skipped when the link is down -- which is exactly the
          * moment a stop must still be attempted and its failure reported,
          * rather than the button sitting silent. */
+        /* WAKE / GOODNIGHT (E2E v0 slice 1, D-023). A toggle, resolved HERE
+         * against what the link actually wants. GOODNIGHT marks us released
+         * BEFORE letting go, so the disconnect that follows is not counted as
+         * an attempt to reach him; WAKE clears it first so the attempt clock
+         * starts at the wake, not at the goodnight an hour ago. */
+        if (panel_ui_take_power_request()) {
+            if (r2_link_wanted()) {
+                r2_telemetry_released(&s_tm, true, now_ms());
+                r2_link_release();
+                ESP_LOGW(TAG, "GOODNIGHT: keepalive stopped, letting go of him");
+            } else {
+                r2_telemetry_released(&s_tm, false, now_ms());
+                r2_link_wake();
+                ESP_LOGW(TAG, "WAKE: looking for him");
+            }
+        }
+
         if (panel_ui_take_stop_request()) {
             const r2_stop_report_t st =
                 r2_ops_stop_all(next_seq, r2_link_send, NULL);
@@ -257,7 +274,9 @@ static void link_task(void *arg)
             panel_ui_stop_sent(st.sent, r2_link_is_up(), now_ms());
         }
 
-        if (!r2_link_is_up()) continue;
+        /* Not wanted means no keepalive even while the teardown is still in
+         * flight: one more beat would be one more wake command. */
+        if (!r2_link_is_up() || !r2_link_wanted()) continue;
         if (tick % LINK_TICKS_PER_BEAT != 0) continue;
 
         /* Keepalive. This is also what stops him sleeping, which is a real
@@ -513,6 +532,16 @@ static void ui_task(void *arg)
                 panel_ui_swipe(sw == PANEL_SWIPE_LEFT ? 1 : -1);
             if (tapped)
                 panel_ui_tap(tap_x, tap_y);
+
+            /* The press IN PROGRESS, for WAKE / GOODNIGHT's hold. A completed
+             * hold voids the gesture so lifting the finger does nothing more. */
+            {
+                int16_t hx = 0, hy = 0;
+                int32_t hdev = 0;
+                const bool down = panel_touch_down(&hx, &hy, &hdev);
+                if (panel_ui_hold(down, hx, hy, hdev, now_ms()))
+                    panel_touch_void_gesture();
+            }
 
             /* A HUMAN TOUCHING IT COUNTS AS ACTIVITY. Without this the dim
              * timer keys only on the DATA changing, so someone who picks up
@@ -1183,7 +1212,10 @@ static void p4_task(void *arg)
 }
 #endif
 
-static void on_sync(void) { r2_link_start(); }
+/* Only if wanted. The panel boots RELEASED (E2E v0 slice 1): it no longer
+ * takes R2 the moment the host syncs, which also stops it stealing his one
+ * BLE central slot from the Mac. Measurement builds keep the default. */
+static void on_sync(void) { if (r2_link_wanted()) r2_link_start(); }
 static void host_task(void *p) { (void)p; nimble_port_run(); nimble_port_freertos_deinit(); }
 
 void app_main(void)
@@ -1211,6 +1243,12 @@ void app_main(void)
              r2_gate_tier_name(r2_gate_get_ceiling()));
 
     r2_telemetry_reset(&s_tm);
+#if !defined(PANEL_P4_IDLE) && !defined(PANEL_P2_RECONNECT)
+    /* BOOT RELEASED. Before the host syncs, so on_sync sees it. Waking him is
+     * a deliberate hold on the face, never a side effect of power-on. */
+    r2_link_set_wanted(false);
+    r2_telemetry_released(&s_tm, true, now_ms());
+#endif
 #ifdef PANEL_P4_IDLE
     /* BEFORE the host syncs: on_sync starts a scan the moment NimBLE is up,
      * and a scan started without this flag will connect to him. Deciding not

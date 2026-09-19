@@ -393,6 +393,52 @@ static void test_request_response_accounting(void)
           "a link drop erased the request accounting");
 }
 
+/* ---- released (D-023 GOODNIGHT, E2E v0 slice 1) ----------------------- */
+
+static void test_a_release_opens_no_attempt(void)
+{
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_released(&t, true, 2000);
+    r2_telemetry_link(&t, R2_TM_DOWN, 2100);      /* the disconnect lands */
+    CHECK(!t.attempt_open, "releasing him opened an attempt to reach him");
+}
+
+static void test_waking_after_a_long_release_is_timed_from_the_wake(void)
+{
+    /* THE BUG THIS EXISTS FOR: released for an hour, then WAKE. Timed from
+     * the release, the panel would read an hour away and show OFFLINE the
+     * instant the button was pressed. */
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_released(&t, true, 2000);
+    r2_telemetry_link(&t, R2_TM_DOWN, 2100);
+    const uint32_t woke = 2000 + 3600000u;
+    r2_telemetry_released(&t, false, woke);
+    r2_telemetry_link(&t, R2_TM_SCANNING, woke + 5);
+    CHECK(t.attempt_open, "WAKE did not open an attempt");
+    CHECK(r2_telemetry_unreachable_ms(&t, woke + 1000) == 1000,
+          "wake timed from the release: %u ms",
+          (unsigned)r2_telemetry_unreachable_ms(&t, woke + 1000));
+    CHECK(!t.attempt_from_up, "a wake was counted as losing a live link");
+}
+
+static void test_a_wake_attempt_still_closes_on_up(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    r2_telemetry_released(&t, true, 0);
+    r2_telemetry_released(&t, false, 100);
+    r2_telemetry_link(&t, R2_TM_UP, 2800);
+    CHECK(!t.attempt_open, "reaching him did not close the wake attempt");
+}
+
+static void test_releasing_twice_is_one_release(void)
+{
+    r2_telemetry_t t;
+    r2_telemetry_reset(&t);
+    r2_telemetry_released(&t, false, 0);     /* already not released: no-op */
+    CHECK(!t.attempt_open, "clearing a flag that was never set opened an attempt");
+}
+
 int main(void)
 {
     printf("r2_telemetry host tests\n");
@@ -419,6 +465,11 @@ int main(void)
     printf("  values\n");
     test_values_are_carried();
     test_request_response_accounting();
+    printf("  released\n");
+    test_a_release_opens_no_attempt();
+    test_waking_after_a_long_release_is_timed_from_the_wake();
+    test_a_wake_attempt_still_closes_on_up();
+    test_releasing_twice_is_one_release();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

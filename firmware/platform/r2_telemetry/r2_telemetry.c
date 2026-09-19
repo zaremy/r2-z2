@@ -42,13 +42,26 @@ void r2_telemetry_link(r2_telemetry_t *t, r2_tm_link_t state, uint32_t now_ms)
          * `waking` forever. */
         if (state == R2_TM_UP) {
             t->attempt_open = false;
-        } else if (!t->attempt_open) {
+        } else if (!t->attempt_open && !t->released) {
             t->attempt_open = true;
             t->attempt_from_up = (t->link == R2_TM_UP);
             t->unreachable_since_ms = now_ms;
         }
     }
     t->link = state;
+}
+
+void r2_telemetry_released(r2_telemetry_t *t, bool released, uint32_t now_ms)
+{
+    if (t == NULL || t->released == released) return;
+    t->released = released;
+    if (released) {
+        t->attempt_open = false;
+    } else {
+        t->attempt_open = true;
+        t->attempt_from_up = false;
+        t->unreachable_since_ms = now_ms;
+    }
 }
 
 uint32_t r2_telemetry_unreachable_ms(const r2_telemetry_t *t, uint32_t now_ms)
