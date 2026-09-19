@@ -385,6 +385,21 @@ _add(StateLights(
 ))
 
 _add(StateLights(
+    name="answering",
+    front=Pattern("steady", (BASE_ENGAGED,)),
+    back=Pattern("steady", (BASE_ENGAGED,)),
+    holo=Pattern("steady", (255,)),
+    logic=Pattern("steady", (255,)),
+    note="The reply (operator ruling 2026-09-19, E2E v0 slice 3.0). The PSIs "
+         "stay engaged cyan, the listen/think family; the holo and logic are "
+         "held ON, where listen breathes and blinks them, so the two cyan "
+         "states differ on the body. The feeling is carried by the reply's "
+         "own chirp and dome turn, not by a hue: expression gets no colour. "
+         "No sound family: the sound is whatever the reply chose. Not "
+         "restorable -- it is a claim about an exchange.",
+))
+
+_add(StateLights(
     name="attention",
     front=Pattern("blink", (BASE_PENDING,), 2.4),
     back=Pattern("blink", (BASE_PENDING,), 2.4),

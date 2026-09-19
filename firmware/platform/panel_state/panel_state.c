@@ -65,6 +65,9 @@ static const row_t k_row[PANEL_ST_COUNT] = {
     [PANEL_ST_ATTENTION]    = { "attention",    "ATTENTION", "NEEDS YOU",       PANEL_C_AMBER },
     [PANEL_ST_MISHEARD]     = { "misheard",     "MISHEARD",  "SAY AGAIN",       PANEL_C_AMBER },
     [PANEL_ST_WAITING]      = { "waiting",      "WAITING",   "ON YOU",          PANEL_C_BLUE  },
+    /* The line under the word is the reply's MOOD at runtime; "REPLYING" is
+     * only what shows before one is known. D-031. */
+    [PANEL_ST_ANSWERING]    = { "answering",    "ANSWERING", "REPLYING",        PANEL_C_CYAN  },
     [PANEL_ST_THINKING]     = { "thinking",     "THINKING",  "WORKING",         PANEL_C_CYAN  },
     /* state `listen`, word "LISTENING" -- Amendment B renamed the state, not
      * the rendering. This is the one place the two differ. */
@@ -103,7 +106,7 @@ static const char *k_offline_since[PANEL_OFF_COUNT] = {
  *
  * A blank row is caught at test time instead, by `test_every_state_renders`,
  * and survived at runtime by `or_empty()` below. */
-_Static_assert(PANEL_ST_COUNT == 12,
+_Static_assert(PANEL_ST_COUNT == 13,
                "a state was added or removed: give it a row in k_row, decide "
                "whether it is ranked, and update this count deliberately");
 
@@ -245,6 +248,7 @@ r2_lights_state_t panel_state_lights(panel_state_t s)
     case PANEL_ST_ATTENTION: return R2L_ATTENTION;
     case PANEL_ST_MISHEARD:  return R2L_MISHEARD;
     case PANEL_ST_WAITING:   return R2L_WAITING;
+    case PANEL_ST_ANSWERING: return R2L_ANSWERING;
     case PANEL_ST_THINKING:  return R2L_THINKING;
     case PANEL_ST_LISTEN:    return R2L_LISTEN;
     case PANEL_ST_IDLE:      return R2L_IDLE;

@@ -307,7 +307,7 @@ class TestWakeAssertion(unittest.TestCase):
     def test_interaction_states_are_not_restored(self):
         # No exchange survives a disconnect, so restoring one asserts a
         # conversation that is not happening.
-        for name in ("listen", "thinking", "misheard", "waiting", "wake"):
+        for name in ("listen", "thinking", "answering", "misheard", "waiting", "wake"):
             with self.subTest(state=name):
                 shown, dropped = L.resume(name)
                 self.assertEqual(shown, L.DEFAULT_STATE)

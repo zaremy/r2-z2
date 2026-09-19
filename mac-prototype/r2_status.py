@@ -1,7 +1,7 @@
 """The status layer: what R2 is, between moments.
 
 WHY THIS EXISTS
-    `r2_lights` describes ten states and could render none of them: nothing
+    `r2_lights` described ten states and could render none of them: nothing
     imported it but its own test. Meanwhile `r2_behavior` beats wrote LEDs
     directly, so there were two systems describing one droid and only the
     older one ran. This is the missing half -- the thing that HOLDS a status
