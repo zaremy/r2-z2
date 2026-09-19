@@ -154,6 +154,13 @@ static void test_untouched_default(void)
           "with no ceiling set, an LED write must already be refused");
     CHECK(r2_gate_check(0x17, 0x0F, NULL, 0) == R2_GATE_ABOVE_CEILING,
           "with no ceiling set, a dome move must already be refused");
+    CHECK(!r2_gate_status_granted(),
+          "a firmware that never grants must not hold the status grant");
+    const uint8_t blue[] = {0x00, 0xFF, 0, 0, 255, 0, 0, 0, 255, 0};
+    tx_reset();
+    CHECK(r2_gate_send_status(0x1A, 0x0E, 1, blue, sizeof blue, fake_tx, NULL)
+              == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "with no grant, the status path must refuse a light and send nothing");
 }
 
 static void test_clamping(void)
@@ -345,6 +352,119 @@ static void test_a_halt_actually_reaches_the_transport(void)
     CHECK(tx_calls == 0, "WADDLE reached the transport %d times", tx_calls);
 }
 
+/* ---- THE STATUS PATH (D-030) --------------------------------------------- */
+
+/* Every op in the gate's ALLOWED and FORBIDDEN tables except the light
+ * itself, plus ops it does not know. None may leave by the status path, grant
+ * or no grant. */
+static const struct { uint8_t did, cid; const char *name; } NOT_LIGHTS[] = {
+    { 0x13, 0x0D, "wake" },           { 0x13, 0x03, "battery_voltage" },
+    { 0x17, 0x14, "get_head_position" },
+    { 0x17, 0x2B, "stop_animation" }, { 0x1A, 0x07, "play_audio" },
+    { 0x1A, 0x08, "set_volume" },     { 0x1A, 0x0A, "stop_audio" },
+    { 0x17, 0x0F, "set_head_position" },
+    { 0x17, 0x0D, "perform_leg_action" }, { 0x16, 0x07, "drive" },
+    { 0x13, 0x01, "sleep" },          { 0x1A, 0x1C, "set_leds_8bit" },
+    { 0x17, 0x05, "play_animation" }, { 0x13, 0x00, "enter_deep_sleep" },
+    { 0x17, 0x15, "set_leg_position" }, { 0x17, 0x25, "get_leg_action" },
+    { 0x17, 0x16, "get_leg_position" }, { 0x18, 0x01, "get_sensor_mask" },
+    { 0x11, 0x00, "get_main_app_version" },
+    { 0x7F, 0x7F, "unknown" },
+    /* same CID as the light, wrong device: the match must be on BOTH */
+    { 0x13, 0x0E, "power 0x0E" },     { 0x17, 0x0E, "animatronic 0x0E" },
+};
+#define NOT_LIGHTS_N (sizeof NOT_LIGHTS / sizeof NOT_LIGHTS[0])
+
+static void test_status_path_admits_nothing_but_lights(void)
+{
+    printf("     the status path refuses every op that is not a light, granted or not\n");
+    /* A PERFECT light payload under the wrong op, so the shape check cannot
+     * be what refuses it -- only the op check can. With a one-byte payload
+     * the shape check shadowed it and deleting the op check stayed green. */
+    const uint8_t one[] = {0x00, 0xFF, 1, 2, 3, 4, 5, 6, 7, 8};
+    for (int g = 0; g < 2; g++) {
+        r2_gate_grant_status(g == 1);
+        for (size_t i = 0; i < NOT_LIGHTS_N; i++) {
+            tx_reset();
+            const int n = r2_gate_send_status(NOT_LIGHTS[i].did, NOT_LIGHTS[i].cid,
+                                              1, one, sizeof one, fake_tx, NULL);
+            CHECK(n == R2_GATE_NOT_STATUS && tx_calls == 0,
+                  "%s left by the status path (grant %d, got %d, tx %d)",
+                  NOT_LIGHTS[i].name, g, n, tx_calls);
+        }
+    }
+    r2_gate_grant_status(false);
+}
+
+static void test_status_path_admits_only_the_full_frame(void)
+{
+    printf("     the status light must carry all eight channels, and nothing else\n");
+    r2_gate_grant_status(true);
+    const uint8_t partial[] = {0x00, 0x77, 0, 0, 255, 0, 0, 255};
+    const uint8_t short_[]  = {0x00, 0xFF, 1, 2, 3};
+    const uint8_t long_[]   = {0x00, 0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const uint8_t highbit[] = {0x01, 0xFF, 1, 2, 3, 4, 5, 6, 7, 8};
+    const struct { const uint8_t *d; size_t n; const char *what; } bad[] = {
+        { partial, sizeof partial, "mask 0x0077" }, { short_, sizeof short_, "short" },
+        { long_, sizeof long_, "long" },            { highbit, sizeof highbit, "mask 0x01FF" },
+        { NULL, 10, "NULL payload" },
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        tx_reset();
+        const int n = r2_gate_send_status(0x1A, 0x0E, 1, bad[i].d, bad[i].n, fake_tx, NULL);
+        CHECK(n == R2_GATE_NOT_STATUS && tx_calls == 0,
+              "%s left by the status path (got %d)", bad[i].what, n);
+    }
+    r2_gate_grant_status(false);
+}
+
+static void test_the_grant_widens_nothing_on_the_main_path(void)
+{
+    printf("     holding the grant changes no verdict on r2_gate_send\n");
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
+    r2_gate_grant_status(true);
+    CHECK(r2_gate_check(0x1A, 0x0E, NULL, 0) == R2_GATE_ABOVE_CEILING,
+          "the grant must not open LEDs on the ceiling-governed path");
+    const uint8_t leds[] = {0x00, 0x01, 0xFF};
+    tx_reset();
+    CHECK(r2_gate_send(0x1A, 0x0E, 1, leds, sizeof leds, fake_tx, NULL)
+              == R2_GATE_ABOVE_CEILING && tx_calls == 0,
+          "an LED write through r2_gate_send must still be refused at READ");
+    CHECK(r2_gate_get_ceiling() == R2_TIER_READ, "the grant must not move the ceiling");
+    r2_gate_grant_status(false);
+}
+
+static void test_granted_light_goes_out_and_revoke_stops_it(void)
+{
+    printf("     granted, a light goes out with the packet layer's bytes; revoked, it stops\n");
+    const uint8_t blue[] = {0x00, 0xFF, 0, 0, 255, 0, 0, 0, 255, 0};
+    uint32_t a0, r0, a1, r1;
+    r2_gate_grant_status(true);
+    r2_gate_stats(&a0, &r0);
+    tx_reset();
+    const int n = r2_gate_send_status(0x1A, 0x0E, 5, blue, sizeof blue, fake_tx, NULL);
+    r2_gate_stats(&a1, &r1);
+    uint8_t want[32];
+    const int wn = r2_packet_encode(0x1A, 0x0E, 5, blue, sizeof blue, want, sizeof want);
+    CHECK(wn > 0 && n == wn && tx_calls == 1 && tx_len == (size_t)wn &&
+          memcmp(tx_buf, want, (size_t)wn) == 0,
+          "a granted light must leave once, byte for byte (n %d, tx %d)", n, tx_calls);
+    CHECK(a1 == a0 + 1 && r1 == r0, "the admitted counter must move by exactly one");
+
+    r2_gate_grant_status(false);
+    tx_reset();
+    CHECK(r2_gate_send_status(0x1A, 0x0E, 6, blue, sizeof blue, fake_tx, NULL)
+              == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "after the grant is revoked, nothing may leave");
+    CHECK(r2_gate_send_status(0x1A, 0x0E, 6, blue, sizeof blue, NULL, NULL)
+              == R2_GATE_NOT_GRANTED,
+          "revoked beats a missing tx: the refusal must name the grant");
+    r2_gate_grant_status(true);
+    CHECK(r2_gate_send_status(0x1A, 0x0E, 7, blue, sizeof blue, NULL, NULL)
+              == R2_GATE_NO_TX, "granted with no tx must be refused, not crash");
+    r2_gate_grant_status(false);
+}
+
 int main(void)
 {
     printf("r2_gate host tests\n==================\n");
@@ -366,6 +486,10 @@ int main(void)
     test_every_halt_is_admitted_at_every_ceiling();
     test_the_halt_list_widens_nothing_else();
     test_a_halt_actually_reaches_the_transport();
+    test_status_path_admits_nothing_but_lights();
+    test_status_path_admits_only_the_full_frame();
+    test_the_grant_widens_nothing_on_the_main_path();
+    test_granted_light_goes_out_and_revoke_stops_it();
     printf("==================\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

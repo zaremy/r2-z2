@@ -133,6 +133,10 @@ static bool is_halt(uint8_t did, uint8_t cid,
 
 static r2_tier_t s_ceiling = R2_TIER_READ;   /* lowest rung by default */
 
+/* The status grant (D-030). False by default, so a firmware that never
+ * grants can never light him through this path. */
+static bool s_status_granted = false;
+
 static uint32_t s_admitted = 0, s_refused = 0;
 
 void r2_gate_stats(uint32_t *admitted, uint32_t *refused)
@@ -173,15 +177,13 @@ r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid,
     return R2_GATE_ALLOW;
 }
 
-int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
-                 const uint8_t *data, size_t data_len,
-                 r2_tx_fn tx, void *ctx)
+/* Encode and transmit an op that has ALREADY been admitted. Static, so the
+ * only ways to reach it are the two public exits below, each of which has
+ * decided first. */
+static int transmit(uint8_t did, uint8_t cid, uint8_t seq,
+                    const uint8_t *data, size_t data_len,
+                    r2_tx_fn tx, void *ctx)
 {
-    /* Refuse BEFORE encoding. Nothing should build a frame it may not send --
-     * a half-built forbidden command is a thing waiting to be transmitted by
-     * the next person who adds a shortcut. */
-    const r2_gate_verdict_t v = r2_gate_check(did, cid, data, data_len);
-    if (v != R2_GATE_ALLOW) { s_refused++; return (int)v; }
     if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
 
     uint8_t frame[R2_ENCODED_MAX(64)];
@@ -196,6 +198,41 @@ int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
     s_admitted++;
     if (tx(frame, (size_t)n, ctx) < 0) return R2_GATE_ENCODE_FAILED;
     return n;
+}
+
+int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
+                 const uint8_t *data, size_t data_len,
+                 r2_tx_fn tx, void *ctx)
+{
+    /* Refuse BEFORE encoding. Nothing should build a frame it may not send --
+     * a half-built forbidden command is a thing waiting to be transmitted by
+     * the next person who adds a shortcut. */
+    const r2_gate_verdict_t v = r2_gate_check(did, cid, data, data_len);
+    if (v != R2_GATE_ALLOW) { s_refused++; return (int)v; }
+    return transmit(did, cid, seq, data, data_len, tx, ctx);
+}
+
+void r2_gate_grant_status(bool granted) { s_status_granted = granted; }
+bool r2_gate_status_granted(void)       { return s_status_granted; }
+
+int r2_gate_send_status(uint8_t did, uint8_t cid, uint8_t seq,
+                        const uint8_t *data, size_t data_len,
+                        r2_tx_fn tx, void *ctx)
+{
+    /* The op test comes FIRST, so a caller that tries to smuggle anything
+     * else through this path is told what it did wrong whether or not the
+     * grant happens to be held. Exactly one op, compared by value -- not
+     * "anything at the LEDS tier", which would widen by itself the day a
+     * second op is added to that tier. */
+    if (did != DID_IO || cid != 0x0E) { s_refused++; return R2_GATE_NOT_STATUS; }
+    /* AND ITS SHAPE, pinned like the halts pin theirs: every channel, mask
+     * 0x00FF, eight values. A partial mask would leave an earlier state's
+     * fixture lit; any other length is a different packet. */
+    if (data == NULL || data_len != 10 || data[0] != 0x00 || data[1] != 0xFF) {
+        s_refused++; return R2_GATE_NOT_STATUS;
+    }
+    if (!s_status_granted)            { s_refused++; return R2_GATE_NOT_GRANTED; }
+    return transmit(did, cid, seq, data, data_len, tx, ctx);
 }
 
 const char *r2_gate_tier_name(r2_tier_t t)
@@ -219,6 +256,8 @@ const char *r2_gate_verdict_name(r2_gate_verdict_t v)
     case R2_GATE_FORBIDDEN:       return "refused: forbidden at every ceiling";
     case R2_GATE_NO_TX:           return "refused: no transmit function";
     case R2_GATE_ENCODE_FAILED:   return "refused: encode or transmit failed";
+    case R2_GATE_NOT_GRANTED:     return "refused: status lights not granted";
+    case R2_GATE_NOT_STATUS:      return "refused: not a status-light op";
     default:                      return "?";
     }
 }

@@ -126,6 +126,13 @@ r2_ops_err_t r2_ops_parse_version(const r2_response_t *r, r2_version_t *out);
 int r2_ops_set_leds(uint16_t mask, const uint8_t *values, size_t n_values,
                     uint8_t seq, r2_tx_fn tx, void *ctx);
 
+/* A STATUS frame: all eight channels, in bit order, through the gate's
+ * status path (D-030) rather than the ceiling. Refused with
+ * R2_GATE_NOT_GRANTED until the operator has woken him. Every channel is
+ * written, so nothing an earlier state lit can survive it. */
+int r2_ops_status_leds(const uint8_t values[8], uint8_t seq,
+                       r2_tx_fn tx, void *ctx);
+
 /* Front and back RGB to one colour, in a single write. */
 int r2_ops_set_rgb(uint8_t r, uint8_t g, uint8_t b,
                    uint8_t seq, r2_tx_fn tx, void *ctx);

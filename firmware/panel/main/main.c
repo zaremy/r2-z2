@@ -17,7 +17,8 @@
  * app beside the vendor's" and D-022 removed the vendor's.
  *
  * SAFETY: the gate ceiling is never raised. This panel reads; it cannot move
- * him, light him, or sound him.
+ * him or sound him. It can light him, and only through the gate's STATUS path
+ * (D-030): the one LED op, only while the operator's WAKE hold stands.
  */
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
@@ -36,6 +37,7 @@
 #include "panel_touch.h"
 #include "panel_ui.h"
 #include "r2_gate.h"
+#include "r2_lights.h"
 #include "r2_link.h"
 #include "r2_ops.h"
 #include "r2_packet.h"
@@ -155,8 +157,16 @@ static unsigned run_op(int tier, panel_op_t op);
 
 /* The link loop's tick. Short enough that a tap on the ladder reaches the
  * radio promptly; the keepalive and the polls count beats of it rather than
- * sleeping, so their periods are what they always were. */
-#define LINK_TICK_MS 100u
+ * sleeping, so their periods are what they always were.
+ *
+ * 20 ms, not the 100 it was, FOR HIS LIGHTS. The status player writes no
+ * faster than every 120 ms and `danger` blinks on a 125 ms half-beat; a
+ * 100 ms tick could only offer it 100, 200, 300 ms, so a write held at 100
+ * went at 200. At 20 ms the gaps fall between 120 and 140 ms (host-tested);
+ * a loop that overruns its tick still loses a half-beat now and then.
+ * Everything else here counts beats of the tick, not ticks, so nothing else
+ * changes speed. */
+#define LINK_TICK_MS 20u
 #define LINK_TICKS_PER_BEAT (PANEL_KEEPALIVE_MS / LINK_TICK_MS)
 _Static_assert(PANEL_KEEPALIVE_MS >= LINK_TICK_MS &&
                PANEL_KEEPALIVE_MS % LINK_TICK_MS == 0,
@@ -190,6 +200,111 @@ static void touch_task(void *arg)
     }
 }
 
+/* ---- HIS STATUS LIGHTS (E2E v0 slice 2, D-030) ---------------------------
+ *
+ * One state drives the face and his body: link_task reads the state the face
+ * is SHOWING and lights the row of the same name. Owned by this task alone,
+ * because it spends the sequence counter. */
+static r2_lights_player_t s_lights;
+static bool     s_lights_live;           /* link up AND granted, for the edge */
+static uint32_t s_wake_sweep_until;      /* 0 = no sweep playing */
+static bool     s_lights_failing;        /* log a refusal once, not every 120 ms */
+static uint32_t s_last_other_tx;         /* any non-light send from this task */
+
+/* SPACING AGAINST EVERYTHING ELSE HE IS SENT, not only against the last
+ * light. r2_probe.py's cmd_safe_interval says R2 drops commands closer than
+ * 120 ms; the Mac treats that as a property and it has not been measured
+ * here, so the lights -- the one stream that is optional -- give way. A light
+ * waits 120 ms after any other send, and the operator's test or STOP waits
+ * out the remainder after a light (lights_yield). */
+static void lights_yield(void)
+{
+    if (!s_lights.wrote_any) return;
+    const uint32_t gap = now_ms() - s_lights.last_write_ms;
+    if (gap < R2_LIGHTS_MIN_INTERVAL_MS)
+        vTaskDelay(pdMS_TO_TICKS(R2_LIGHTS_MIN_INTERVAL_MS - gap + 1));
+}
+
+static void lights_write(const r2_lights_frame_t *f, uint32_t now)
+{
+    const int n = r2_ops_status_leds(f->v, next_seq(), r2_link_send, NULL);
+    if (n > 0) {
+        r2_lights_player_sent(&s_lights, f, now);
+        s_lights_failing = false;
+    } else {
+        r2_lights_player_failed(&s_lights, now);
+        if (!s_lights_failing)
+            ESP_LOGW(TAG, "lights: %s write refused (%d: %s)",
+                     r2_lights_name(s_lights.state), n,
+                     r2_gate_verdict_name((r2_gate_verdict_t)n));
+        s_lights_failing = true;
+    }
+}
+
+/* `beat_soon` is true when the keepalive beat is due within one spacing
+ * interval, so a light is not sent into its path. */
+static void lights_tick(bool beat_soon)
+{
+    const uint32_t now = now_ms();
+    const bool live = r2_link_is_up() && r2_gate_status_granted();
+    if (live && !s_lights_live) {
+        /* A FRESH LINK, OR A FRESH WAKE ON A LINK STILL UP (GOODNIGHT then
+         * WAKE before the teardown finished). A colour survives a drop but
+         * not a sleep, and the board cannot tell which happened in between --
+         * so assert, never inherit. The wake sweep is the "I'm here"
+         * (r2_lights.py `wake`). */
+        r2_lights_player_forget(&s_lights);
+        s_wake_sweep_until = now + R2_LIGHTS_WAKE_SWEEP_MS + R2_LIGHTS_MIN_INTERVAL_MS;
+        if (s_wake_sweep_until == 0) s_wake_sweep_until = 1;
+    }
+    s_lights_live = live;
+    if (!live) {
+        /* Cleared here too, so a deadline armed long ago cannot wrap and
+         * read as "still sweeping" on some later wake. */
+        s_wake_sweep_until = 0;
+        return;
+    }
+
+    r2_lights_state_t want = panel_state_lights(panel_ui_shown_state());
+    if (s_wake_sweep_until != 0) {
+        if ((int32_t)(now - s_wake_sweep_until) < 0) want = R2L_WAKE;
+        else s_wake_sweep_until = 0;
+    }
+    if (want != s_lights.state)
+        ESP_LOGI(TAG, "lights -> %s", r2_lights_name(want));
+    r2_lights_player_enter(&s_lights, want, now);
+
+    if (beat_soon || (uint32_t)(now - s_last_other_tx) < R2_LIGHTS_MIN_INTERVAL_MS)
+        return;
+    r2_lights_frame_t f;
+    if (r2_lights_player_step(&s_lights, now, 1.0, &f)) lights_write(&f, now);
+}
+
+/* D-023's goodnight light, written ONCE and only while he can still hear it:
+ * after the release there is no link to write it over. Blocks one spacing
+ * interval either side, about 240 ms plus the write, on a deliberate hold --
+ * and link_task is the only sender of STOP, which waits that long. OBSERVED
+ * 2026-09-18 not to hold after the release (D-030). */
+static void lights_goodnight(void)
+{
+    if (!r2_link_is_up() || !r2_gate_status_granted()) {
+        ESP_LOGW(TAG, "GOODNIGHT light: not written (link %s, grant %d)",
+                 r2_link_is_up() ? "up" : "down", (int)r2_gate_status_granted());
+        return;
+    }
+    lights_yield();
+    const uint32_t other = now_ms() - s_last_other_tx;
+    if (other < R2_LIGHTS_MIN_INTERVAL_MS)
+        vTaskDelay(pdMS_TO_TICKS(R2_LIGHTS_MIN_INTERVAL_MS - other + 1));
+    r2_lights_player_enter(&s_lights, R2L_SLEEP, now_ms());
+    r2_lights_frame_t f;
+    r2_lights_sample(R2L_SLEEP, 0, 1.0, &f);
+    lights_write(&f, now_ms());
+    ESP_LOGW(TAG, "GOODNIGHT light: sleep row written");
+    /* Let it land before the disconnect goes out behind it. */
+    vTaskDelay(pdMS_TO_TICKS(R2_LIGHTS_MIN_INTERVAL_MS));
+}
+
 static void link_task(void *arg)
 {
     (void)arg;
@@ -204,7 +319,7 @@ static void link_task(void *arg)
     unsigned tick = 0;
     unsigned beat = 0;
     while (1) {
-        /* A 100 ms TICK, with the keepalive derived from it rather than from
+        /* A LINK_TICK_MS TICK, with the keepalive derived from it rather than from
          * the sleep. The loop used to sleep the whole keepalive period, which
          * made it the wrong place to notice a tap -- and noticing taps in the
          * UI task instead meant two tasks sharing the sequence counter and the
@@ -235,7 +350,9 @@ static void link_task(void *arg)
              * him anyway: the answer is about the link the sends actually
              * met. Argument order is unsequenced in C, so the two are
              * separate statements rather than one call. */
+            lights_yield();
             const unsigned sent = run_op(probe_tier, probe_op);
+            s_last_other_tx = now_ms();
             const bool up = r2_link_is_up();
             /* THE HOLD FIRST, stamped after the sends so it errs long. Before
              * panel_ui_probe_sent, which clears in_flight -- see panel_ui.h. */
@@ -252,12 +369,18 @@ static void link_task(void *arg)
          * BEFORE letting go, so the disconnect that follows is not counted as
          * an attempt to reach him; WAKE clears it first so the attempt clock
          * starts at the wake, not at the goodnight an hour ago. */
+        /* THE GRANT FOLLOWS THE HOLD (D-030): given on WAKE, and on
+         * GOODNIGHT spent on the sleep row and then taken back BEFORE the
+         * release, so nothing can light him once he has been let go. */
         if (panel_ui_take_power_request()) {
             if (r2_link_wanted()) {
+                lights_goodnight();
+                r2_gate_grant_status(false);
                 r2_telemetry_released(&s_tm, true, now_ms());
                 r2_link_release();
                 ESP_LOGW(TAG, "GOODNIGHT: keepalive stopped, letting go of him");
             } else {
+                r2_gate_grant_status(true);
                 r2_telemetry_released(&s_tm, false, now_ms());
                 r2_link_wake();
                 ESP_LOGW(TAG, "WAKE: looking for him");
@@ -265,14 +388,21 @@ static void link_task(void *arg)
         }
 
         if (panel_ui_take_stop_request()) {
+            lights_yield();
             const r2_stop_report_t st =
                 r2_ops_stop_all(next_seq, r2_link_send, NULL);
+            s_last_other_tx = now_ms();
             ESP_LOGW(TAG, "STOP: %u of 3 away (anim=%d audio=%d legs=%d)",
                      st.sent, (int)st.animation, (int)st.audio, (int)st.legs);
             /* STAMPED HERE, where the halts went -- panel_ui_stop_sent
              * runs on this task and must not read ui_task's clock. */
             panel_ui_stop_sent(st.sent, r2_link_is_up(), now_ms());
         }
+
+        /* Ticks until the next beat; 0 means this tick is one. */
+        const unsigned to_beat = (LINK_TICKS_PER_BEAT - tick % LINK_TICKS_PER_BEAT)
+                                 % LINK_TICKS_PER_BEAT;
+        lights_tick(to_beat * LINK_TICK_MS < R2_LIGHTS_MIN_INTERVAL_MS);
 
         /* Not wanted means no keepalive even while the teardown is still in
          * flight: one more beat would be one more wake command. */
@@ -284,6 +414,7 @@ static void link_task(void *arg)
          * down is us stopping, and the panel's RELEASE control is the place
          * that gets decided -- not here. */
         r2_gate_send(0x13, 0x0D, next_seq(), NULL, 0, r2_link_send, NULL);
+        s_last_other_tx = now_ms();
 
         /* HIS FIRMWARE VERSION, once per connection. It is a read-tier probe
          * and the telemetry has always had a slot for it; nothing ever asked,
@@ -516,6 +647,15 @@ static void ui_task(void *arg)
              * release would then move the page. The dismissing press is voided
              * too, so lifting it does nothing either. */
             panel_swipe_t sw = swiped;
+            /* A BLANKED FACE IS WOKEN, NOT OPERATED. The press that lights it
+             * is voided the same way a wake-frame dismissal is: nobody can see
+             * what their finger is on, so it may not start a hold or a tap. */
+            if (panel_ui_blank_showing() && (pressed || touched || tapped ||
+                                             swiped != PANEL_SWIPE_NONE)) {
+                sw = PANEL_SWIPE_NONE;
+                tapped = false;
+                panel_touch_void_gesture();
+            }
             if (panel_ui_wake_showing()) {
                 sw = PANEL_SWIPE_NONE;
                 tapped = false;
@@ -551,7 +691,8 @@ static void ui_task(void *arg)
              * the droid and taps is reading a 40% screen because the battery
              * happened to report the same voltage as a minute ago. */
             const bool changed = panel_ui_update(&s_tm, now_ms());
-            panel_ui_burn_in(now_ms(), changed || touched || swiped != PANEL_SWIPE_NONE,
+            panel_ui_burn_in(now_ms(),
+                             changed || touched || pressed || swiped != PANEL_SWIPE_NONE,
                              set_brightness_pct);
             bsp_display_unlock();
         }
@@ -1246,6 +1387,7 @@ void app_main(void)
              r2_gate_tier_name(r2_gate_get_ceiling()));
 
     r2_telemetry_reset(&s_tm);
+    r2_lights_player_init(&s_lights);
 #if !defined(PANEL_P4_IDLE) && !defined(PANEL_P2_RECONNECT)
     /* BOOT RELEASED. Before the host syncs, so on_sync sees it. Waking him is
      * a deliberate hold on the face, never a side effect of power-on. */

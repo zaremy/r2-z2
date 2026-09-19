@@ -518,6 +518,34 @@ static void test_not_released_is_exactly_from_link(void)
         }
 }
 
+/* ---- the same state on his body (E2E v0 slice 2) ------------------------ */
+
+static void test_lights_refuse_what_has_no_link(void)
+{
+    /* ILLEGAL FIRST. A row for WAKING would be written over a link that is
+     * not up; a row for junk would be a guess. */
+    CHECK(panel_state_lights(PANEL_ST_WAKING) == R2L_NONE, "WAKING must light nothing");
+    CHECK(panel_state_lights(PANEL_ST_UNPROVISIONED) == R2L_NONE,
+          "UNPROVISIONED must light nothing");
+    CHECK(panel_state_lights(PANEL_ST_COUNT) == R2L_NONE, "COUNT must light nothing");
+    CHECK(panel_state_lights((panel_state_t)-1) == R2L_NONE, "-1 must light nothing");
+    CHECK(panel_state_lights((panel_state_t)99) == R2L_NONE, "99 must light nothing");
+    CHECK(panel_state_lights(PANEL_ST_RELEASED) == R2L_NONE,
+          "RELEASED must light nothing: GOODNIGHT writes its own row, then revokes");
+}
+
+static void test_every_ranked_state_lights_its_own_row(void)
+{
+    /* By NAME, against the lights module's own names -- so a row swapped in
+     * the switch (IDLE lighting LISTEN) fails here, which a test that only
+     * asserted "some row" would pass. */
+    for (int s = 0; s < PANEL_ST_RANKED_COUNT; s++) {
+        const r2_lights_state_t l = panel_state_lights((panel_state_t)s);
+        CHECK(strcmp(panel_state_name((panel_state_t)s), r2_lights_name(l)) == 0,
+              "%s lights the %s row", panel_state_name((panel_state_t)s), r2_lights_name(l));
+    }
+}
+
 int main(void)
 {
     test_unranked_states_report_minus_one();
@@ -548,6 +576,8 @@ int main(void)
     test_released_is_shown_whatever_the_link_says();
     test_released_raises_no_ranked_state();
     test_not_released_is_exactly_from_link();
+    test_lights_refuse_what_has_no_link();
+    test_every_ranked_state_lights_its_own_row();
 
     printf("%s: %d checks, %d failures\n",
            failures ? "FAIL" : "PASS", checks, failures);

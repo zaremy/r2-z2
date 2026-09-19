@@ -44,6 +44,8 @@
 #define V5_LABEL      0x7C8A8D   /* key labels, active dot */
 #define V5_TEXT       0xF2F6F7   /* values */
 #define V5_TEXT_HI    0xE8F2F3
+/* PANEL_C_MAGENTA (0xC77DD1) at 40%, for the RELEASED swatch. */
+#define PANEL_C_MAGENTA_REST 0x503254
 /* The STATE colours are not here. They live in `panel_state.h` as PANEL_C_*,
  * and this file reads those rather than keeping its own copy: the face and the
  * chain pips must agree on amber, and once the state table moved to another
@@ -2824,9 +2826,16 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
          *
          * The WAKE frame is the exception and does colour the word, which is
          * part of how it reads as an interruption rather than a screen. */
-        const uint32_t colour = panel_state_colour(st);
+        /* EXCEPT RELEASED, which is dimmed -- operator ruling 2026-09-18.
+         * It is the state this face sits in for hours (the board boots into
+         * it), so it is the one that burns in: the word drops to the reason
+         * line's grey and the swatch to the rest colour at 40%. Still magenta,
+         * so it still means rest -- only the contrast goes down. */
+        const bool rest = (st == PANEL_ST_RELEASED);
+        const uint32_t colour = rest ? PANEL_C_MAGENTA_REST : panel_state_colour(st);
         lv_label_set_text(s_face_word, panel_state_word(st));
-        lv_obj_set_style_text_color(s_face_word, lv_color_hex(V5_TEXT), 0);
+        lv_obj_set_style_text_color(s_face_word,
+                                    lv_color_hex(rest ? V5_LABEL : V5_TEXT), 0);
         lv_obj_set_style_bg_color(s_face_swatch, lv_color_hex(colour), 0);
         lv_label_set_text(s_face_since, panel_state_since(st, mode));
 
@@ -2950,6 +2959,12 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         lv_color_hex(dome_ok ? PANEL_C_CYAN : V5_SURFACE), 0);
 }
 
+/* Written by ui_task, read by link_task. An int-sized store, so a reader
+ * sees the old state or the new one, never half of either. */
+static volatile int s_shown_state = PANEL_ST_COUNT;
+
+panel_state_t panel_ui_shown_state(void) { return (panel_state_t)s_shown_state; }
+
 bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
 {
     s_changed = false;
@@ -2972,6 +2987,7 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
     const uint32_t away = r2_telemetry_unreachable_ms(t, now_ms);
     panel_state_from_power(t->released, t->link == R2_TM_UP, away, &st, &mode);
     set_face(st, mode, t, now_ms);
+    s_shown_state = (int)st;
 
     /* The bar moves every tick, not only on a state change: progress that
      * repaints only when the state flips is a bar that jumps from empty to
@@ -3099,6 +3115,84 @@ static uint32_t s_last_change_ms;
 static int      s_drift_step = -1;
 static bool     s_dimmed;
 
+/* BLANK WHILE RELEASED -- operator ruling 2026-09-18.
+ *
+ * Released is where this face spends hours: the board boots into it and
+ * nothing changes until someone wakes him. Dimming the word and swatch cut
+ * their light, but every label, rule and ring on the face is just as static.
+ * So after BURN_BLANK_AFTER_MS with nothing happening, the whole face goes
+ * black -- EXCEPT the state tile, which stays where it always is and pulses
+ * slowly, so the panel reads as ON AND RESTING rather than dead. (A black
+ * AMOLED on a healthy board has already cost this project two debugging
+ * sessions; the tile is the affordance that prevents a third.)
+ *
+ * The first touch only lights the face; it is voided, so it cannot also start
+ * a WAKE hold -- D-017's rule that a glance arms nothing.
+ *
+ * Only while RELEASED. Any other state is one someone may need to read at a
+ * glance, and blanking it would hide exactly that. */
+#define BURN_BLANK_AFTER_MS 300000u
+#define BURN_PULSE_MS         2000u  /* each way */
+#define BURN_PULSE_REST_MS    4000u  /* held dark between breaths: operator, 2026-09-18 */
+static lv_obj_t *s_blank, *s_blank_tile;
+static bool      s_blanked;
+
+static void blank_tile_opa(void *o, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
+}
+
+static void blank_build(void)
+{
+    s_blank = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_blank);
+    lv_obj_set_size(s_blank, PANEL_W, PANEL_H);
+    lv_obj_set_style_bg_color(s_blank, lv_color_hex(V5_GROUND), 0);
+    lv_obj_set_style_bg_opa(s_blank, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
+
+    s_blank_tile = lv_obj_create(s_blank);
+    lv_obj_remove_style_all(s_blank_tile);
+    lv_obj_set_size(s_blank_tile, 18, 18);          /* the face's swatch */
+    lv_obj_set_style_radius(s_blank_tile, 2, 0);
+    lv_obj_set_style_bg_color(s_blank_tile, lv_color_hex(PANEL_C_MAGENTA), 0);
+}
+
+/* Over the face's own swatch, wherever the drift has put it. */
+static void blank_place_tile(void)
+{
+    lv_area_t a;
+    lv_obj_get_coords(s_face_swatch, &a);
+    lv_obj_set_pos(s_blank_tile, a.x1, a.y1);
+}
+
+static void blank_show(bool on)
+{
+    if (on == s_blanked || s_blank == NULL) return;
+    s_blanked = on;
+    if (on) {
+        blank_place_tile();
+        lv_obj_remove_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_blank_tile);
+        lv_anim_set_exec_cb(&a, blank_tile_opa);
+        lv_anim_set_values(&a, LV_OPA_10, LV_OPA_60);
+        lv_anim_set_duration(&a, BURN_PULSE_MS);
+        lv_anim_set_reverse_duration(&a, BURN_PULSE_MS);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_repeat_delay(&a, BURN_PULSE_REST_MS);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
+    } else {
+        lv_anim_delete(s_blank_tile, NULL);
+        lv_obj_add_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
+    }
+    ESP_LOGI("panel", "face %s", on ? "blanked (released, idle)" : "lit");
+}
+
+bool panel_ui_blank_showing(void) { return s_blanked; }
+
 void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
                       panel_brightness_fn set_brightness)
 {
@@ -3112,7 +3206,16 @@ void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
         static const int8_t dx[4] = {0, BURN_DRIFT_PX, BURN_DRIFT_PX, 0};
         static const int8_t dy[4] = {0, 0, BURN_DRIFT_PX, BURN_DRIFT_PX};
         lv_obj_set_pos(s_root, dx[step], dy[step]);
+        /* The tile drifts with the face it stands in for. */
+        if (s_blanked) {
+            lv_obj_update_layout(s_root);
+            blank_place_tile();
+        }
     }
+
+    if (s_blank == NULL && s_face_swatch != NULL) blank_build();
+    const bool released = (s_last_tm != NULL) && s_last_tm->released;
+    blank_show(released && (now_ms - s_last_change_ms) > BURN_BLANK_AFTER_MS);
 
     /* Dim at rest. Guarded on the transition so it is not written every tick:
      * brightness is an I2C register on this panel, not a variable. */

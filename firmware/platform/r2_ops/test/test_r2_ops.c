@@ -425,6 +425,38 @@ static void test_leds_refuse_a_mask_and_value_mismatch(void)
 /* Raising the ceiling is the operator's decision. Once raised, the exact bytes
  * matter: values are ordered by ASCENDING BIT, and getting that wrong swaps
  * red for blue with no error anywhere. */
+/* The status path (D-030). The ceiling is raised to the TOP here on purpose:
+ * if r2_ops_status_leds went through r2_gate_send, the ceiling would admit
+ * it and the ungranted refusal below would fail. */
+static void test_status_leds_need_the_grant_not_the_ceiling(void)
+{
+    const uint8_t v[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    r2_gate_set_ceiling(R2_TIER_STANCE);
+    r2_gate_grant_status(false);
+    tx_calls = 0;
+    CHECK(r2_ops_status_leds(v, 0x40, fake_tx, NULL) == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted status light went out at the top ceiling (%d frames)", tx_calls);
+    CHECK(r2_ops_status_leds(NULL, 0x40, fake_tx, NULL) == R2_OPS_BAD_LED_REQUEST,
+          "NULL values must be refused as malformed");
+
+    r2_gate_set_ceiling(R2_TIER_READ);
+    r2_gate_grant_status(true);
+    uint32_t a0, r0, a1, r1;
+    r2_gate_stats(&a0, &r0);
+    tx_calls = 0;
+    CHECK(r2_ops_status_leds(v, 0x41, fake_tx, NULL) > 0 && tx_calls == 1,
+          "a granted status light was refused at READ");
+    r2_gate_stats(&a1, &r1);
+    CHECK(a1 == a0 + 1, "the status light did not pass through the gate");
+    /* 8D 0A 1A 0E 41 00 FF 01..08 <chk> D8: every channel, in bit order */
+    const uint8_t want_body[] = { 0x0A, 0x1A, 0x0E, 0x41, 0x00, 0xFF,
+                                  1, 2, 3, 4, 5, 6, 7, 8 };
+    CHECK(tx_len == sizeof want_body + 3 && tx_buf[0] == 0x8D &&
+          memcmp(tx_buf + 1, want_body, sizeof want_body) == 0,
+          "status frame body differs from the hand-computed bytes");
+    r2_gate_grant_status(false);
+}
+
 static void test_leds_once_the_operator_raises_the_ceiling(void)
 {
     r2_gate_set_ceiling(R2_TIER_LEDS);
@@ -653,6 +685,7 @@ int main(void)
     test_leds_are_refused_at_the_default_ceiling();
     test_leds_refuse_a_mask_and_value_mismatch();
     test_leds_once_the_operator_raises_the_ceiling();
+    test_status_leds_need_the_grant_not_the_ceiling();
     printf("  decoding\n");
     test_captured_battery_frame();
     test_head_float_and_endianness();
