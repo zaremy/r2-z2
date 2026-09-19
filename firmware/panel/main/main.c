@@ -538,8 +538,11 @@ static void ui_task(void *arg)
             {
                 int16_t hx = 0, hy = 0;
                 int32_t hdev = 0;
-                const bool down = panel_touch_down(&hx, &hy, &hdev);
-                if (panel_ui_hold(down, hx, hy, hdev, now_ms()))
+                bool hvoid = false;
+                const bool down = panel_touch_down(&hx, &hy, &hdev, &hvoid);
+                /* A press that dismissed the wake frame above is voided, and
+                 * must stay a dismissal: D-017, a glance arms nothing. */
+                if (panel_ui_hold(down, hx, hy, hvoid, hdev, now_ms()))
                     panel_touch_void_gesture();
             }
 

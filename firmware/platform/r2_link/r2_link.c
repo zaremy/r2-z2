@@ -355,8 +355,11 @@ void r2_link_release(void)
         break;
     case R2_LINK_HANDSHAKING:
     case R2_LINK_UP:
-        /* DOWN arrives with the DISCONNECT event, which now does not rescan. */
-        r2_link_disconnect();
+        /* DOWN arrives with the DISCONNECT event, which now does not rescan.
+         * If the terminate itself fails no event comes, the link stays held
+         * and the panel still says RELEASED -- so say so, loudly. */
+        if (r2_link_disconnect() != 0)
+            ESP_LOGE(TAG, "release: terminate FAILED; link is still held");
         break;
     case R2_LINK_DOWN:
         break;

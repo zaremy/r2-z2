@@ -48,7 +48,8 @@ panel_gesture_t panel_gesture_classify(const panel_press_t *p)
 }
 
 unsigned panel_hold_step(panel_hold_t *h, bool down, bool in_target,
-                         int32_t max_dev, uint32_t now_ms, bool *fire)
+                         bool voided, int32_t max_dev, uint32_t now_ms,
+                         bool *fire)
 {
     if (fire) *fire = false;
     if (h == NULL) return 0;
@@ -59,6 +60,11 @@ unsigned panel_hold_step(panel_hold_t *h, bool down, bool in_target,
         return 0;
     }
     if (h->spent) return 0;
+    if (voided) {                      /* consumed elsewhere: not ours, ever */
+        h->active = false;
+        h->spent  = true;
+        return 0;
+    }
 
     if (!h->active) {
         if (!in_target || max_dev > PANEL_TAP_PX) {

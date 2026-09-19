@@ -118,9 +118,15 @@ typedef struct {
  * sets *fire exactly once, on the look that completes the hold.
  *
  * A press that strays past PANEL_TAP_PX is cancelled and cannot restart until
- * the finger lifts: a swipe that pauses is not a hold. */
+ * the finger lifts: a swipe that pauses is not a hold.
+ *
+ * `voided` is the press having been consumed by something else -- D-017's
+ * wake frame, dismissed by it. A voided press is spent whole, even if it was
+ * already holding. Without this the finger that dismissed the OFFLINE frame
+ * could stay put and fire GOODNIGHT 700 ms later (review of #190). */
 unsigned panel_hold_step(panel_hold_t *h, bool down, bool in_target,
-                         int32_t max_dev, uint32_t now_ms, bool *fire);
+                         bool voided, int32_t max_dev, uint32_t now_ms,
+                         bool *fire);
 
 #ifdef __cplusplus
 }

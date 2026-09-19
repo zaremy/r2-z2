@@ -3140,7 +3140,8 @@ bool panel_ui_is_dimmed(void) { return s_dimmed; }
 
 /* ---- WAKE / GOODNIGHT: hold to unlock (E2E v0 slice 1) ------------------ */
 
-bool panel_ui_hold(bool down, int x, int y, int32_t max_dev, uint32_t now_ms)
+bool panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
+                   uint32_t now_ms)
 {
     (void)x;
     if (s_hold_fill == NULL) return false;
@@ -3152,7 +3153,7 @@ bool panel_ui_hold(bool down, int x, int y, int32_t max_dev, uint32_t now_ms)
     const bool in_target = on_face && y >= HOLD_TOP && y <= HOLD_BOTTOM;
     bool fire = false;
     const unsigned pm = panel_hold_step(&s_hold, down && on_face, in_target,
-                                        max_dev, now_ms, &fire);
+                                        voided, max_dev, now_ms, &fire);
 
     /* The fill is the colour of WHERE THE HOLD LEADS, so the operator sees
      * what they are about to do before it happens: blue for waking, magenta

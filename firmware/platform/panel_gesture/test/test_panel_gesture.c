@@ -265,14 +265,14 @@ static void test_a_hold_fires_once_at_the_bound_not_before(void)
 {
     panel_hold_t h = {0};
     bool fire;
-    unsigned pm = panel_hold_step(&h, true, true, 0, 1000, &fire);
+    unsigned pm = panel_hold_step(&h, true, true, false, 0, 1000, &fire);
     CHECK(pm == 0 && !fire, "a fresh press fired or showed progress");
-    pm = panel_hold_step(&h, true, true, 3, 1000 + PANEL_HOLD_MS - 1, &fire);
+    pm = panel_hold_step(&h, true, true, false, 3, 1000 + PANEL_HOLD_MS - 1, &fire);
     CHECK(!fire && pm < 1000u, "fired a millisecond early");
     CHECK(pm > 900u, "progress lagged: %u", pm);
-    pm = panel_hold_step(&h, true, true, 3, 1000 + PANEL_HOLD_MS, &fire);
+    pm = panel_hold_step(&h, true, true, false, 3, 1000 + PANEL_HOLD_MS, &fire);
     CHECK(fire && pm == 1000u, "did not fire at the bound");
-    pm = panel_hold_step(&h, true, true, 3, 1000 + 5 * PANEL_HOLD_MS, &fire);
+    pm = panel_hold_step(&h, true, true, false, 3, 1000 + 5 * PANEL_HOLD_MS, &fire);
     CHECK(!fire && pm == 0, "one hold fired twice");
 }
 
@@ -280,9 +280,9 @@ static void test_lifting_early_cancels(void)
 {
     panel_hold_t h = {0};
     bool fire;
-    panel_hold_step(&h, true, true, 0, 0, &fire);
-    panel_hold_step(&h, false, true, 0, PANEL_HOLD_MS / 2, &fire);
-    const unsigned pm = panel_hold_step(&h, true, true, 0, PANEL_HOLD_MS, &fire);
+    panel_hold_step(&h, true, true, false, 0, 0, &fire);
+    panel_hold_step(&h, false, true, false, 0, PANEL_HOLD_MS / 2, &fire);
+    const unsigned pm = panel_hold_step(&h, true, true, false, 0, PANEL_HOLD_MS, &fire);
     CHECK(!fire, "a lift did not cancel");
     CHECK(pm == 0, "a new press inherited the old one's progress: %u", pm);
 }
@@ -291,11 +291,11 @@ static void test_a_drag_cancels_and_cannot_restart(void)
 {
     panel_hold_t h = {0};
     bool fire;
-    panel_hold_step(&h, true, true, 0, 0, &fire);
-    panel_hold_step(&h, true, true, PANEL_TAP_PX + 1, 100, &fire);
+    panel_hold_step(&h, true, true, false, 0, 0, &fire);
+    panel_hold_step(&h, true, true, false, PANEL_TAP_PX + 1, 100, &fire);
     /* Stillness after a drag is a swipe that paused, not a hold. */
     for (uint32_t t = 200; t <= 3 * PANEL_HOLD_MS; t += 50) {
-        panel_hold_step(&h, true, true, PANEL_TAP_PX + 1, t, &fire);
+        panel_hold_step(&h, true, true, false, PANEL_TAP_PX + 1, t, &fire);
         CHECK(!fire, "a drag fired at t=%u", (unsigned)t);
     }
 }
@@ -305,7 +305,7 @@ static void test_outside_the_target_never_fires(void)
     panel_hold_t h = {0};
     bool fire, any = false;
     for (uint32_t t = 0; t <= 3 * PANEL_HOLD_MS; t += 50) {
-        panel_hold_step(&h, true, false, 0, t, &fire);
+        panel_hold_step(&h, true, false, false, 0, t, &fire);
         any |= fire;
     }
     CHECK(!any, "a press off the control fired it");
@@ -315,12 +315,12 @@ static void test_the_next_press_rearms(void)
 {
     panel_hold_t h = {0};
     bool fire;
-    panel_hold_step(&h, true, true, 0, 0, &fire);
-    panel_hold_step(&h, true, true, 0, PANEL_HOLD_MS, &fire);
+    panel_hold_step(&h, true, true, false, 0, 0, &fire);
+    panel_hold_step(&h, true, true, false, 0, PANEL_HOLD_MS, &fire);
     CHECK(fire, "first hold did not fire");
-    panel_hold_step(&h, false, true, 0, PANEL_HOLD_MS + 10, &fire);
-    panel_hold_step(&h, true, true, 0, 2 * PANEL_HOLD_MS, &fire);
-    panel_hold_step(&h, true, true, 0, 3 * PANEL_HOLD_MS, &fire);
+    panel_hold_step(&h, false, true, false, 0, PANEL_HOLD_MS + 10, &fire);
+    panel_hold_step(&h, true, true, false, 0, 2 * PANEL_HOLD_MS, &fire);
+    panel_hold_step(&h, true, true, false, 0, 3 * PANEL_HOLD_MS, &fire);
     CHECK(fire, "a second deliberate hold did not fire");
 }
 
@@ -329,9 +329,36 @@ static void test_a_hold_across_the_clock_wrap(void)
     panel_hold_t h = {0};
     bool fire;
     const uint32_t t0 = 0xFFFFFFFFu - 100u;
-    panel_hold_step(&h, true, true, 0, t0, &fire);
-    panel_hold_step(&h, true, true, 0, t0 + PANEL_HOLD_MS, &fire);   /* wraps */
+    panel_hold_step(&h, true, true, false, 0, t0, &fire);
+    panel_hold_step(&h, true, true, false, 0, t0 + PANEL_HOLD_MS, &fire);   /* wraps */
     CHECK(fire, "a hold straddling the wrap did not fire");
+}
+
+static void test_a_voided_press_never_fires(void)
+{
+    /* The wake frame's dismissing press: voided from its first look. */
+    panel_hold_t h = {0};
+    bool fire, any = false;
+    for (uint32_t t = 0; t <= 3 * PANEL_HOLD_MS; t += 50) {
+        panel_hold_step(&h, true, true, true, 0, t, &fire);
+        any |= fire;
+    }
+    CHECK(!any, "a voided press fired the hold");
+}
+
+static void test_voiding_mid_hold_cancels_it(void)
+{
+    /* Voided AFTER the hold began -- and then the flag reading false again
+     * on a later look must not revive it. */
+    panel_hold_t h = {0};
+    bool fire, any = false;
+    panel_hold_step(&h, true, true, false, 0, 0, &fire);
+    panel_hold_step(&h, true, true, true, 0, PANEL_HOLD_MS / 2, &fire);
+    for (uint32_t t = PANEL_HOLD_MS / 2 + 50; t <= 3 * PANEL_HOLD_MS; t += 50) {
+        panel_hold_step(&h, true, true, false, 0, t, &fire);
+        any |= fire;
+    }
+    CHECK(!any, "a hold survived being voided");
 }
 
 int main(void)
@@ -349,6 +376,8 @@ int main(void)
     test_outside_the_target_never_fires();
     test_the_next_press_rearms();
     test_a_hold_across_the_clock_wrap();
+    test_a_voided_press_never_fires();
+    test_voiding_mid_hold_cancels_it();
 
     if (failures == 0) printf("PASS: %u checks, 0 failures\n", checks);
     else               printf("FAIL: %u checks, %u failures\n", checks, failures);

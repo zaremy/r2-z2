@@ -77,8 +77,9 @@ bool panel_touch_take_tap(int16_t *x, int16_t *y);
 /* The press IN PROGRESS, for a hold: whether a finger is down, where it
  * landed, and how far it has strayed. Word-sized volatile reads across tasks,
  * the same policy as the rest of this file -- the worst case is one frame of
- * staleness, which delays a hold's progress, never fires one. */
-bool panel_touch_down(int16_t *x, int16_t *y, int32_t *max_dev);
+ * staleness, which delays a hold's progress, never fires one. `voided` is
+ * whether this press has been consumed (panel_touch_void_gesture). */
+bool panel_touch_down(int16_t *x, int16_t *y, int32_t *max_dev, bool *voided);
 
 /* The touch controller's chip id read at boot, 0 if it never answered. An
  * answer at 0x15 is also the board-revision probe: it means V2. */

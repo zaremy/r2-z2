@@ -57,7 +57,10 @@ void r2_telemetry_released(r2_telemetry_t *t, bool released, uint32_t now_ms)
     t->released = released;
     if (released) {
         t->attempt_open = false;
-    } else {
+    } else if (t->link != R2_TM_UP) {
+        /* Only when he is not already here. Opened while UP, nothing would
+         * close it -- UP closes an attempt on ENTRY -- and the next real drop,
+         * hours later, would be timed from this wake (review of #190). */
         t->attempt_open = true;
         t->attempt_from_up = false;
         t->unreachable_since_ms = now_ms;

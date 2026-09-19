@@ -103,7 +103,13 @@ static int rows_r2_link(const panel_svc_facts_t *f, panel_kv_t *out, int max)
     const r2_telemetry_t *tm = f->tm;
     const bool up = tm != NULL && tm->link == R2_TM_UP;
 
-    if (up) {
+    if (tm != NULL && tm->released) {
+        /* A fact about what WE did, with no verdict (D-023): the face says
+         * RELEASED, and one swipe away this must not say something is wrong.
+         * Checked before `up` -- released while a teardown is in flight is
+         * still released. */
+        put(out, &n, max, "STATE", PANEL_TONE_PLAIN, "RELEASED");
+    } else if (up) {
         put(out, &n, max, "STATE", PANEL_TONE_GOOD, "LINKED");
     } else {
         put(out, &n, max, "STATE", PANEL_TONE_WARN, "%s",
@@ -261,6 +267,7 @@ bool panel_service_note(panel_svc_t s, const char **line1, const char **line2)
 
 panel_tone_t panel_service_link_tone(const r2_telemetry_t *tm)
 {
+    if (tm != NULL && tm->released) return PANEL_TONE_PLAIN;   /* deliberate, not a fault */
     return (tm != NULL && tm->link == R2_TM_UP) ? PANEL_TONE_GOOD : PANEL_TONE_WARN;
 }
 

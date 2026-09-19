@@ -1061,8 +1061,41 @@ static void test_a_tier_with_no_rows_is_never_exercised(void)
           "a bare unpassed bundle row exercised a tier");
 }
 
+/* ---- released agrees with the face (review of #190) ---------------------- */
+
+static void test_released_is_a_fact_not_a_warning(void)
+{
+    const r2_tm_link_t links[] = { R2_TM_DOWN, R2_TM_UP };
+    for (unsigned i = 0; i < 2; i++) {
+        r2_telemetry_t t = up_with_everything(1000);
+        t.link = links[i];
+        t.released = true;
+        CHECK(panel_service_link_tone(&t) == PANEL_TONE_PLAIN,
+              "released (link %s) coloured the menu square as a verdict",
+              r2_telemetry_link_name(links[i]));
+        panel_svc_facts_t f = facts(&t, 2000);
+        panel_kv_t kv[PANEL_SVC_MAX_ROWS];
+        const int n = panel_service_rows(PANEL_SVC_R2_LINK, &f, kv, PANEL_SVC_MAX_ROWS);
+        const panel_kv_t *r = row(kv, n, "STATE");
+        CHECK(r && strcmp(r->val, "RELEASED") == 0 && r->tone == PANEL_TONE_PLAIN,
+              "released (link %s): STATE reads '%s'",
+              r2_telemetry_link_name(links[i]), r ? r->val : "(missing)");
+    }
+}
+
+static void test_not_released_down_is_still_a_warning(void)
+{
+    /* The mirror: the released branch must not swallow a real drop. */
+    r2_telemetry_t t = up_with_everything(1000);
+    t.link = R2_TM_DOWN;
+    t.released = false;
+    CHECK(panel_service_link_tone(&t) == PANEL_TONE_WARN, "a real drop lost its warning");
+}
+
 int main(void)
 {
+    test_released_is_a_fact_not_a_warning();
+    test_not_released_down_is_still_a_warning();
     test_one_op_passing_does_not_exercise_the_tier();
     test_every_single_op_passing_exercises_the_tier();
     test_the_bundle_alone_exercises_the_tier();

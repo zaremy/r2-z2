@@ -202,7 +202,7 @@ void panel_touch_poll(void)
         if (!s_pressing) {
             s_press_at.x = x; s_press_at.y = y;
             s_hold_x = (int16_t)x; s_hold_y = (int16_t)y;
-            s_press_max = 0;
+            s_press_max = 0;       /* before s_pressing: a reader never sees the last press's drift */
             s_pressing = true;
             s_press_began = true;
             s_gesture_void = false;
@@ -480,11 +480,12 @@ panel_swipe_t panel_touch_take_swipe(void)
     return s;
 }
 
-bool panel_touch_down(int16_t *x, int16_t *y, int32_t *max_dev)
+bool panel_touch_down(int16_t *x, int16_t *y, int32_t *max_dev, bool *voided)
 {
     if (!s_pressing) return false;
     if (x) *x = s_hold_x;
     if (y) *y = s_hold_y;
     if (max_dev) *max_dev = s_press_max;
+    if (voided) *voided = s_gesture_void;
     return true;
 }

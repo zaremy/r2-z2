@@ -439,6 +439,19 @@ static void test_releasing_twice_is_one_release(void)
     CHECK(!t.attempt_open, "clearing a flag that was never set opened an attempt");
 }
 
+static void test_a_wake_while_still_up_opens_no_attempt(void)
+{
+    /* The terminate failed, so the link never left UP; then WAKE. */
+    r2_telemetry_t t = up_with_readings(1000);
+    r2_telemetry_released(&t, true, 2000);
+    r2_telemetry_released(&t, false, 3000);
+    CHECK(!t.attempt_open, "a wake while UP opened an attempt nothing will close");
+    r2_telemetry_link(&t, R2_TM_DOWN, 3000 + 3600000u);   /* a real drop, much later */
+    CHECK(r2_telemetry_unreachable_ms(&t, 3000 + 3600000u + 500) == 500,
+          "a later drop was timed from the wake: %u ms",
+          (unsigned)r2_telemetry_unreachable_ms(&t, 3000 + 3600000u + 500));
+}
+
 int main(void)
 {
     printf("r2_telemetry host tests\n");
@@ -470,6 +483,7 @@ int main(void)
     test_waking_after_a_long_release_is_timed_from_the_wake();
     test_a_wake_attempt_still_closes_on_up();
     test_releasing_twice_is_one_release();
+    test_a_wake_while_still_up_opens_no_attempt();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
