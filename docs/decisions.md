@@ -1279,6 +1279,9 @@ the difference between a justification and a rationalisation:
 danger  >  offline  >  attention  >  misheard  >  waiting  >  thinking  >  listen  >  idle  >  sleep
 ```
 
+> **Amended by D-031 (2026-09-19):** `answering` joins the set between
+> `waiting` and `thinking` -- ten states now, still one `offline`.
+
 Nine states, fixed at author time, no inputs. It is a constant, not a computation —
 which is what keeps it on the enlargement side of the line. **If it ever needs to
 consider anything at runtime — recency, how many rows are bad, what the operator was
@@ -2877,3 +2880,47 @@ only on the screen, and slice 2 exists to meet it.
   asserts nothing a glance can find after goodnight, and D-023's goodnight
   light is still not delivered. Not fixed here; whether he then sleeps on his
   own (D-023's idle timeout) is still unmeasured.
+
+## D-031 — He answers in a state of his own, ranked between waiting and thinking
+**2026-09-19** · *operator ruling* · **amends D-017's closed rank** · E2E v0 slice 3.0
+
+**Decision.** `answering` is a real state, in `docs/behaviour-states.md`, in the
+closed rank, in `panel_state.h` and in the light table. Operator ruling,
+2026-09-19: *"add answering as a real state"*.
+
+### Why a state and not an expression over `idle`
+
+The slice 3 exchange is listen → thinking → reply. With no state for the
+reply, the panel went from THINKING straight to IDLE while he was still
+chirping and turning, so the one moment the operator is waiting to see was
+the one the glass did not show. D-017 says the panel may not invent a state,
+so this is made here, in the normative sources, rather than in the panel.
+
+### What it is
+
+| | |
+|---|---|
+| word | `ANSWERING`, cyan `PANEL_C_CYAN` (the listen/think family) |
+| line under the word | the reply's mood at runtime; `REPLYING` until one is known |
+| PSI front/back | engaged cyan, steady |
+| holo, logic | held ON (listen breathes and blinks them, so the two cyan states differ on the body) |
+| sound, dome | the reply's own chirp and 12-45 deg turn; expression gets no hue |
+| rank | `waiting > answering > thinking > listen` |
+| wake frame | never; a reply is not a severity |
+| restorable | no; it is a claim about an exchange |
+
+**Rank placement.** Above `thinking` because it is the later stage of the same
+exchange and they cannot both be true of one exchange; below `waiting`
+because a blocked backpack is a condition on the system, which outranks any
+single exchange.
+
+### Consequences
+
+- The closed set is ten states. `test_panel_state.c` pins the rank from this
+  text, not from the header.
+- The panel spec already carries the row (vault `Prototypes/README.md`,
+  `[ADD] ANSWERING state`).
+- **Nothing selects `answering` yet.** Slice 3's reply path (3.5) is its first
+  caller. Until then the state exists, renders, and drives its light row in
+  tests only.
+

@@ -57,9 +57,10 @@ extern "C" {
 #define PANEL_C_GREEN   0x4ED18B   /* healthy, nothing engaged */
 #define PANEL_C_MAGENTA 0xC77DD1   /* rest, low power */
 
-/* THE NINE RANKED STATES, most severe first, then the three unranked.
+/* THE TEN RANKED STATES, most severe first, then the three unranked.
  *
- * The enum order IS D-017's severity rank for the first nine, deliberately:
+ * The enum order IS D-017's severity rank (as amended by D-031) for the
+ * first ten, deliberately:
  * a rank held in a separate table is a rank that can silently disagree with
  * the enum. `PANEL_ST_RANKED_COUNT` is the boundary, and the three below it
  * are outside the ordering BY DESIGN (D-023) -- not unranked because nobody
@@ -75,6 +76,7 @@ typedef enum {
     PANEL_ST_ATTENTION,
     PANEL_ST_MISHEARD,
     PANEL_ST_WAITING,
+    PANEL_ST_ANSWERING,             /* D-031: the reply, above the thought */
     PANEL_ST_THINKING,
     PANEL_ST_LISTEN,
     PANEL_ST_IDLE,

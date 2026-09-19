@@ -68,30 +68,31 @@ static void test_the_rank_is_d017s_order_by_name(void)
      * 226 checks passed. The severity rank is this module's central claim and
      * it was pinned by nothing.
      *
-     * D-017's rank, transcribed from the ADR and NOT from the header:
-     *   danger > offline > attention > misheard > waiting > thinking >
-     *   listen > idle > sleep
+     * D-017's rank as amended by D-031, transcribed from the ADRs and NOT
+     * from the header:
+     *   danger > offline > attention > misheard > waiting > answering >
+     *   thinking > listen > idle > sleep
      * Written as names, because a list of enum constants would just be the
      * enum again in a different order of appearance. */
     static const char *const d017[] = {
         "danger", "offline", "attention", "misheard", "waiting",
-        "thinking", "listen", "idle", "sleep",
+        "answering", "thinking", "listen", "idle", "sleep",
     };
     const int n = (int)(sizeof d017 / sizeof d017[0]);
     CHECK(n == (int)PANEL_ST_RANKED_COUNT,
-          "D-017 ranks %d states, the enum ranks %d",
+          "D-017/D-031 rank %d states, the enum ranks %d",
           n, (int)PANEL_ST_RANKED_COUNT);
 
     for (int i = 0; i < n && i < (int)PANEL_ST_RANKED_COUNT; i++)
         CHECK(strcmp(panel_state_name((panel_state_t)i), d017[i]) == 0,
-              "rank %d is %s, D-017 says %s",
+              "rank %d is %s, D-017/D-031 say %s",
               i, panel_state_name((panel_state_t)i), d017[i]);
 }
 
-static void test_the_nine_are_ranked_in_enum_order(void)
+static void test_the_ten_are_ranked_in_enum_order(void)
 {
-    CHECK((int)PANEL_ST_RANKED_COUNT == 9,
-          "the rank is a CLOSED nine-state set (D-017); found %d",
+    CHECK((int)PANEL_ST_RANKED_COUNT == 10,
+          "the rank is a CLOSED ten-state set (D-017, amended by D-031); found %d",
           (int)PANEL_ST_RANKED_COUNT);
     for (int i = 0; i < (int)PANEL_ST_RANKED_COUNT; i++)
         CHECK(panel_state_rank((panel_state_t)i) == i,
@@ -148,7 +149,7 @@ static void test_severity_order_holds_pairwise(void)
                   panel_state_name(panel_state_resolve(BIT(a) | BIT(b))));
         }
     }
-    /* All nine at once must give danger, which is the case that matters. */
+    /* All ten at once must give danger, which is the case that matters. */
     uint32_t all = 0;
     for (int i = 0; i < (int)PANEL_ST_RANKED_COUNT; i++) all |= BIT(i);
     CHECK(panel_state_resolve(all) == PANEL_ST_DANGER,
@@ -432,7 +433,7 @@ static void test_colour_partitions_by_meaning(void)
      * mutation survived the suite before this test existed. */
     const panel_state_t amber[] = { PANEL_ST_OFFLINE, PANEL_ST_ATTENTION,
                                     PANEL_ST_MISHEARD };
-    const panel_state_t cyan[]  = { PANEL_ST_THINKING, PANEL_ST_LISTEN };
+    const panel_state_t cyan[]  = { PANEL_ST_ANSWERING, PANEL_ST_THINKING, PANEL_ST_LISTEN };
     const panel_state_t blue[]  = { PANEL_ST_WAITING, PANEL_ST_WAKING,
                                     PANEL_ST_UNPROVISIONED };
     const panel_state_t rest[]  = { PANEL_ST_SLEEP, PANEL_ST_RELEASED };
@@ -440,7 +441,7 @@ static void test_colour_partitions_by_meaning(void)
     struct { const char *what; const panel_state_t *set; unsigned n; uint32_t c; }
     group[] = {
         { "amber/needs-monitoring", amber, 3, PANEL_C_AMBER },
-        { "cyan/engaged",           cyan,  2, PANEL_C_CYAN  },
+        { "cyan/engaged",           cyan,  3, PANEL_C_CYAN  },
         { "blue/neutral",           blue,  3, PANEL_C_BLUE  },
         { "magenta/rest",           rest,  2, PANEL_C_MAGENTA },
     };
@@ -466,6 +467,25 @@ static void test_colour_partitions_by_meaning(void)
 
     const uint32_t all = (1u << PANEL_ST_COUNT) - 1u;
     CHECK(seen == all, "states in no colour class: mask 0x%X", (all & ~seen));
+}
+
+static void test_answering_is_its_own_row_and_never_wakes(void)
+{
+    CHECK(panel_state_lights(PANEL_ST_ANSWERING) != R2L_LISTEN,
+          "answering drove listen's lights; the two share a PSI colour and "
+          "differ only on the holo and logic");
+    CHECK(panel_state_lights(PANEL_ST_ANSWERING) == R2L_ANSWERING,
+          "answering does not drive its own light row");
+    CHECK(!panel_state_wakes(PANEL_ST_ANSWERING),
+          "answering fired the wake frame; a reply is not a severity");
+    CHECK(panel_state_resolve((1u << PANEL_ST_ANSWERING) |
+                              (1u << PANEL_ST_THINKING)) == PANEL_ST_ANSWERING,
+          "thinking outranked answering (D-031: waiting > answering > thinking)");
+    CHECK(panel_state_resolve((1u << PANEL_ST_ANSWERING) |
+                              (1u << PANEL_ST_WAITING)) == PANEL_ST_WAITING,
+          "answering outranked waiting (D-031: waiting > answering)");
+    CHECK(strcmp(panel_state_word(PANEL_ST_ANSWERING), "ANSWERING") == 0,
+          "answering's word is not ANSWERING");
 }
 
 static void test_rest_is_not_the_no_claim_colour(void)
@@ -551,7 +571,8 @@ int main(void)
     test_unranked_states_report_minus_one();
     test_out_of_range_is_refused();
     test_the_rank_is_d017s_order_by_name();
-    test_the_nine_are_ranked_in_enum_order();
+    test_the_ten_are_ranked_in_enum_order();
+    test_answering_is_its_own_row_and_never_wakes();
     test_unranked_cannot_beat_ranked();
     test_empty_mask_has_no_default();
     test_severity_order_holds_pairwise();

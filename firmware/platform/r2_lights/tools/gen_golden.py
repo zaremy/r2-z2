@@ -33,7 +33,7 @@ import r2_lights as LG  # noqa: E402
 GRID_MS = range(0, 7001, 25)
 VALUES = (1.0, 0.25)
 # The C enum's order. A mismatch is refused, not silently re-mapped.
-ORDER = ("idle", "wake", "listen", "thinking", "attention", "danger",
+ORDER = ("idle", "wake", "listen", "thinking", "answering", "attention", "danger",
          "misheard", "offline", "waiting", "sleep")
 
 

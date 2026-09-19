@@ -52,6 +52,7 @@ Front and back PSI unless noted. Sound column is the family, not an id.
 | **wake** | sweep blue→cyan→green, 0.45 s | blue steady | ramp up | on | `R2_HEY_*` ✅ | **none** |
 | **listen** | cyan steady | cyan steady | breathe 2.2 s | blink | — | **none** — see below |
 | **thinking** | cyan↔blue alt, 0.9 s | cyan↔blue alt | breathe 1.2 s | blink | `R2_EXCITED_*` ✅ | still |
+| **answering** | cyan steady | cyan steady | on | on | the reply's own | the reply's, 12-45 deg or none |
 | **attention** | yellow blink 2.4 s | yellow blink 2.4 s | off | off | **unassigned** | none |
 | **danger** | red blink 0.25 s | red blink 0.25 s | off | off | `R2_ALARM_*` ✅ | none |
 | **misheard** | yellow blink 1.2 s | yellow blink 1.2 s | off | off | **unassigned** | none |

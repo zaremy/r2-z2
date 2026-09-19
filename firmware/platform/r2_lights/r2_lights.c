@@ -54,6 +54,8 @@ static const row_t ROWS[R2L__COUNT] = {
     [R2L_THINKING] = { "thinking",
         ALT(0.9, 0.0, ENGAGED, NEUTRAL), ALT(0.9, 0.5, ENGAGED, NEUTRAL),
         SWEEP(1.2, 6, BREATHE), BLINK(0.45, {255}), true },
+    [R2L_ANSWERING] = { "answering",
+        STEADY(ENGAGED), STEADY(ENGAGED), STEADY({255}), STEADY({255}), true },
     [R2L_ATTENTION] = { "attention",
         BLINK(2.4, PENDING), BLINK(2.4, PENDING), ABSENT, ABSENT, true },
     [R2L_DANGER] = { "danger",

@@ -41,6 +41,7 @@ typedef enum {
     R2L_WAKE,
     R2L_LISTEN,
     R2L_THINKING,
+    R2L_ANSWERING,
     R2L_ATTENTION,
     R2L_DANGER,
     R2L_MISHEARD,
