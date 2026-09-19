@@ -2982,3 +2982,100 @@ single exchange.
   caller. Until then the state exists, renders, and drives its light row in
   tests only.
 
+## D-032 — A reply may chirp and turn his dome, through a third door the WAKE hold opens, one exchange at a time
+
+**Status:** accepted, 2026-09-19 · E2E v0 slice 3, step 3.4c
+**Derived from the panel spec and D-030, at the operator's direction ("check
+spec").** Does not change the ceiling, the ladder, D-029's per-op consent, or
+D-030's status path.
+
+### The decision
+
+A reply reaches his body through a **reply path** in `r2_gate`. It is
+separate from the ceiling and from D-030's status path, and built the same
+way:
+
+1. **It admits two op shapes and nothing else:**
+   - `play_audio` (DID 0x1A / CID 0x07), with an id from the committed
+     mood-to-chirp table (step 3.4a's survey);
+   - `set_head_position` (DID 0x17 / CID 0x0F), to a target 12-45° of travel
+     from a dome position read in the same exchange (step 3.5b; the 12° floor
+     is D-013's smallest legible move).
+
+   Every other op is refused, and so is either of these outside its shape.
+   The halts keep their own path (D-026).
+2. **The grant is D-030's WAKE grant.** No new gesture. It is revoked with
+   that grant at GOODNIGHT, and it is absent on boot, release and link loss,
+   because the WAKE grant is.
+3. **It is scoped to one exchange.** An op is admitted only while the
+   exchange is ANSWERING and only if it carries the live exchange id
+   (step 3.3b). Each exchange gets **at most one chirp and one dome move**.
+4. **Cancellation is retirement.** Anything that retires the exchange closes
+   the door for that exchange: the face STOP (which also sends the three
+   halts), GOODNIGHT, release, link loss, or a new TALK hold.
+5. **The chirp and the dome are separate entries.** Each is admitted on its
+   own. When the dome entry is absent (step 3.5b not built, or its fresh read
+   failed), the reply degrades to the chirp. It never degrades the other way
+   round. This is `converse.py`'s rule on the Mac: a beat above the ceiling
+   drops its motion and keeps its sound, which *"removes motion, never adds
+   it"*.
+
+### Why the WAKE hold, and not a new switch
+
+- **The spec has no other step.** Panel spec §9's exchange table goes: press
+  the lower face → LISTENING → THINKING → *"ANSWERING … chirp + 12-45 deg
+  dome"*. There is no arm step, and *"TALK needs him awake, the same way his
+  lights need the WAKE grant"*.
+- **D-030 already made the WAKE hold the board's launch.** *"The wake hold is
+  the board's equivalent of that launch"*, meaning `./r2 daemon --allow …`.
+  The Mac voice path is launched by `talk.command`, which starts the daemon at
+  a chosen ceiling (default `stance`), and every reply after that goes out at
+  that ceiling with no further consent.
+- **A hidden switch fails as CX.** If replies are silent until someone
+  finds a SERVICE toggle, the glass shows ANSWERING while he does nothing, and
+  the first reply reads as a broken robot.
+
+### Why this does not break "each actuator is individually opt-in"
+
+That rule, D-027's bundle budget and D-029's per-op consent all govern
+**tests** on the HARDWARE TEST ladder, where someone makes him do a named
+thing. A reply has a different consent: every chirp and every dome move is
+caused by a person who held his face to talk within the same exchange. The
+narrowness above is what keeps that honest. Two op shapes, bounded
+arguments, one exchange, and never on the model's say-so alone: the model
+picks one of five moods and an angle, and both are refused, never clamped,
+outside their sets (step 3.4).
+
+### A conflict, recorded rather than resolved silently
+
+The plan's step 3.5b reads *"Dome reply, separately opt-in"*. This ADR
+reads that as its own allowlist entry and its own PR, which rule 5 gives it,
+and not as a second gesture, because the spec's exchange has none. **If the
+operator meant a gesture, this is the line to revisit.**
+
+### What it cannot do
+
+- **Stop a dome move already running.** No dome halt exists (D-026). The face
+  STOP cancels a queued move, and a running one finishes.
+- **Choose the sound.** The board picks the chirp from the mood.
+
+### Consequences
+
+- **Nothing implements this yet.** Step 3.5a builds the chirp entry, 3.5b the
+  dome entry, and 3.5c composes them. `play_audio` is in the gate's AUDIO
+  table but not in `r2_ops`.
+- **Gates, illegal cases first** (`CLAUDE.md`, *mutate the guard*): host tests
+  that each op is refused in each of these cases:
+  - with no WAKE grant;
+  - with a retired exchange id;
+  - outside ANSWERING;
+  - as a second chirp or second dome move in one exchange;
+  - with an id outside the chirp table;
+  - with travel under 12° or over 45°.
+
+  Each refusal is asserted by its reason, not only by the raise. Then one
+  test proves the reply code routes through this path and not
+  `r2_gate_send`.
+- **`r2_gate` gets a third exit.** D-030 made the status path the second, and
+  the exits must be listed in the gate's header alongside the counters they
+  share.
