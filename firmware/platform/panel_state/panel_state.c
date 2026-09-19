@@ -237,6 +237,22 @@ const char *panel_state_since(panel_state_t s, panel_offline_mode_t m)
     return or_empty(k_row[s].since);
 }
 
+r2_lights_state_t panel_state_lights(panel_state_t s)
+{
+    switch (s) {
+    case PANEL_ST_DANGER:    return R2L_DANGER;
+    case PANEL_ST_OFFLINE:   return R2L_OFFLINE;
+    case PANEL_ST_ATTENTION: return R2L_ATTENTION;
+    case PANEL_ST_MISHEARD:  return R2L_MISHEARD;
+    case PANEL_ST_WAITING:   return R2L_WAITING;
+    case PANEL_ST_THINKING:  return R2L_THINKING;
+    case PANEL_ST_LISTEN:    return R2L_LISTEN;
+    case PANEL_ST_IDLE:      return R2L_IDLE;
+    case PANEL_ST_SLEEP:     return R2L_SLEEP;
+    default:                 return R2L_NONE;   /* WAKING, UNPROVISIONED, junk */
+    }
+}
+
 uint32_t panel_state_colour(panel_state_t s)
 {
     /* 0 is not a legal panel colour -- black on black -- so an out-of-range

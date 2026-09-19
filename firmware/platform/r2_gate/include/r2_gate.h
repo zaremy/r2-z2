@@ -27,6 +27,7 @@
 #ifndef R2_GATE_H
 #define R2_GATE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -53,6 +54,8 @@ typedef enum {
     R2_GATE_FORBIDDEN       = -3,  /* never permitted at any ceiling */
     R2_GATE_NO_TX           = -4,  /* no transmit function supplied */
     R2_GATE_ENCODE_FAILED   = -5,
+    R2_GATE_NOT_GRANTED     = -6,  /* status path: nobody has woken him */
+    R2_GATE_NOT_STATUS      = -7,  /* status path: that op is not a light */
 } r2_gate_verdict_t;
 
 /* Transmit hook. Returns >=0 on success. Kept as a callback so the gate has no
@@ -74,11 +77,34 @@ r2_tier_t r2_gate_get_ceiling(void);
 r2_gate_verdict_t r2_gate_check(uint8_t did, uint8_t cid,
                                 const uint8_t *data, size_t data_len);
 
-/* THE ONLY SANCTIONED WAY OUT. Checks, encodes, transmits. Returns the encoded
+/* THE SANCTIONED WAY OUT, and one of exactly two -- the other is
+ * r2_gate_send_status below. Checks, encodes, transmits. Returns the encoded
  * length on success, or a negative r2_gate_verdict_t. */
 int r2_gate_send(uint8_t did, uint8_t cid, uint8_t seq,
                  const uint8_t *data, size_t data_len,
                  r2_tx_fn tx, void *ctx);
+
+/* THE STATUS PATH (D-030, E2E v0 slice 2).
+ *
+ * His status lights have to change on their own -- nobody taps "idle" -- and
+ * D-029's consent is a tap per named op. So this is a second exit, and it is
+ * as narrow as it can be made: it admits `set_leds_16bit` and NOTHING else --
+ * and only in one shape, all eight channels (mask 0x00FF, ten bytes) -- and
+ * only while the grant is held. The ceiling is not consulted and not
+ * changed, so the test ladder's order and consent rules are untouched.
+ *
+ * The grant is the operator's WAKE hold: granted when they wake him, revoked
+ * when they put him down. It defaults to false.
+ *
+ * Refusals: R2_GATE_NOT_STATUS for any other op (checked first, whatever the
+ * grant), R2_GATE_NOT_GRANTED while not granted, R2_GATE_NO_TX /
+ * R2_GATE_ENCODE_FAILED as for r2_gate_send. Both paths share one admitted /
+ * refused counter. */
+void r2_gate_grant_status(bool granted);
+bool r2_gate_status_granted(void);
+int  r2_gate_send_status(uint8_t did, uint8_t cid, uint8_t seq,
+                         const uint8_t *data, size_t data_len,
+                         r2_tx_fn tx, void *ctx);
 
 /* Human-readable, for logs and refusal messages. */
 const char *r2_gate_tier_name(r2_tier_t t);

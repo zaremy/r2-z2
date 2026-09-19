@@ -25,6 +25,7 @@
 
 #include "r2_telemetry.h"
 #include "panel_service.h"   /* panel_op_t */
+#include "panel_state.h"     /* panel_state_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -124,6 +125,14 @@ bool        panel_ui_take_stop_request(void);
 bool        panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
                           uint32_t now_ms);
 bool        panel_ui_take_power_request(void);
+/* The state the face is SHOWING, as of the last panel_ui_update -- the one
+ * value his lights are driven from too (E2E v0 slice 2), so the glass and the
+ * LEDs cannot disagree about what state he is in. PANEL_ST_COUNT until the
+ * first update. Safe from any task. */
+panel_state_t panel_ui_shown_state(void);
+/* The face is blanked to its pulsing state tile (released and idle). A touch
+ * that lands while this is true lights the face and must do nothing else. */
+bool panel_ui_blank_showing(void);
 void        panel_ui_stop_sent(unsigned sent, bool link_up, uint32_t now_ms);
 void        panel_ui_probe_sent(unsigned expected, uint32_t now_ms, unsigned gen,
                                 bool link_up);

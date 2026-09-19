@@ -96,6 +96,18 @@ int r2_ops_set_leds(uint16_t mask, const uint8_t *values, size_t n_values,
                         payload, 2u + n_values, tx, ctx);
 }
 
+int r2_ops_status_leds(const uint8_t values[8], uint8_t seq,
+                       r2_tx_fn tx, void *ctx)
+{
+    if (values == NULL) return R2_OPS_BAD_LED_REQUEST;
+    uint8_t payload[2 + 8];
+    payload[0] = (uint8_t)(R2_LED_MASK_ALL >> 8);
+    payload[1] = (uint8_t)(R2_LED_MASK_ALL & 0xFFu);
+    memcpy(payload + 2, values, 8);
+    return r2_gate_send_status(DID_IO, CID_LEDS_16BIT, seq,
+                               payload, sizeof payload, tx, ctx);
+}
+
 int r2_ops_set_rgb(uint8_t r, uint8_t g, uint8_t b,
                    uint8_t seq, r2_tx_fn tx, void *ctx)
 {

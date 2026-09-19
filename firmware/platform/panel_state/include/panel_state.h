@@ -28,6 +28,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "r2_lights.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -199,6 +201,19 @@ const char *panel_state_name(panel_state_t s);        /* the STATE id */
 const char *panel_state_word(panel_state_t s);        /* the word on the glass */
 const char *panel_state_since(panel_state_t s, panel_offline_mode_t m);
 uint32_t    panel_state_colour(panel_state_t s);      /* 0xRRGGBB */
+
+/* THE SAME STATE ON HIS BODY (E2E v0 slice 2). The light row that shows
+ * this state, so the screen and the LEDs are driven by one value rather than
+ * two that can drift.
+ *
+ * Every ranked state has a row of the same name. None of the unranked three
+ * has one: WAKING and UNPROVISIONED have no link to write it over, and
+ * RELEASED is written by GOODNIGHT itself (main.c `lights_goodnight`), once,
+ * before the grant is revoked -- after which nothing may light him, so a row
+ * here could only ever fire in the gap between GOODNIGHT and a fresh WAKE.
+ * An out-of-range state has none. R2L_NONE means leave his lights alone,
+ * never "turn them off". */
+r2_lights_state_t panel_state_lights(panel_state_t s);
 
 #ifdef __cplusplus
 }

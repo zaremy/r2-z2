@@ -2800,3 +2800,80 @@ directly rather than through the shipped table.
   > move (STANCE) holds the guard until reboot rather than releasing it — it is
   > not refused before it is sent.
 
+
+## D-030 — His status lights leave by a second, narrower door, opened by the wake hold
+
+**Status:** accepted, 2026-09-18 · E2E v0 slice 2 · operator ruling
+**Does not change the ceiling, the ladder, or D-029's consent rule.**
+
+### The decision
+
+The board may write his LEDs to show his state, through a **status path** in
+`r2_gate` that is separate from the ceiling:
+
+1. It admits **exactly one op**, `set_leds_16bit` (DID 0x1A / CID 0x0E),
+   matched on both bytes, in **exactly one shape** -- all eight channels,
+   mask 0x00FF, ten bytes. Every other op is refused as `NOT_STATUS`, whether
+   or not the grant is held — including the halts, which keep their own path
+   (D-026).
+2. It admits it **only while the grant is held**. The grant defaults to false,
+   is given by the operator's WAKE hold and is taken back on GOODNIGHT —
+   after the goodnight light is written and **before** the release, so
+   nothing can light him once he has been let go.
+3. The **ceiling is not consulted and not moved**. `r2_gate_check` returns the
+   same verdict for every op whether the grant is held or not; the test ladder
+   still stops at READ.
+
+What gets written is one state, the one the face is showing
+(`panel_ui_shown_state` → `panel_state_lights`), rendered by a C port of
+`mac-prototype/r2_lights.py` that is checked against frames the Python itself
+generated. On a fresh link the wake sweep plays first; GOODNIGHT writes the
+`sleep` row (blue at 0.2, D-023) once, then lets go.
+
+### Why a second door rather than raising the ceiling
+
+D-027 counts LEDS as an actuator, and D-029 makes consent a tap per named op.
+A status light cannot meet that: it has to change on its own — nobody taps
+"idle" — or it is not a status. Raising the ceiling to LEDS would have met it
+by widening every rule written for the ladder at once. A path that admits one
+op, and only after a human chose to wake him, is the narrowest thing that
+works, and it leaves every rung above READ exactly as consented to.
+
+The Mac has had the same shape all along: the operator launches the daemon
+with `--allow leds`, and after that the status layer writes on its own. The
+wake hold is the board's equivalent of that launch.
+
+### Why the grant follows the hold, not the boot
+
+The operator's options were (a) this, (b) raising the ceiling at boot, and
+(c) leaving the lights for later. (b) lets the board change his lights before
+anyone chose to wake him — the one thing D-023's boot-released rule exists to
+prevent. (c) breaks the `CLAUDE.md` rule that nothing needing a glance may live
+only on the screen, and slice 2 exists to meet it.
+
+### Consequences
+
+- **`r2_gate_send` is no longer the only exit.** Its header says so; the
+  status path shares its counters, so `admitted` still counts every frame that
+  left.
+- **The link tick is 20 ms**, down from 100, so the player's 120 ms spacing
+  can render `danger`'s 125 ms half-beat in 120-140 ms gaps (host-tested at
+  the real tick). Everything else in the loop counts beats, not ticks.
+- **Lights give way to all other traffic.** A light waits 120 ms after any
+  other send and never goes out in the 120 ms before a keepalive beat; the
+  operator's test and STOP wait out the remainder after a light. The 120 ms
+  is `r2_probe.py`'s `cmd_safe_interval`, not a board measurement.
+- **What reaches his body today is `idle`, `wake` and `sleep`.** The board has
+  one sensor, the link; `listen`, `thinking` and the rest have rows and a
+  mapping but nothing selects them until slice 3. Stated, not discovered.
+- **`offline` cannot be shown on him** — the link it would travel over is the
+  thing that failed. The face carries it; he keeps showing whatever was last
+  lit. That is the gap `r2_lights.py`'s `waiting` note already names.
+- **THE GOODNIGHT LIGHT DOES NOT HOLD. OBSERVED on the board, 2026-09-18.**
+  The log shows the sleep row written and then the release; minutes later the
+  operator saw him showing "red led and blinking panel" -- not dim blue, and
+  nothing from the board was lighting him by then. Whether that red was steady
+  or his own red/blue alternation was not recorded. So the row as written
+  asserts nothing a glance can find after goodnight, and D-023's goodnight
+  light is still not delivered. Not fixed here; whether he then sleeps on his
+  own (D-023's idle timeout) is still unmeasured.
