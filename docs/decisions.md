@@ -2705,6 +2705,63 @@ should be red**, and this ADR should be revisited rather than cited.
   `panel_ui.c`; it is not a new state colour and must not be used as one.
 - `panel_state.h`'s red comment is now narrower than it reads. Corrected there.
 
+### Amendment A — 2026-09-19: the STOP on the face is red
+
+**Operator's ruling, 2026-09-19: "follow the spec"** — this ADR's own clause
+that a stop reachable from the face *"should be red"*. That clause also said
+the ADR must be revisited rather than cited, so this is the revisit. E2E v0
+slice 3, step 3.4b.
+
+**The decision.** While a reply can reach his body, the lower face (the TALK
+hold area, idle while he answers) is a STOP:
+
+- `PANEL_C_RED`, `#F0574A`;
+- shown **only** while a reply can reach his body, and gone when it cannot;
+- a single tap with no hold, because a halt must never wait;
+- it sends the same three halts as the HARDWARE TEST STOP (D-026):
+  `stop_animation`, `stop_audio` and `perform_leg_action(STOP)`.
+
+**The HARDWARE TEST STOP stays amber.** One panel now has two stops in two
+colours. That follows from applying the reasoning above to a different
+button, not from reversing it:
+
+| | ladder STOP (amber) | face STOP (red) |
+|---|---|---|
+| present | whenever the ladder is open, danger or not | only while he can be moving |
+| reached by | the person who built it, two levels into SERVICE | anyone in the room, from the face |
+| red would read as | a standing fault | the danger it is there to end |
+
+Amber was chosen because red on a permanent bar claims a fault that is not
+there. The face STOP appears when the danger starts and goes when it ends, so
+red claims nothing false. The IEC 60073 mitigation above ("a service panel's
+abort, two levels into a diagnostics menu, operated by the person who built
+it") does not hold on the face, so the default that mitigation set aside
+applies again.
+
+**What it cannot do.** No dome halt exists (D-026). A dome move already
+running finishes; a queued one is cancelled. The face STOP halts audio and
+animation and cancels what has not been sent. It does not reverse anything
+that was already sent.
+
+**CX.** Before: while he chirps and turns, the only stop is SERVICE → HARDWARE
+TEST → STOP, two levels away from where the operator is looking. After: the
+area they just held to talk turns red while he answers, and one tap stops him.
+On the body he goes quiet, and any dome move still running completes.
+
+**Not ruled here:** the pressed shade, and what the face shows after the tap.
+Both belong to 3.4b's implementation. A pressed shade, if one is added, falls
+under this ADR's `STOP_AMBER_DEEP` rule: scoped to `panel_ui.c`, and not a state
+colour.
+
+**Status: nothing implements this yet.** 3.4b builds it. Gate: on the board, a
+tap on the face STOP sends all three halts, confirmed from the panel's own log
+of what went out. The gesture table (3.0b) must include it. It is required
+before 3.5a, the first reply that reaches his body.
+
+**Consequences.** `panel_state.h`'s red comment said red is *"NOT the colour
+of a control that ends one"*. That is no longer true of every control, and the
+comment is corrected in the same change.
+
 ## D-029 — A rung opens its ops, and consent is given per named op
 
 **Status:** accepted, 2026-09-15 · closes #168 part 2
