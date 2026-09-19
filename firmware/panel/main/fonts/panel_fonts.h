@@ -21,8 +21,8 @@
  * two chevrons (U+2039, U+203A) the SERVICE rows and back button use, and
  * techmono_14 the middle dot (U+00B7) in the ladder's footer. NO LOWERCASE -- every
  * string on the status face is uppercase, and dropping it roughly halves the
- * flash. Anything that needs lowercase (the NETWORK page's "no Wi-Fi in this
- * build") stays on Montserrat, which is still built.
+ * flash. Anything that needs lowercase stays on Montserrat, which is still
+ * built.
  *
  * Sizes are the REFERENCE's, measured off the prototype, not Montserrat's:
  * the panel had been carrying sizes chosen to make a substitute face fit.

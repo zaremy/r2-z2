@@ -13,7 +13,7 @@ static const struct {
     const char       *title;
     panel_svc_kind_t  kind;
 } k_svc[PANEL_SVC_COUNT] = {
-    [PANEL_SVC_NETWORK]      = { "NETWORK",       PANEL_SVC_JUMP   },
+    [PANEL_SVC_NETWORK]      = { "NETWORK",       PANEL_SVC_LIST   },
     [PANEL_SVC_R2_LINK]      = { "R2 LINK",       PANEL_SVC_LIST   },
     [PANEL_SVC_DIAGNOSTICS]  = { "DIAGNOSTICS",   PANEL_SVC_LIST   },
     [PANEL_SVC_HW_TEST]      = { "HARDWARE TEST", PANEL_SVC_LADDER },
@@ -202,6 +202,20 @@ static int rows_diagnostics(const panel_svc_facts_t *f, panel_kv_t *out, int max
     return n;
 }
 
+static int rows_network(const panel_svc_facts_t *f, panel_kv_t *out, int max)
+{
+    (void)f;
+    int n = 0;
+    /* The shape of the page, with nothing claimed: this build compiles no
+     * Wi-Fi stack, so there is no SSID, signal or address to read. Same
+     * choice as PROVISIONING below -- name the field, never invent a value. */
+    put(out, &n, max, "SSID",        PANEL_TONE_NONE, "NOT IN BUILD");
+    put(out, &n, max, "SIGNAL",      PANEL_TONE_NONE, "NOT IN BUILD");
+    put(out, &n, max, "ADDRESS",     PANEL_TONE_NONE, "NOT IN BUILD");
+    put(out, &n, max, "PROVISIONED", PANEL_TONE_NONE, "NOT IN BUILD");
+    return n;
+}
+
 static int rows_provisioning(const panel_svc_facts_t *f, panel_kv_t *out, int max)
 {
     (void)f;
@@ -241,6 +255,7 @@ int panel_service_rows(panel_svc_t s, const panel_svc_facts_t *f,
     if (f == NULL || out == NULL || max <= 0) return 0;
     if (panel_service_kind(s) != PANEL_SVC_LIST) return 0;
     switch (s) {
+    case PANEL_SVC_NETWORK:      return rows_network(f, out, max);
     case PANEL_SVC_R2_LINK:      return rows_r2_link(f, out, max);
     case PANEL_SVC_DIAGNOSTICS:  return rows_diagnostics(f, out, max);
     case PANEL_SVC_PROVISIONING: return rows_provisioning(f, out, max);

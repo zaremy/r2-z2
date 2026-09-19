@@ -70,7 +70,8 @@ int  panel_ui_drift_step(void);
 int  panel_ui_full_brightness(void);
 bool panel_ui_is_dimmed(void);
 
-/* The three lateral pages (vault Prototypes/README.md:18). */
+/* The lateral pages: STATUS, SERVICE. NETWORK is a SERVICE row, not a page
+ * (operator ruling 2026-09-19). */
 void        panel_ui_show_page(int page);
 int         panel_ui_page(void);
 
