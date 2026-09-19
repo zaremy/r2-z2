@@ -16,6 +16,7 @@
 #include "lvgl.h"
 #include "panel_state.h"
 #include "panel_gesture.h"
+#include "panel_face.h"
 #include "panel_wake.h"
 #include "panel_service.h"
 #include "panel_probe.h"
@@ -170,9 +171,9 @@ static lv_obj_t    *s_hold_fill;
 static panel_hold_t s_hold;
 static bool         s_power_request;      /* toggle; link_task resolves it */
 /* The press must land on the word, its swatch or its reason line -- the band
- * above the rule. Below it are readings, and above it the chrome. */
-#define HOLD_TOP     40
-#define HOLD_BOTTOM 130
+ * above the rule. Its bounds live in panel_face.h (PANEL_ZONE_WORD), with the
+ * rest of the face's zones, so the hold and the gesture table cannot disagree
+ * about where the word is. */
 static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
 /* EVERY NUMBER BELOW WAS MEASURED off panel-v5-interactive.html, by reading
  * getBoundingClientRect on each element and scaling to the panel's 368 px
@@ -3203,7 +3204,7 @@ bool panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
      * glance must not arm anything applies to a held finger as much as to a
      * tap. */
     const bool on_face = (s_page_at == PAGE_STATUS) && !panel_ui_wake_showing();
-    const bool in_target = on_face && y >= HOLD_TOP && y <= HOLD_BOTTOM;
+    const bool in_target = on_face && panel_face_zone(y) == PANEL_ZONE_WORD;
     bool fire = false;
     const unsigned pm = panel_hold_step(&s_hold, down && on_face, in_target,
                                         voided, max_dev, now_ms, &fire);
@@ -3222,13 +3223,20 @@ bool panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
         lv_obj_clear_flag(s_hold_fill, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (fire) {
-        portENTER_CRITICAL(&s_probe_mux);
-        s_power_request = true;
-        portEXIT_CRITICAL(&s_probe_mux);
-        ESP_LOGI("panel", "hold -> %s", held_awake ? "GOODNIGHT" : "WAKE");
-    }
     return fire;
+}
+
+/* The hold's completion is not the request. ui_task steps it through the
+ * face's gesture table (panel_face.h) and asks for WAKE / GOODNIGHT only if
+ * the table says this press means that -- one place decides what a touch
+ * does. */
+void panel_ui_request_power(void)
+{
+    const bool held_awake = (s_last_tm == NULL) ? false : !s_last_tm->released;
+    portENTER_CRITICAL(&s_probe_mux);
+    s_power_request = true;
+    portEXIT_CRITICAL(&s_probe_mux);
+    ESP_LOGI("panel", "hold -> %s", held_awake ? "GOODNIGHT" : "WAKE");
 }
 
 bool panel_ui_take_power_request(void)
