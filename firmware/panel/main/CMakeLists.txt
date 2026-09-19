@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
+idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c" "panel_net.c"
                             "fonts/michroma_12.c" "fonts/michroma_13.c"
                             "fonts/michroma_16.c" "fonts/michroma_30.c"
                             "fonts/michroma_32.c"
@@ -8,7 +8,7 @@ idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                             "fonts/techmono_26.c"
                             "fonts/techmono_34.c" "fonts/techmono_72.c"
                        INCLUDE_DIRS "." "fonts"
-                       REQUIRES esp_timer bt nvs_flash
+                       REQUIRES esp_timer bt nvs_flash esp_wifi esp_netif esp_http_client mbedtls
                                 r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state r2_lights
                                 panel_service panel_gesture esp_psram spi_flash esp_app_format
                                 # esp_lcd_touch and esp_lvgl_port are needed for
@@ -51,6 +51,21 @@ if(PANEL_SHOT_TOUR)
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SHOT_TOUR=1)
     message(STATUS "panel: SCREENSHOT TOUR enabled (drives the UI itself)")
+endif()
+
+# 3.1 SPIKE (E2E v0 slice 3): Wi-Fi + a real-time audio upload + BLE + the
+# glass together, under self-driven churn, graded by the board on one
+# `SPIKE PASS|FAIL` line. OFF by default -- it drops his link and sends
+# GOODNIGHT/WAKE on a schedule, and spends provider credit on uploads.
+#   idf.py -B build_SPIKE -DPANEL_SPIKE=ON build
+option(PANEL_SPIKE "Slice 3.1 coexistence spike (self-driven churn, self-graded)" OFF)
+if(PANEL_SPIKE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SPIKE=1)
+    message(STATUS "panel: 3.1 SPIKE enabled (drops the link on purpose)")
+endif()
+option(PANEL_SPIKE_SHORT "Shorten the spike to 60 s + 150 s, for iterating" OFF)
+if(PANEL_SPIKE_SHORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SPIKE_SHORT=1)
 endif()
 
 # P4: watch his advertisement without ever connecting (#101). OFF by default --

@@ -54,3 +54,49 @@ CONFIG_LV_USE_SNAPSHOT=y
 # free in PSRAM -- two heaps, and the error message names the one that is fine.
 # CLIB malloc routes LVGL through the ESP allocator, which reaches PSRAM.
 CONFIG_LV_USE_CLIB_MALLOC=y
+
+# --- Wi-Fi beside BLE and the glass (E2E v0 slice 3.1) ----------------------
+# The coexistence configuration OBSERVED on this board (board-capabilities.md,
+# "Wi-Fi and BLE coexist"): BLE controller and host on core 1, Wi-Fi on core 0,
+# software coexistence on. Symbol names copied from coex_check, which verified
+# them in the generated sdkconfig -- a wrong name here fails SILENTLY.
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
+CONFIG_BT_CTRL_PINNED_TO_CORE_1=y
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# TLS buffers from PSRAM: internal RAM is the budget BLE, Wi-Fi and DMA share.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# --- Internal RAM with Wi-Fi, TLS and an audio-rate upload beside BLE and the
+# glass (E2E v0 slice 3.1). MEASURED 2026-09-19 with the PANEL_SPIKE build;
+# each setting below is one that moved a number, and the ones that did not
+# are listed after them.
+#
+# LVGL draw buffer 20 lines, not the BSP's 100. The BSP keeps it out of DMA
+# memory (buff_dma = false), so every flush is copied through a private
+# INTERNAL DMA buffer the size of the flush. 100 lines (73.6 KB) failed with
+# `Failed to allocate priv TX buffer` on the first full redraw with Wi-Fi up;
+# 40 lines fixed an idle board and still failed 5,667 times under a live
+# upload, when the largest DMA block fell to 27.6 KB. 20 lines (14.7 KB): 0.
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=20
+# Wi-Fi/LWIP buffers from PSRAM, fewer static RX buffers, Wi-Fi and LWIP code
+# out of IRAM, and dynamic TLS buffers. With the 20-line flush: the
+# upload-time low-water mark 12 KB -> 40 KB, and free internal RAM while
+# uploading ~55 KB -> ~75 KB (~90 KB once the network tasks' stacks moved to
+# PSRAM). None of it costs anything at a 32 KB/s audio uplink.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# CONFIG_LWIP_IRAM_OPTIMIZATION is not set
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# The block-ack window may not exceed 2x the static RX buffers (esp_wifi
+# refuses to build otherwise); 6 is what it was.
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+#
+# Tried and NOT kept, because they moved nothing: 8 dynamic TX buffers
+# (42,064 B vs 42,036 B), software AES (41,644 B, and a slower handshake).
+# WIFI_LWIP alone, before the flush was shrunk, fixed nothing either.
+# The network tasks' stacks live in PSRAM (panel_net.c): +2 KB low-water.
