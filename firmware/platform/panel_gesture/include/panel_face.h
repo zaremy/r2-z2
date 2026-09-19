@@ -67,7 +67,7 @@ typedef enum {
 typedef enum {
     PANEL_PAGE_UNKNOWN = 0,
     PANEL_PAGE_STATUS,
-    PANEL_PAGE_OTHER,          /* SERVICE or NETWORK: taps and swipes of its own */
+    PANEL_PAGE_OTHER,          /* SERVICE: taps and swipes of its own */
 } panel_face_page_t;
 
 /* What the panel is doing when the input arrives. The ZERO VALUE IS THE SAFE
