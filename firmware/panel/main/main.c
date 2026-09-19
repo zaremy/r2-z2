@@ -22,6 +22,9 @@
  */
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
+#include <string.h>
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -35,6 +38,7 @@
 #include "panel_service.h"
 #include "panel_shot.h"
 #include "panel_touch.h"
+#include "panel_net.h"
 #include "panel_ui.h"
 #include "panel_face.h"
 #include "r2_gate.h"
@@ -108,12 +112,20 @@ static void on_state(r2_link_state_t s, int reason, void *ctx)
     ESP_LOGI(TAG, "link -> %s", r2_link_state_name(s));
 }
 
+#ifdef PANEL_SPIKE
+/* Written on the NimBLE host task, read by the spike: a word-sized store. */
+static volatile uint32_t s_spike_last_rx_ms;
+#endif
+
 static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 {
     (void)ctx;
     uint8_t scratch[64];
     r2_response_t r;
     if (r2_packet_decode(frame, len, scratch, sizeof scratch, &r) != R2_OK) return;
+#ifdef PANEL_SPIKE
+    s_spike_last_rx_ms = now_ms();
+#endif
     const bool is_response = (r.flags & R2_FLAG_IS_RESPONSE) != 0u;
 
     /* A FRAME IS NOT AN ANSWER. Three things have to be true before this
@@ -306,6 +318,10 @@ static void lights_goodnight(void)
     vTaskDelay(pdMS_TO_TICKS(R2_LIGHTS_MIN_INTERVAL_MS));
 }
 
+#ifdef PANEL_SPIKE
+static volatile bool s_spike_power, s_spike_drop;
+#endif
+
 static void link_task(void *arg)
 {
     (void)arg;
@@ -387,6 +403,28 @@ static void link_task(void *arg)
                 ESP_LOGW(TAG, "WAKE: looking for him");
             }
         }
+
+#ifdef PANEL_SPIKE
+        /* The spike's own GOODNIGHT / WAKE. Link and telemetry only -- NO
+         * status grant, because D-030's grant is the operator's hold and a
+         * schedule is not an operator. */
+        if (s_spike_power) {
+            s_spike_power = false;
+            if (r2_link_wanted()) {
+                r2_telemetry_released(&s_tm, true, now_ms());
+                r2_link_release();
+                ESP_LOGW(TAG, "SPIKE: goodnight");
+            } else {
+                r2_telemetry_released(&s_tm, false, now_ms());
+                r2_link_wake();
+                ESP_LOGW(TAG, "SPIKE: wake");
+            }
+        }
+        if (s_spike_drop) {
+            s_spike_drop = false;
+            ESP_LOGW(TAG, "SPIKE: forced link drop (%d)", r2_link_disconnect());
+        }
+#endif
 
         if (panel_ui_take_stop_request()) {
             lights_yield();
@@ -1251,6 +1289,157 @@ static void tour_task(void *arg)
 }
 #endif
 
+#ifdef PANEL_SPIKE
+/* SLICE 3.1 -- does the cloud path coexist with him and the glass?
+ *
+ * D-015 names it an unmeasured precondition. The grilled gate (vault Plan,
+ * E2E v0, 3.1): a 10-minute run with Wi-Fi, a continuous AUDIO-RATE upload,
+ * BLE keepalive and LVGL, under churn -- forced BLE drops, GOODNIGHT/WAKE --
+ * driven by the board and graded by the board, so the operator only powers it.
+ *
+ *   phase A  SPIKE_A_S with Wi-Fi OFF and the same churn: the baseline
+ *            low-water mark, from which the threshold is set and LOGGED
+ *            before phase B starts.
+ *   phase B  SPIKE_B_S with Wi-Fi on, back-to-back real-time uploads.
+ *
+ * FAIL if: no link to him at the start; Wi-Fi never up; internal RAM's
+ * low-water mark under SPIKE_LOW_FLOOR; internal free RAM, sampled through
+ * phase B, ever under SPIKE_STEADY_FLOOR; any gap > 10 s between frames from
+ * him while the link is up and wanted; any upload not 2xx. A reset kills the
+ * run before the summary line, which the grader reads as FAIL.
+ *
+ * FIXED FLOORS, operator ruling 2026-09-19. The first gate was "half of the
+ * Wi-Fi-off low-water mark", set before any data; the fixes that freed RAM
+ * with Wi-Fi ON also freed it with Wi-Fi OFF, so the bar rose with every
+ * improvement. Phase A still runs and still logs the baseline, as context.
+ *
+ * NOT graded here, and graded from the capture instead: display DMA failures
+ * (`priv TX buffer` lines -- ESP-IDF logs them; nothing exposes a count). */
+#ifdef PANEL_SPIKE_SHORT
+/* For iterating on a fix, not for the gate: the gate is the full length. */
+#define SPIKE_A_S         60u
+#define SPIKE_B_S        150u
+#else
+#define SPIKE_A_S        180u
+#define SPIKE_B_S        600u
+#endif
+#define SPIKE_UPLOAD_S    12u     /* one TALK at the plan's 12 s cap */
+#define SPIKE_GAP_MAX_MS 10000u
+#define SPIKE_LOW_FLOOR     (32u * 1024u)   /* the worst transient */
+#define SPIKE_STEADY_FLOOR  (64u * 1024u)   /* free RAM while uploading */
+
+static volatile uint32_t s_steady_min = UINT32_MAX;
+
+static volatile unsigned s_up_ok, s_up_fail;
+static volatile bool s_uploading;
+
+static void spike_upload_task(void *arg)
+{
+    (void)arg;
+    while (s_uploading) {
+        const int rc = panel_net_upload_realtime(SPIKE_UPLOAD_S);
+        if (rc >= 200 && rc < 300) s_up_ok++;
+        else { s_up_fail++; ESP_LOGW(TAG, "SPIKE: upload rc=%d", rc); vTaskDelay(pdMS_TO_TICKS(2000)); }
+    }
+    vTaskDeleteWithCaps(NULL);
+}
+
+/* Runs a phase: churn on a schedule, and the worst gap from him, measured only
+ * while the link is up, wanted, and has been up for 5 s (a reconnect's own
+ * handshake is not a gap). */
+static uint32_t spike_phase(const char *name, uint32_t seconds)
+{
+    uint32_t worst = 0, up_since = 0;
+    bool was_live = false;
+    const uint32_t t0 = now_ms();
+    uint32_t next_drop = t0 + 60000u, next_power = t0 + 120000u;
+    bool asleep = false;
+    uint32_t wake_at = 0;
+    ESP_LOGW(TAG, "SPIKE: phase %s, %u s", name, (unsigned)seconds);
+    while ((uint32_t)(now_ms() - t0) < seconds * 1000u) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        const uint32_t now = now_ms();
+        /* Steady-state free RAM, phase B only, once the first upload is
+         * under way (the one-off Wi-Fi and first-handshake transients are the
+         * low-water mark's to judge, not this). */
+        if (s_uploading && (uint32_t)(now - t0) > 20000u) {
+            const uint32_t f = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (f < s_steady_min) s_steady_min = f;
+        }
+        const bool live = r2_link_is_up() && r2_link_wanted();
+        if (live && !was_live) up_since = now;
+        was_live = live;
+        if (live && (uint32_t)(now - up_since) > 5000u) {
+            const uint32_t since = s_spike_last_rx_ms;
+            const uint32_t ref = (int32_t)(since - up_since) > 0 ? since : up_since;
+            const uint32_t gap = now - ref;
+            if (gap > worst) worst = gap;
+        }
+        if (!asleep && (int32_t)(now - next_drop) >= 0 && live) {
+            s_spike_drop = true;
+            next_drop = now + 90000u;
+        }
+        if (!asleep && (int32_t)(now - next_power) >= 0) {
+            s_spike_power = true; asleep = true; wake_at = now + 10000u;
+            next_power = now + 200000u;
+        }
+        if (asleep && (int32_t)(now - wake_at) >= 0) {
+            s_spike_power = true; asleep = false;
+        }
+    }
+    if (asleep) s_spike_power = true;         /* end the phase awake */
+    ESP_LOGW(TAG, "SPIKE: phase %s done, worst gap %u ms", name, (unsigned)worst);
+    return worst;
+}
+
+static void spike_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGW(TAG, "SPIKE: reset reason %d; waiting for him", (int)esp_reset_reason());
+    const uint32_t t0 = now_ms();
+    while (!r2_link_is_up()) {
+        if ((uint32_t)(now_ms() - t0) > 60000u) {
+            ESP_LOGE(TAG, "SPIKE FAIL no-link (is R2 on and in range?)");
+            vTaskDelete(NULL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    const uint32_t gap_a = spike_phase("A (wifi off)", SPIKE_A_S);
+    const uint32_t base = panel_net_internal_min_ever();
+    ESP_LOGW(TAG, "SPIKE: baseline low-water %u B (context); floors %u B low, %u B steady",
+             (unsigned)base, SPIKE_LOW_FLOOR, SPIKE_STEADY_FLOOR);
+
+    panel_net_start();
+    uint32_t w = now_ms();
+    while (panel_net_state() < PANEL_NET_UP) {
+        if ((uint32_t)(now_ms() - w) > 30000u) {
+            ESP_LOGE(TAG, "SPIKE FAIL wifi-never-up (%s)", panel_net_state_name(panel_net_state()));
+            vTaskDelete(NULL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    s_uploading = true;
+    xTaskCreateWithCaps(spike_upload_task, "spike_up", 8192, NULL, 2, NULL, MALLOC_CAP_SPIRAM);
+    const uint32_t gap_b = spike_phase("B (wifi + uploads)", SPIKE_B_S);
+    s_uploading = false;
+    vTaskDelay(pdMS_TO_TICKS((SPIKE_UPLOAD_S + 12u) * 1000u));   /* let the last finish */
+
+    const uint32_t low = panel_net_internal_min_ever();
+    char why[160] = "";
+    if (low < SPIKE_LOW_FLOOR) strlcat(why, " low-water", sizeof why);
+    if (s_steady_min < SPIKE_STEADY_FLOOR) strlcat(why, " steady-ram", sizeof why);
+    if (gap_a > SPIKE_GAP_MAX_MS || gap_b > SPIKE_GAP_MAX_MS) strlcat(why, " ble-gap", sizeof why);
+    if (s_up_ok == 0 || s_up_fail != 0) strlcat(why, " uploads", sizeof why);
+    ESP_LOGW(TAG, "SPIKE %s%s | low-water %u B (floor %u) | steady min %u B (floor %u) | "
+                  "worst gap A %u ms B %u ms | uploads ok %u fail %u | grade display DMA from the capture",
+             why[0] ? "FAIL" : "PASS", why, (unsigned)low, SPIKE_LOW_FLOOR,
+             (unsigned)s_steady_min, SPIKE_STEADY_FLOOR,
+             (unsigned)gap_a, (unsigned)gap_b, (unsigned)s_up_ok, (unsigned)s_up_fail);
+    vTaskDelete(NULL);
+}
+#endif
+
 #ifdef PANEL_P2_RECONNECT
 /* P2 — time the PANEL'S OWN reconnect (#101, gates AC8).
  *
@@ -1410,7 +1599,7 @@ void app_main(void)
 
     r2_telemetry_reset(&s_tm);
     r2_lights_player_init(&s_lights);
-#if !defined(PANEL_P4_IDLE) && !defined(PANEL_P2_RECONNECT)
+#if !defined(PANEL_P4_IDLE) && !defined(PANEL_P2_RECONNECT) && !defined(PANEL_SPIKE)
     /* BOOT RELEASED. Before the host syncs, so on_sync sees it. Waking him is
      * a deliberate hold on the face, never a side effect of power-on. */
     r2_link_set_wanted(false);
@@ -1447,5 +1636,14 @@ void app_main(void)
 #endif
 #ifdef PANEL_P2_RECONNECT
     xTaskCreate(p2_task,   "panel_p2",     4096, NULL, 4, NULL);
+#endif
+
+#ifdef PANEL_SPIKE
+    xTaskCreate(spike_task, "panel_spike", 4096, NULL, 3, NULL);
+#else
+    /* LAST, after the link and the glass are up: the cloud is optional and
+     * must never delay him (D-015). A board with nothing provisioned does
+     * nothing here. */
+    panel_net_start();
 #endif
 }
