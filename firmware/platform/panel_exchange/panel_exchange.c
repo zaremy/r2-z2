@@ -20,8 +20,8 @@ static px_verdict_t check(const panel_exchange_t *px, uint32_t id,
 uint32_t panel_exchange_begin(panel_exchange_t *px)
 {
     panel_exchange_retire(px, PX_RETIRE_NEW_HOLD);
+    if (px->last_issued == UINT32_MAX) return 0;  /* exhausted: never reuse */
     uint32_t id = px->last_issued + 1;
-    if (id == 0) id = 1;  /* a wrap must not issue the "none" id */
     px->last_issued   = id;
     px->live          = id;
     px->phase         = PX_LISTENING;
@@ -29,17 +29,22 @@ uint32_t panel_exchange_begin(panel_exchange_t *px)
     return id;
 }
 
-px_verdict_t panel_exchange_released(panel_exchange_t *px, uint32_t id)
+px_verdict_t panel_exchange_hold_released(panel_exchange_t *px, uint32_t id)
 {
     px_verdict_t v = check(px, id, PX_LISTENING);
     if (v == PX_OK) px->phase = PX_THINKING;
     return v;
 }
 
-px_verdict_t panel_exchange_transcript(panel_exchange_t *px, uint32_t id)
+px_verdict_t panel_exchange_transcript(panel_exchange_t *px, uint32_t id,
+                                       uint32_t chars)
 {
     px_verdict_t v = check(px, id, PX_THINKING);
     if (v == PX_OK && px->transcript_in) v = PX_DROP_PHASE;  /* one per exchange */
+    if (v == PX_OK && chars == 0) {
+        panel_exchange_retire(px, PX_RETIRE_MISHEARD);
+        return PX_MISHEARD;
+    }
     if (v == PX_OK) px->transcript_in = true;
     return v;
 }
@@ -71,6 +76,7 @@ const char *panel_exchange_verdict_name(px_verdict_t v)
     case PX_OK:            return "ok";
     case PX_DROP_NOT_LIVE: return "drop_not_live";
     case PX_DROP_PHASE:    return "drop_phase";
+    case PX_MISHEARD:      return "misheard";
     }
     return "?";
 }
@@ -81,9 +87,11 @@ const char *panel_exchange_retire_name(px_retire_t r)
     case PX_RETIRE_NONE:      return "none";
     case PX_RETIRE_GOODNIGHT: return "goodnight";
     case PX_RETIRE_STOP:      return "stop";
-    case PX_RETIRE_RELEASE:   return "release";
+    case PX_RETIRE_R2_RELEASED: return "r2_released";
     case PX_RETIRE_LINK_LOST: return "link_lost";
     case PX_RETIRE_NEW_HOLD:  return "new_hold";
+    case PX_RETIRE_MISHEARD:  return "misheard";
+    case PX_RETIRE_TIMEOUT:   return "timeout";
     case PX_RETIRE_DONE:      return "done";
     }
     return "?";
