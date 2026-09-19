@@ -46,7 +46,12 @@ typedef enum {
 
 /* One field of a tool-call reply, as an adapter extracted it. OTHER covers
  * anything that is neither a string nor a number (bool, null, object, array),
- * so a field of the wrong type is refused rather than coerced. */
+ * so a field of the wrong type is refused rather than coerced.
+ *
+ * Strings carry their LENGTH and are matched on it exactly. JSON can encode a
+ * NUL (`"happy\u0000evil"`), and a NUL-terminated compare would read that as
+ * `happy`. Adapters pass the decoded length; the validator never calls strlen
+ * on model output. */
 typedef enum {
     VOICE_FIELD_STRING,
     VOICE_FIELD_NUMBER,
@@ -55,9 +60,11 @@ typedef enum {
 
 typedef struct {
     const char        *key;
+    size_t             key_len;
     voice_field_type_t type;
-    const char        *str;   /* STRING only */
-    double             num;   /* NUMBER only */
+    const char        *str;     /* STRING only */
+    size_t             str_len; /* STRING only */
+    double             num;     /* NUMBER only */
 } voice_field_t;
 
 /* A validated reply. The zero value is "no reply". */
@@ -92,8 +99,12 @@ typedef enum {
 } voice_transport_t;
 
 /* A vendor adapter. `react` asks the model about `heard`, waits at most
- * `timeout_ms`, and extracts the tool call's fields into `fields` (at most
- * `cap`; the count in `*n`). Field strings must stay valid until the next
+ * `timeout_ms`, and extracts the tool call's fields into `fields`, writing at
+ * most `cap`. `*n` is the reply's TOTAL member count, which may exceed `cap`:
+ * voice_react_call() then refuses the reply as DOWN rather than judge a
+ * truncated one, since a duplicate or bad `mood` past the cut would be
+ * invisible. An adapter that cannot count past `cap` must return
+ * VOICE_TRANSPORT_FAILED instead. Field strings must stay valid until the next
  * call. No code outside an adapter names a vendor. */
 typedef struct {
     const char *name;
@@ -104,7 +115,7 @@ typedef struct {
 
 typedef enum {
     VOICE_CALL_OK = 0,        /* `out` holds a validated reply */
-    VOICE_CALL_NOT_ASKED,     /* empty or missing text: the cloud was never called */
+    VOICE_CALL_NOT_ASKED,     /* missing, empty or all-whitespace text: never sent */
     VOICE_CALL_TIMEOUT,       /* the caller retires the exchange as TIMEOUT */
     VOICE_CALL_DOWN,          /* the face shows LLM DOWN */
     VOICE_CALL_REFUSED,       /* the model answered outside the contract; see *why */

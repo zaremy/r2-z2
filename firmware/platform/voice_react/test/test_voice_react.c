@@ -24,9 +24,12 @@ static int failures = 0, checks = 0;
         printf("\n        at %s:%d\n", __FILE__, __LINE__); }\
 } while (0)
 
-#define S(k, v) { (k), VOICE_FIELD_STRING, (v), 0.0 }
-#define N(k, v) { (k), VOICE_FIELD_NUMBER, NULL, (v) }
-#define O(k)    { (k), VOICE_FIELD_OTHER,  NULL, 0.0 }
+/* Lengths come from strlen here only because these literals hold no NUL;
+ * the NUL cases below build their fields by hand. */
+#define SL(x)   ((x) ? strlen(x) : 0)
+#define S(k, v) { (k), SL(k), VOICE_FIELD_STRING, (v), SL(v), 0.0 }
+#define N(k, v) { (k), SL(k), VOICE_FIELD_NUMBER, NULL, 0, (v) }
+#define O(k)    { (k), SL(k), VOICE_FIELD_OTHER,  NULL, 0, 0.0 }
 #define LEN(a)  (sizeof (a) / sizeof (a)[0])
 
 static int is_zero(const voice_react_t *r)
@@ -64,7 +67,7 @@ static void test_bad_moods_are_refused(void)
     voice_field_t oth[]  = { O("mood"), N("dome_deg", 15) };
     refused(oth, LEN(oth), VOICE_REACT_BAD_MOOD, "null mood");
     /* The type decides, not whether a string happens to be attached. */
-    voice_field_t typed[] = { { "mood", VOICE_FIELD_NUMBER, "happy", 0 }, N("dome_deg", 15) };
+    voice_field_t typed[] = { { "mood", 4, VOICE_FIELD_NUMBER, "happy", 5, 0 }, N("dome_deg", 15) };
     refused(typed, LEN(typed), VOICE_REACT_BAD_MOOD, "mood typed NUMBER carrying \"happy\"");
     voice_field_t nul[]  = { S("mood", NULL), N("dome_deg", 15) };
     refused(nul, LEN(nul), VOICE_REACT_BAD_MOOD, "string mood with no text");
@@ -130,11 +133,37 @@ static void test_sound_is_ignored(void)
     voice_field_t f[] = { S("mood", "furious"), N("dome_deg", 15), S("sound", "R2_ANNOYED") };
     refused(f, LEN(f), VOICE_REACT_BAD_MOOD, "bad mood with a sound");
     /* Unknown keys are ignored too, and a NULL key is not a crash. */
-    voice_field_t g[] = { { NULL, VOICE_FIELD_STRING, "x", 0 }, S("mood", "alert"),
+    voice_field_t g[] = { { NULL, 0, VOICE_FIELD_STRING, "x", 1, 0 }, S("mood", "alert"),
                           N("dome_deg", 0), S("speech", "hello") };
     voice_react_t out;
     CHECK(voice_react_validate(g, LEN(g), &out) == VOICE_REACT_OK &&
           out.mood == VOICE_MOOD_ALERT, "NULL key or extra key broke a valid reply");
+}
+
+static void test_embedded_nul_is_not_a_shorter_string(void)
+{
+    /* JSON "happy\u0000evil" decodes to 10 bytes with a NUL at 5. */
+    voice_field_t v[] = { { "mood", 4, VOICE_FIELD_STRING, "happy\0evil", 10, 0 },
+                          N("dome_deg", 15) };
+    refused(v, LEN(v), VOICE_REACT_BAD_MOOD, "mood \"happy\\u0000evil\"");
+    /* A key "mood\u0000x" is not `mood`, so there is no mood at all. */
+    voice_field_t k[] = { { "mood\0x", 6, VOICE_FIELD_STRING, "happy", 5, 0 },
+                          N("dome_deg", 15) };
+    refused(k, LEN(k), VOICE_REACT_NO_MOOD, "key \"mood\\u0000x\"");
+    /* An adapter bug: a NULL pointer with a length. Refused, not dereferenced. */
+    voice_field_t nk[] = { { NULL, 4, VOICE_FIELD_STRING, "happy", 5, 0 },
+                           N("dome_deg", 15) };
+    refused(nk, LEN(nk), VOICE_REACT_NO_MOOD, "NULL key with length 4");
+    voice_field_t ns[] = { { "mood", 4, VOICE_FIELD_STRING, NULL, 5, 0 },
+                           N("dome_deg", 15) };
+    refused(ns, LEN(ns), VOICE_REACT_BAD_MOOD, "NULL mood with length 5");
+    /* A length SHORTER than the text is not honoured as a prefix either. */
+    voice_field_t p[] = { { "mood", 4, VOICE_FIELD_STRING, "happyish", 5, 0 },
+                          N("dome_deg", 15) };
+    voice_react_t out;
+    CHECK(voice_react_validate(p, LEN(p), &out) == VOICE_REACT_OK &&
+          out.mood == VOICE_MOOD_HAPPY,
+          "the length did not bound the compare (it read past 5 bytes)");
 }
 
 static void test_schema_offers_only_mood_and_dome(void)
@@ -194,6 +223,7 @@ static void test_call_failure_paths(void)
     stub_t st = { VOICE_TRANSPORT_OK, ok, LEN(ok), 0, 0 };
     CHECK(call(&st, "", &out, &why) == VOICE_CALL_NOT_ASKED, "empty text asked");
     CHECK(call(&st, NULL, &out, &why) == VOICE_CALL_NOT_ASKED, "NULL text asked");
+    CHECK(call(&st, " \t\n ", &out, &why) == VOICE_CALL_NOT_ASKED, "whitespace asked");
     CHECK(st.calls == 0, "the provider was called %d times for no text", st.calls);
     CHECK(is_zero(&out), "NOT_ASKED left a reply in out");
 
@@ -211,6 +241,17 @@ static void test_call_failure_paths(void)
     stub_t ov = { VOICE_TRANSPORT_OK, many, 9, 0, 0 };
     CHECK(call(&ov, "hi", &out, &why) == VOICE_CALL_DOWN, "overrun accepted");
     CHECK(is_zero(&out), "an overrun left a reply in out");
+
+    /* The case the overrun rule exists for: the first 8 fields are a valid
+     * reply, and a second `mood` sits past the cut. Judged on the 8 alone it
+     * would pass; the total count is what refuses it. */
+    voice_field_t cut[10] = { S("mood", "happy"), N("dome_deg", 30) };
+    for (int i = 2; i < 9; i++) cut[i] = (voice_field_t)S("pad", "x");
+    cut[9] = (voice_field_t)S("mood", "annoyed");
+    stub_t tr = { VOICE_TRANSPORT_OK, cut, 10, 0, 0 };
+    CHECK(call(&tr, "hi", &out, &why) == VOICE_CALL_DOWN,
+          "a truncated reply with a duplicate past the cut was judged");
+    CHECK(is_zero(&out), "a truncated reply left a reply in out");
 
     voice_field_t bad[] = { S("mood", "happy"), N("dome_deg", 60) };
     stub_t rf = { VOICE_TRANSPORT_OK, bad, LEN(bad), 0, 0 };
@@ -258,6 +299,7 @@ int main(void)
     test_bad_angles_are_refused();
     test_duplicates_are_refused();
     test_sound_is_ignored();
+    test_embedded_nul_is_not_a_shorter_string();
     test_schema_offers_only_mood_and_dome();
     test_call_failure_paths();
     test_legal_replies();

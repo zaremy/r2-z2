@@ -1,5 +1,6 @@
 #include "voice_react.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <string.h>
 
@@ -26,10 +27,17 @@ const char VOICE_REACT_PARAMETERS_SCHEMA[] =
     "\"required\":[\"mood\",\"dome_deg\"],"
     "\"additionalProperties\":false}";
 
-static voice_mood_t mood_from(const char *s)
+/* Exact match on length, so an embedded NUL can never shorten the input. */
+static int is(const char *s, size_t len, const char *lit)
+{
+    size_t n = strlen(lit);
+    return s != NULL && len == n && memcmp(s, lit, n) == 0;
+}
+
+static voice_mood_t mood_from(const char *s, size_t len)
 {
     for (int m = VOICE_MOOD_NONE + 1; m < VOICE_MOOD_N; m++)
-        if (strcmp(s, MOOD_NAMES[m]) == 0) return (voice_mood_t)m;
+        if (is(s, len, MOOD_NAMES[m])) return (voice_mood_t)m;
     return VOICE_MOOD_NONE;
 }
 
@@ -41,11 +49,11 @@ voice_react_verdict_t voice_react_validate(const voice_field_t *fields,
 
     for (size_t i = 0; i < n; i++) {
         const char *k = fields[i].key;
-        if (k == NULL) continue;
-        if (strcmp(k, "mood") == 0) {
+        size_t kl = fields[i].key_len;
+        if (is(k, kl, "mood")) {         /* is() refuses a NULL key */
             if (mood) return VOICE_REACT_DUPLICATE;
             mood = &fields[i];
-        } else if (strcmp(k, "dome_deg") == 0) {
+        } else if (is(k, kl, "dome_deg")) {
             if (dome) return VOICE_REACT_DUPLICATE;
             dome = &fields[i];
         }
@@ -53,9 +61,9 @@ voice_react_verdict_t voice_react_validate(const voice_field_t *fields,
     }
 
     if (!mood) return VOICE_REACT_NO_MOOD;
-    if (mood->type != VOICE_FIELD_STRING || mood->str == NULL)
-        return VOICE_REACT_BAD_MOOD;
-    voice_mood_t m = mood_from(mood->str);
+    if (mood->type != VOICE_FIELD_STRING)
+        return VOICE_REACT_BAD_MOOD;     /* a NULL str is refused by is() */
+    voice_mood_t m = mood_from(mood->str, mood->str_len);
     if (m == VOICE_MOOD_NONE) return VOICE_REACT_BAD_MOOD;
 
     if (!dome) return VOICE_REACT_NO_DOME;
@@ -77,7 +85,10 @@ voice_call_t voice_react_call(const voice_provider_t *p, const char *heard,
                               voice_react_t *out, voice_react_verdict_t *why)
 {
     memset(out, 0, sizeof *out);
-    if (heard == NULL || heard[0] == '\0') return VOICE_CALL_NOT_ASKED;
+    if (heard == NULL) return VOICE_CALL_NOT_ASKED;
+    const char *c = heard;
+    while (*c && isspace((unsigned char)*c)) c++;
+    if (*c == '\0') return VOICE_CALL_NOT_ASKED;   /* empty or all whitespace */
 
     voice_field_t fields[MAX_FIELDS];
     size_t n = 0;
