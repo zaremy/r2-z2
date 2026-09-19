@@ -197,7 +197,7 @@ The test is whether the claim is about the **system** or about an
 |---|---|---|
 | **idle** | yes | trivially still true |
 | **attention** | yes | a pending issue is still pending in the morning |
-| listen, thinking, misheard | no | claims about an exchange that has ended |
+| listen, thinking, answering, misheard | no | claims about an exchange that has ended |
 | waiting | no | the link is re-derived live on every connect |
 | wake | no | an instant, not a state |
 | danger | no | a live physical condition we cannot vouch for a day later |

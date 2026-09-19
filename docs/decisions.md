@@ -1282,7 +1282,7 @@ danger  >  offline  >  attention  >  misheard  >  waiting  >  thinking  >  liste
 > **Amended by D-031 (2026-09-19):** `answering` joins the set between
 > `waiting` and `thinking` -- ten states now, still one `offline`.
 
-Nine states, fixed at author time, no inputs. It is a constant, not a computation —
+Nine states (ten since D-031 added `answering`), fixed at author time, no inputs. It is a constant, not a computation —
 which is what keeps it on the enlargement side of the line. **If it ever needs to
 consider anything at runtime — recency, how many rows are bad, what the operator was
 last looking at — it has become the face this decision rejected, and that is a new
@@ -1393,7 +1393,7 @@ disagreement:
 | — | **`wake`**, omitted by the panel list entirely |
 
 Meanwhile the severity rank above is a **closed nine-state set with one
-`offline`**, and D-023 added `released`, `waking` and `unprovisioned` outside it
+`offline`** (ten since D-031), and D-023 added `released`, `waking` and `unprovisioned` outside it
 by design. So "all states render per the severity rank" was unimplementable as
 written: the rank does not cover the states the panel names.
 
@@ -1417,6 +1417,7 @@ It follows that:
    different things that were one word apart.
 3. **`listen` is the name.** `listening` was the panel spec's own coinage.
 4. **The severity rank is unchanged — still nine states, still one `offline`.**
+   *(Superseded in count by D-031: ten states, `answering` added; still one `offline`.)*
    That matters: the rank stays a constant over a closed set, which is what
    keeps this on the enlargement side of the line drawn above. Ranking eleven
    states, three of them views, would have made it a computation over a
