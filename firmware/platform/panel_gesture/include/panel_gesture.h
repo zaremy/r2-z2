@@ -99,6 +99,35 @@ typedef struct {
  * no-op, it is a different control. */
 panel_gesture_t panel_gesture_classify(const panel_press_t *p);
 
+/* HOLD TO UNLOCK (E2E v0 slice 1). WAKE and GOODNIGHT are a finger held on
+ * the state word, not a tap: D-023 ruled there is no confirm dialog and that a
+ * thumb steadying the droid is an argument for the control being HARD TO HIT
+ * -- a hold is that, with the progress shown so the operator learns it from
+ * the first brush. Chosen, not measured. */
+#define PANEL_HOLD_MS 700u
+
+typedef struct {
+    bool     active;     /* a qualifying press is being held */
+    bool     spent;      /* this press fired or was cancelled; wait for a lift */
+    uint32_t since_ms;
+} panel_hold_t;
+
+/* One look at the finger. `down` is whether one is on the glass now,
+ * `in_target` whether THIS press landed on the control (fixed for the press),
+ * `max_dev` how far it has strayed. Returns progress in permille, 0..1000, and
+ * sets *fire exactly once, on the look that completes the hold.
+ *
+ * A press that strays past PANEL_TAP_PX is cancelled and cannot restart until
+ * the finger lifts: a swipe that pauses is not a hold.
+ *
+ * `voided` is the press having been consumed by something else -- D-017's
+ * wake frame, dismissed by it. A voided press is spent whole, even if it was
+ * already holding. Without this the finger that dismissed the OFFLINE frame
+ * could stay put and fire GOODNIGHT 700 ms later (review of #190). */
+unsigned panel_hold_step(panel_hold_t *h, bool down, bool in_target,
+                         bool voided, int32_t max_dev, uint32_t now_ms,
+                         bool *fire);
+
 #ifdef __cplusplus
 }
 #endif

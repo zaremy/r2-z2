@@ -18,6 +18,7 @@ static panel_touch_extremes_t s_ex = { .points = 0, .min_x = INT16_MAX,
                                        .max_y = INT16_MIN };
 static volatile panel_swipe_t s_swipe;
 static lv_point_t s_press_at;
+static volatile int16_t s_hold_x, s_hold_y;   /* s_press_at, for other tasks */
 static lv_point_t s_last_touch;
 /* VOLATILE because three tasks read it now. Written only by touch_task, but
  * read by the LVGL timer task (indev_read, which decides whether LVGL sees a
@@ -82,7 +83,7 @@ static volatile bool s_press_began;   /* a finger landed since last taken */
 static volatile bool s_gesture_void;  /* this press must become neither swipe nor tap */
 static volatile bool s_tap;           /* a press that barely moved, released */
 static volatile int16_t s_tap_x, s_tap_y;
-static int32_t s_press_max;           /* furthest this press strayed */
+static volatile int32_t s_press_max;  /* furthest this press strayed */
 /* HOW MANY POLLS SAW THIS PRESS. The measurement that forced it: of 22 presses
  * from a finger, the eight seen EXACTLY ONCE were every one classified a tap --
  * a press seen once reports zero travel, because its press position is also its
@@ -199,7 +200,10 @@ void panel_touch_poll(void)
 
     if (fingers > 0) {
         if (!s_pressing) {
-            s_press_at.x = x; s_press_at.y = y; s_pressing = true;
+            s_press_at.x = x; s_press_at.y = y;
+            s_hold_x = (int16_t)x; s_hold_y = (int16_t)y;
+            s_press_max = 0;       /* before s_pressing: a reader never sees the last press's drift */
+            s_pressing = true;
             s_press_began = true;
             s_gesture_void = false;
             s_press_max = 0;
@@ -474,4 +478,14 @@ panel_swipe_t panel_touch_take_swipe(void)
     const panel_swipe_t s = s_swipe;
     s_swipe = PANEL_SWIPE_NONE;
     return s;
+}
+
+bool panel_touch_down(int16_t *x, int16_t *y, int32_t *max_dev, bool *voided)
+{
+    if (!s_pressing) return false;
+    if (x) *x = s_hold_x;
+    if (y) *y = s_hold_y;
+    if (max_dev) *max_dev = s_press_max;
+    if (voided) *voided = s_gesture_void;
+    return true;
 }

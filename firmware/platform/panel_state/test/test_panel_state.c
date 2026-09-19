@@ -482,6 +482,42 @@ static void test_rest_is_not_the_no_claim_colour(void)
               panel_state_name((panel_state_t)i));
 }
 
+/* ---- GOODNIGHT (D-023, E2E v0 slice 1) ---------------------------------- */
+
+static void test_released_is_shown_whatever_the_link_says(void)
+{
+    panel_state_t st; panel_offline_mode_t m;
+    /* Long gone: without the flag this is OFFLINE, a fault. */
+    panel_state_from_power(true, false, 0xFFFFFFFFu, &st, &m);
+    CHECK(st == PANEL_ST_RELEASED, "a long release read as %d", (int)st);
+    CHECK(m == PANEL_OFF_COUNT, "released carried an offline mode");
+    /* Still up while the teardown runs: the claim is about the tap. */
+    panel_state_from_power(true, true, 0, &st, &m);
+    CHECK(st == PANEL_ST_RELEASED, "released showed the link instead");
+}
+
+static void test_released_raises_no_ranked_state(void)
+{
+    panel_state_t st; panel_offline_mode_t m;
+    const uint32_t mask = panel_state_from_power(true, false, 0xFFFFFFFFu, &st, &m);
+    CHECK(mask == 0, "released set ranked bits 0x%x", (unsigned)mask);
+    CHECK(!panel_state_wakes(st), "released would wake the household");
+    CHECK(!panel_state_is_ranked(st), "released entered the severity order");
+}
+
+static void test_not_released_is_exactly_from_link(void)
+{
+    const uint32_t away[] = { 0, PANEL_WAKING_BOUND_MS, PANEL_WAKING_BOUND_MS + 1, 0xFFFFFFFFu };
+    for (int up = 0; up < 2; up++)
+        for (unsigned i = 0; i < sizeof away / sizeof away[0]; i++) {
+            panel_state_t a, b; panel_offline_mode_t ma, mb;
+            const uint32_t ka = panel_state_from_power(false, up, away[i], &a, &ma);
+            const uint32_t kb = panel_state_from_link(up, away[i], &b, &mb);
+            CHECK(ka == kb && a == b && ma == mb,
+                  "from_power diverged from from_link (up=%d away=%u)", up, (unsigned)away[i]);
+        }
+}
+
 int main(void)
 {
     test_unranked_states_report_minus_one();
@@ -509,6 +545,9 @@ int main(void)
     test_the_state_is_listen_and_the_word_is_listening();
     test_colour_partitions_by_meaning();
     test_rest_is_not_the_no_claim_colour();
+    test_released_is_shown_whatever_the_link_says();
+    test_released_raises_no_ranked_state();
+    test_not_released_is_exactly_from_link();
 
     printf("%s: %d checks, %d failures\n",
            failures ? "FAIL" : "PASS", checks, failures);

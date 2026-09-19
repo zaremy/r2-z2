@@ -76,7 +76,7 @@ static const row_t k_row[PANEL_ST_COUNT] = {
      * HIM AWAKE" rather than "ASLEEP": the same observation that looks like
      * sleep is what a failure looks like, and the panel must not promote one
      * to the other. */
-    [PANEL_ST_RELEASED]     = { "released",     "RELEASED",  "KEEPALIVE OFF",   PANEL_C_MAGENTA },
+    [PANEL_ST_RELEASED]     = { "released",     "RELEASED",  "HOLD TO WAKE",    PANEL_C_MAGENTA },
     [PANEL_ST_WAKING]       = { "waking",       "WAKING",    "FINDING HIM",     PANEL_C_BLUE  },
     [PANEL_ST_UNPROVISIONED]= { "unprovisioned","SETUP",     "NOT PAIRED YET",  PANEL_C_BLUE  },
 };
@@ -195,6 +195,18 @@ uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
     if (out_state) *out_state = (won == PANEL_ST_COUNT) ? PANEL_ST_WAKING : won;
     if (out_mode)  *out_mode  = mode;
     return active;
+}
+
+uint32_t panel_state_from_power(bool released, bool link_up,
+                                uint32_t unreachable_ms,
+                                panel_state_t *out_state,
+                                panel_offline_mode_t *out_mode)
+{
+    if (!released)
+        return panel_state_from_link(link_up, unreachable_ms, out_state, out_mode);
+    if (out_state) *out_state = PANEL_ST_RELEASED;
+    if (out_mode)  *out_mode  = PANEL_OFF_COUNT;
+    return 0;
 }
 
 unsigned panel_state_waking_permille(uint32_t unreachable_ms)

@@ -179,6 +179,20 @@ uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
  * multiply that overflowed would send the bar back to empty. */
 unsigned panel_state_waking_permille(uint32_t unreachable_ms);
 
+/* The face's state, with GOODNIGHT taken into account (E2E v0 slice 1).
+ *
+ * Released wins over everything the link says, including a link still UP for
+ * the moment its teardown takes: `released` is a claim about what WE did
+ * (D-023), true from the tap, and never promoted to `asleep`. It sets no
+ * ranked bit, so it cannot wake the household (panel_state_wakes) and cannot
+ * beat a real fault in panel_state_resolve -- it reaches the glass only by
+ * being chosen here, the way `waking` does. Not released: exactly
+ * panel_state_from_link. */
+uint32_t panel_state_from_power(bool released, bool link_up,
+                                uint32_t unreachable_ms,
+                                panel_state_t *out_state,
+                                panel_offline_mode_t *out_mode);
+
 /* Rendering. `since` for `offline` depends on the display mode; for every
  * other state the mode is ignored. */
 const char *panel_state_name(panel_state_t s);        /* the STATE id */

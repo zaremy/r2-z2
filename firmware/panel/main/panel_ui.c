@@ -15,6 +15,7 @@
 #include "esp_system.h"
 #include "lvgl.h"
 #include "panel_state.h"
+#include "panel_gesture.h"
 #include "panel_wake.h"
 #include "panel_service.h"
 #include "panel_probe.h"
@@ -162,6 +163,17 @@ static const char *k_page_name[PAGE_COUNT] = { "STATUS", "SERVICE", "NETWORK" };
 
 static lv_obj_t *s_face_word, *s_face_since, *s_face_swatch;
 static lv_obj_t *s_waking_fill;       /* AC8: the rule, filling while waking */
+/* The same rule filling under a HELD finger (slice 1). Separate from the
+ * waking fill so neither has to remember the other's width, and created after
+ * it so a hold draws on top of a wake in progress -- the finger is the newer
+ * intent. */
+static lv_obj_t    *s_hold_fill;
+static panel_hold_t s_hold;
+static bool         s_power_request;      /* toggle; link_task resolves it */
+/* The press must land on the word, its swatch or its reason line -- the band
+ * above the rule. Below it are readings, and above it the chrome. */
+#define HOLD_TOP     40
+#define HOLD_BOTTOM 130
 static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
 /* EVERY NUMBER BELOW WAS MEASURED off panel-v5-interactive.html, by reading
  * getBoundingClientRect on each element and scaling to the panel's 368 px
@@ -2315,6 +2327,13 @@ static void build_status_face(lv_obj_t *pg)
     lv_obj_set_style_radius(s_waking_fill, 0, 0);
     lv_obj_add_flag(s_waking_fill, LV_OBJ_FLAG_HIDDEN);
 
+    s_hold_fill = lv_obj_create(pg);
+    lv_obj_set_size(s_hold_fill, 0, 4);
+    lv_obj_set_pos(s_hold_fill, V5_PAD, 134);
+    lv_obj_set_style_border_width(s_hold_fill, 0, 0);
+    lv_obj_set_style_radius(s_hold_fill, 0, 0);
+    lv_obj_add_flag(s_hold_fill, LV_OBJ_FLAG_HIDDEN);
+
     /* ---- R2 PWR: label, bar graph, value ------------------------------ */
     lv_obj_t *pk = lv_label_create(pg);
     lv_label_set_text(pk, "R2 PWR");
@@ -2951,7 +2970,7 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
     panel_state_t st;
     panel_offline_mode_t mode;
     const uint32_t away = r2_telemetry_unreachable_ms(t, now_ms);
-    panel_state_from_link(t->link == R2_TM_UP, away, &st, &mode);
+    panel_state_from_power(t->released, t->link == R2_TM_UP, away, &st, &mode);
     set_face(st, mode, t, now_ms);
 
     /* The bar moves every tick, not only on a state change: progress that
@@ -3118,3 +3137,54 @@ int panel_ui_drift_step(void) { return s_drift_step; }
  * numbers for one concept, and the kind that drift apart silently. */
 int panel_ui_full_brightness(void) { return BURN_FULL_PERCENT; }
 bool panel_ui_is_dimmed(void) { return s_dimmed; }
+
+/* ---- WAKE / GOODNIGHT: hold to unlock (E2E v0 slice 1) ------------------ */
+
+bool panel_ui_hold(bool down, int x, int y, bool voided, int32_t max_dev,
+                   uint32_t now_ms)
+{
+    (void)x;
+    if (s_hold_fill == NULL) return false;
+
+    /* Only on the face, and never under the wake frame: D-017's rule that a
+     * glance must not arm anything applies to a held finger as much as to a
+     * tap. */
+    const bool on_face = (s_page_at == PAGE_STATUS) && !panel_ui_wake_showing();
+    const bool in_target = on_face && y >= HOLD_TOP && y <= HOLD_BOTTOM;
+    bool fire = false;
+    const unsigned pm = panel_hold_step(&s_hold, down && on_face, in_target,
+                                        voided, max_dev, now_ms, &fire);
+
+    /* The fill is the colour of WHERE THE HOLD LEADS, so the operator sees
+     * what they are about to do before it happens: blue for waking, magenta
+     * for released (panel_state's own colours for those states). Cosmetic
+     * only -- the direction itself is decided on link_task. */
+    const bool held_awake = (s_last_tm == NULL) ? false : !s_last_tm->released;
+    if (pm == 0 || pm >= 1000u) {
+        lv_obj_add_flag(s_hold_fill, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_style_bg_color(s_hold_fill,
+            lv_color_hex(held_awake ? PANEL_C_MAGENTA : PANEL_C_BLUE), 0);
+        lv_obj_set_width(s_hold_fill, (PANEL_W - 2 * V5_PAD) * (int)pm / 1000);
+        lv_obj_clear_flag(s_hold_fill, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (fire) {
+        portENTER_CRITICAL(&s_probe_mux);
+        s_power_request = true;
+        portEXIT_CRITICAL(&s_probe_mux);
+        ESP_LOGI("panel", "hold -> %s", held_awake ? "GOODNIGHT" : "WAKE");
+    }
+    return fire;
+}
+
+bool panel_ui_take_power_request(void)
+{
+    /* Take-and-clear under the lock, for the reason the STOP's is: a tap
+     * stored between the load and the clear would be erased unheard. */
+    portENTER_CRITICAL(&s_probe_mux);
+    const bool want = s_power_request;
+    s_power_request = false;
+    portEXIT_CRITICAL(&s_probe_mux);
+    return want;
+}
