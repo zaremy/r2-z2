@@ -1,4 +1,5 @@
 idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c" "panel_net.c"
+                            "panel_mic.c"
                             "fonts/michroma_12.c" "fonts/michroma_13.c"
                             "fonts/michroma_16.c" "fonts/michroma_30.c"
                             "fonts/michroma_32.c"
@@ -10,7 +11,7 @@ idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                        INCLUDE_DIRS "." "fonts"
                        REQUIRES esp_timer bt nvs_flash esp_wifi esp_netif esp_http_client mbedtls
                                 r2_link r2_ops r2_gate r2_packet r2_telemetry panel_state r2_lights
-                                panel_service panel_gesture esp_psram spi_flash esp_app_format
+                                panel_service panel_gesture panel_exchange esp_psram spi_flash esp_app_format
                                 # esp_lcd_touch and esp_lvgl_port are needed for
                                 # lvgl_port_remove_touch(). Without esp_lcd_touch
                                 # on the include path, esp_lvgl_port_touch.h
@@ -19,7 +20,13 @@ idf_component_register(SRCS "main.c" "panel_ui.c" "panel_shot.c" "panel_touch.c"
                                 # function silently does not exist and the error
                                 # is "implicit declaration", which points at the
                                 # call rather than at the missing dependency.
-                                esp_lcd_touch espressif__esp_lvgl_port)
+                                esp_lcd_touch espressif__esp_lvgl_port
+                                # The mic codec (panel_mic.c, E2E v0 slice 3.2).
+                                # Transitive through the BSP's own dependency on
+                                # it, same as esp_lcd_touch above -- declared
+                                # explicitly rather than trusted, for the reason
+                                # in that comment.
+                                espressif__esp_codec_dev)
 
 # P2: time the panel's own reconnect (#101, gates AC8). OFF by default --
 # deliberately dropping the BLE link over and over is a measurement, not
@@ -66,6 +73,22 @@ endif()
 option(PANEL_SPIKE_SHORT "Shorten the spike to 60 s + 150 s, for iterating" OFF)
 if(PANEL_SPIKE_SHORT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_SPIKE_SHORT=1)
+endif()
+
+# 3.2's own verification gate: dump a completed TALK capture to the storage
+# partition so tools/grab_audio.sh can pull it off and whisper.cpp can be
+# asked whether it heard the fixed phrase. OFF by default -- it reuses the
+# same partition space panel_shot's slots use, so it must never be combined
+# with PANEL_SHOT_TOUR / PANEL_SHOT_WAKE, and the shipping build has no
+# reason to write flash on every hold.
+#   idf.py -DPANEL_MIC_DUMP=ON build
+option(PANEL_MIC_DUMP "Dump each TALK capture to flash for tools/grab_audio.sh" OFF)
+if(PANEL_MIC_DUMP)
+    if(PANEL_SHOT_TOUR OR PANEL_SHOT_WAKE)
+        message(FATAL_ERROR "PANEL_MIC_DUMP and any PANEL_SHOT_* both use 'storage'; pick one")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PANEL_MIC_DUMP=1)
+    message(STATUS "panel: MIC DUMP enabled (writes captures to flash)")
 endif()
 
 # P4: watch his advertisement without ever connecting (#101). OFF by default --

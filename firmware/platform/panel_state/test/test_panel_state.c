@@ -256,24 +256,24 @@ static void test_waking_is_bounded(void)
      * every reconnect or, keyed on DOWN being held, never says offline at all
      * -- which is what shipped. */
     panel_state_t st; panel_offline_mode_t m;
-    panel_state_from_link(false, 0, &st, &m);
+    panel_state_from_link(false, 0, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_WAKING, "a link that just dropped read %s",
           panel_state_name(st));
-    panel_state_from_link(false, PANEL_WAKING_BOUND_MS, &st, &m);
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_WAKING,
           "a reconnect exactly at the bound read %s -- the bound is inclusive",
           panel_state_name(st));
     CHECK(m == PANEL_OFF_COUNT, "waking left an offline view set");
 
     /* One millisecond past it, he is gone. */
-    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, &st, &m);
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_OFFLINE, "1 ms past the bound read %s",
           panel_state_name(st));
 
     /* And it STAYS offline however long he is away: nothing past the bound is
      * allowed to fall back into waking, including a count near the top of
      * the range. */
-    panel_state_from_link(false, 0xFFFFFFFFu, &st, &m);
+    panel_state_from_link(false, 0xFFFFFFFFu, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_OFFLINE, "gone for 49 days read %s",
           panel_state_name(st));
 
@@ -292,7 +292,7 @@ static void test_a_live_link_is_never_offline(void)
     /* A caller passing a stale count beside a live link must not be able to
      * call him offline. Up wins, whatever the clock says. */
     panel_state_t st; panel_offline_mode_t m;
-    panel_state_from_link(true, 0xFFFFFFFFu, &st, &m);
+    panel_state_from_link(true, 0xFFFFFFFFu, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_IDLE, "a live link with a stale count read %s",
           panel_state_name(st));
     CHECK(m == PANEL_OFF_COUNT, "a live link left an offline view set");
@@ -329,7 +329,7 @@ static void test_waking_progress_saturates_and_never_wraps(void)
 static void test_past_the_bound_is_offline_via_r2(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, &st, &m);
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_OFFLINE, "past the bound gave %s", panel_state_name(st));
     CHECK(m == PANEL_OFF_R2,
           "an unreachable R2 blamed something other than the BLE link");
@@ -343,24 +343,89 @@ static void test_past_the_bound_is_offline_via_r2(void)
 static void test_link_up_is_idle_and_nothing_richer(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    const uint32_t mask = panel_state_from_link(true, 0, &st, &m);
+    const uint32_t mask = panel_state_from_link(true, 0, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_IDLE, "link up gave %s", panel_state_name(st));
     /* The mask, not just the winner: `idle` would also be the answer if the
-     * derivation had ALSO claimed `listen` and lost the contest. This board
-     * has no microphone, so listen must never be a candidate in the first
-     * place. */
+     * derivation had ALSO claimed `listen` and lost the contest. A caller
+     * that passes PANEL_ST_COUNT -- no live exchange -- must get exactly
+     * `idle` as a candidate, nothing else. */
     CHECK(mask == (1u << PANEL_ST_IDLE),
-          "link up made a state other than idle a candidate");
+          "no voice state still made something other than idle a candidate");
     /* The mode matters even when there is no fault: panel_ui treats it as part
      * of the repaint identity, so a stale PANEL_OFF_R2 written here would
      * decide whether a later transition repaints at all. */
     CHECK(m == PANEL_OFF_COUNT, "link up left an offline view set");
 }
 
+static void test_voice_state_wins_over_idle_while_link_is_up(void)
+{
+    /* E2E v0 slice 3.2: LISTEN, THINKING and MISHEARD are real states now,
+     * each strictly more severe than idle in D-017's rank, so any one of
+     * them present must win the contest, not merely be offered and lose. */
+    const panel_state_t voices[] = {
+        PANEL_ST_LISTEN, PANEL_ST_THINKING, PANEL_ST_MISHEARD,
+        PANEL_ST_ANSWERING,
+    };
+    for (size_t i = 0; i < sizeof voices / sizeof voices[0]; i++) {
+        panel_state_t st; panel_offline_mode_t m;
+        const uint32_t mask = panel_state_from_link(true, 0, voices[i], &st, &m);
+        CHECK(st == voices[i], "voice state %s lost to %s",
+              panel_state_name(voices[i]), panel_state_name(st));
+        CHECK(mask == ((1u << PANEL_ST_IDLE) | (1u << voices[i])),
+              "voice state %s changed which states were candidates",
+              panel_state_name(voices[i]));
+    }
+}
+
+static void test_voice_state_is_ignored_while_the_link_is_down(void)
+{
+    /* A hold cannot start without `awake` (panel_face.h rule 6), so a real
+     * caller never has a voice state to report here -- but a stale one must
+     * not silently outrank a real fault if it is ever passed anyway. */
+    panel_state_t st; panel_offline_mode_t m;
+    const uint32_t mask = panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1,
+                                                PANEL_ST_LISTEN, &st, &m);
+    CHECK(st == PANEL_ST_OFFLINE, "a stale voice state beat a real fault: %s",
+          panel_state_name(st));
+    CHECK(mask == (1u << PANEL_ST_OFFLINE),
+          "a stale voice state was offered as a candidate while offline");
+}
+
+static void test_out_of_range_voice_state_reports_nothing(void)
+{
+    /* PANEL_ST_COUNT is the documented "no live exchange" value, and
+     * anything else out of the ranked set (RELEASED, WAKING, UNPROVISIONED,
+     * or plain garbage) must be refused the same way -- a caller's bug must
+     * not become a state on the glass. */
+    panel_state_t st; panel_offline_mode_t m;
+    const uint32_t mask = panel_state_from_link(true, 0, PANEL_ST_COUNT, &st, &m);
+    CHECK(mask == (1u << PANEL_ST_IDLE), "PANEL_ST_COUNT was treated as a state");
+
+    const uint32_t mask2 = panel_state_from_link(true, 0, PANEL_ST_RELEASED,
+                                                 &st, &m);
+    CHECK(mask2 == (1u << PANEL_ST_IDLE),
+          "an unranked voice state (RELEASED) was offered as a candidate");
+}
+
+static void test_released_ignores_a_live_voice_state(void)
+{
+    /* GOODNIGHT wins over an exchange in progress (panel_face.h precedence
+     * #4); this is the other half -- once `released` is true, whatever the
+     * caller still passes for voice_state must not resurrect the exchange
+     * on the glass. Retiring it is the caller's job (panel_exchange_retire),
+     * not this function's to notice. */
+    panel_state_t st; panel_offline_mode_t m;
+    const uint32_t mask = panel_state_from_power(true, true, 0, PANEL_ST_LISTEN,
+                                                 &st, &m);
+    CHECK(st == PANEL_ST_RELEASED, "released lost to a stale voice state: %s",
+          panel_state_name(st));
+    CHECK(mask == 0u, "released left a voice state in the candidate mask");
+}
+
 static void test_transition_is_waking_and_stays_unranked(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    const uint32_t mask = panel_state_from_link(false, 1000, &st, &m);
+    const uint32_t mask = panel_state_from_link(false, 1000, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_WAKING, "a link transition gave %s",
           panel_state_name(st));
     /* Chosen deliberately, never resolved to. If `waking` were in the mask it
@@ -384,8 +449,8 @@ static void test_offline_beats_idle_if_both_were_ever_set(void)
 static void test_null_outs_are_tolerated(void)
 {
     /* A caller that wants only the mask must not have to invent storage. */
-    panel_state_from_link(true, 0, NULL, NULL);
-    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, NULL, NULL);
+    panel_state_from_link(true, 0, PANEL_ST_COUNT, NULL, NULL);
+    panel_state_from_link(false, PANEL_WAKING_BOUND_MS + 1, PANEL_ST_COUNT, NULL, NULL);
     CHECK(1, "null out-params did not crash");
 }
 
@@ -508,18 +573,18 @@ static void test_released_is_shown_whatever_the_link_says(void)
 {
     panel_state_t st; panel_offline_mode_t m;
     /* Long gone: without the flag this is OFFLINE, a fault. */
-    panel_state_from_power(true, false, 0xFFFFFFFFu, &st, &m);
+    panel_state_from_power(true, false, 0xFFFFFFFFu, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_RELEASED, "a long release read as %d", (int)st);
     CHECK(m == PANEL_OFF_COUNT, "released carried an offline mode");
     /* Still up while the teardown runs: the claim is about the tap. */
-    panel_state_from_power(true, true, 0, &st, &m);
+    panel_state_from_power(true, true, 0, PANEL_ST_COUNT, &st, &m);
     CHECK(st == PANEL_ST_RELEASED, "released showed the link instead");
 }
 
 static void test_released_raises_no_ranked_state(void)
 {
     panel_state_t st; panel_offline_mode_t m;
-    const uint32_t mask = panel_state_from_power(true, false, 0xFFFFFFFFu, &st, &m);
+    const uint32_t mask = panel_state_from_power(true, false, 0xFFFFFFFFu, PANEL_ST_COUNT, &st, &m);
     CHECK(mask == 0, "released set ranked bits 0x%x", (unsigned)mask);
     CHECK(!panel_state_wakes(st), "released would wake the household");
     CHECK(!panel_state_is_ranked(st), "released entered the severity order");
@@ -531,8 +596,8 @@ static void test_not_released_is_exactly_from_link(void)
     for (int up = 0; up < 2; up++)
         for (unsigned i = 0; i < sizeof away / sizeof away[0]; i++) {
             panel_state_t a, b; panel_offline_mode_t ma, mb;
-            const uint32_t ka = panel_state_from_power(false, up, away[i], &a, &ma);
-            const uint32_t kb = panel_state_from_link(up, away[i], &b, &mb);
+            const uint32_t ka = panel_state_from_power(false, up, away[i], PANEL_ST_COUNT, &a, &ma);
+            const uint32_t kb = panel_state_from_link(up, away[i], PANEL_ST_COUNT, &b, &mb);
             CHECK(ka == kb && a == b && ma == mb,
                   "from_power diverged from from_link (up=%d away=%u)", up, (unsigned)away[i]);
         }
@@ -587,6 +652,10 @@ int main(void)
     test_waking_progress_saturates_and_never_wraps();
     test_past_the_bound_is_offline_via_r2();
     test_link_up_is_idle_and_nothing_richer();
+    test_voice_state_wins_over_idle_while_link_is_up();
+    test_voice_state_is_ignored_while_the_link_is_down();
+    test_out_of_range_voice_state_reports_nothing();
+    test_released_ignores_a_live_voice_state();
     test_transition_is_waking_and_stays_unranked();
     test_offline_beats_idle_if_both_were_ever_set();
     test_null_outs_are_tolerated();

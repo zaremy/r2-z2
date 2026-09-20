@@ -157,10 +157,18 @@ panel_state_t panel_state_resolve(uint32_t active);
  * on the premise that it "resolves itself in seconds"; this is what holds it
  * to that.
  *
+ * `voice_state` is what the hold and the exchange (panel_exchange, E2E v0
+ * slice 3.2) say is happening right now -- PANEL_ST_LISTEN, _THINKING,
+ * _MISHEARD or _ANSWERING -- or PANEL_ST_COUNT for "no live exchange", which
+ * a caller with nothing to report must pass rather than guessing IDLE. Only
+ * used while the link is up: an exchange cannot be live with R2 unreachable,
+ * because the hold that starts one requires `awake` (panel_face.h rule 6).
+ *
  * Writes the resolved state to `*out_state` and, when that is `offline`, the
  * view to `*out_mode`. Returns the mask it built, so a caller (and a test)
  * can see WHICH states were candidates rather than only which one won. */
 uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
+                               panel_state_t voice_state,
                                panel_state_t *out_state,
                                panel_offline_mode_t *out_mode);
 
@@ -193,9 +201,10 @@ unsigned panel_state_waking_permille(uint32_t unreachable_ms);
  * ranked bit, so it cannot wake the household (panel_state_wakes) and cannot
  * beat a real fault in panel_state_resolve -- it reaches the glass only by
  * being chosen here, the way `waking` does. Not released: exactly
- * panel_state_from_link. */
+ * panel_state_from_link, `voice_state` passed straight through. */
 uint32_t panel_state_from_power(bool released, bool link_up,
                                 uint32_t unreachable_ms,
+                                panel_state_t voice_state,
                                 panel_state_t *out_state,
                                 panel_offline_mode_t *out_mode);
 

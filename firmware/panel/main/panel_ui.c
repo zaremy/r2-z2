@@ -170,6 +170,14 @@ static lv_obj_t *s_waking_fill;       /* AC8: the rule, filling while waking */
 static lv_obj_t    *s_hold_fill;
 static panel_hold_t s_hold;
 static bool         s_power_request;      /* toggle; link_task resolves it */
+/* TALK's own hold (E2E v0 slice 3.2): the same shape as s_hold / s_hold_fill,
+ * over PANEL_ZONE_LOWER instead of PANEL_ZONE_WORD. Independent trackers
+ * because a press is fixed to one zone at panel_face_begin() and only that
+ * zone's tracker will ever see in_target true for it -- but each needs its
+ * own timer and fill so the two holds cannot read each other's progress. */
+static lv_obj_t    *s_talk_fill;
+static lv_obj_t    *s_talk_label;         /* "HOLD TO TALK", D-017's label rule */
+static panel_hold_t s_talk_hold;
 /* The press must land on the word, its swatch or its reason line -- the band
  * above the rule. Its bounds live in panel_face.h (PANEL_ZONE_WORD), with the
  * rest of the face's zones, so the hold and the gesture table cannot disagree
@@ -182,6 +190,7 @@ static lv_obj_t *s_chrome_wifi[CHROME_COUNT];
 static lv_obj_t *s_chrome_llm[CHROME_COUNT];
 static lv_obj_t *s_chrome_batt[CHROME_COUNT];
 static panel_uplink_t s_uplink = PANEL_UPLINK_NONE;
+static panel_state_t s_voice_state = PANEL_ST_COUNT;   /* no live exchange */
 /* EVERY NUMBER BELOW WAS MEASURED off panel-v5-interactive.html, by reading
  * getBoundingClientRect on each element and scaling to the panel's 368 px
  * width -- not estimated from a screenshot and not read off the CSS, which
@@ -2418,6 +2427,30 @@ static void build_status_face(lv_obj_t *pg)
      * healthy panel does not carry it. A fault indicator that is always
      * visible is one nobody reads. */
     make_chain(pg, 352, &s_face_chain);
+
+    /* ---- TALK: "HOLD TO TALK" (E2E v0 slice 3.2, D-017's label rule) ---
+     * Shares the chain's 352-426 band rather than claiming new space: the
+     * two are mutually exclusive by construction (panel_face.h rule 6 gates
+     * TALK on `awake && idle`, and the chain shows only on danger, offline
+     * or attention), so whichever one a given state needs, the other's band
+     * is free. set_face shows this exactly when st == PANEL_ST_IDLE. Layout
+     * is a first pass -- verify against a real frame (PANEL_SHOT_TOUR)
+     * before trusting it; a hidden control reads as no control at all. */
+    s_talk_label = lv_label_create(pg);
+    lv_label_set_text(s_talk_label, "HOLD TO TALK");
+    lv_obj_set_style_text_font(s_talk_label, &michroma_16, 0);
+    lv_obj_set_style_text_letter_space(s_talk_label, 1, 0);
+    lv_obj_set_style_text_color(s_talk_label, lv_color_hex(V5_LABEL), 0);
+    lv_obj_set_pos(s_talk_label, V5_PAD, 358);
+    lv_obj_add_flag(s_talk_label, LV_OBJ_FLAG_HIDDEN);
+
+    s_talk_fill = lv_obj_create(pg);
+    lv_obj_set_size(s_talk_fill, 0, 4);
+    lv_obj_set_pos(s_talk_fill, V5_PAD, 400);
+    lv_obj_set_style_bg_color(s_talk_fill, lv_color_hex(PANEL_C_CYAN), 0);
+    lv_obj_set_style_border_width(s_talk_fill, 0, 0);
+    lv_obj_set_style_radius(s_talk_fill, 0, 0);
+    lv_obj_add_flag(s_talk_fill, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* ---- THE WAKE FRAME (#101 AC3) --------------------------------------------
@@ -2704,6 +2737,11 @@ void panel_ui_set_uplink(panel_uplink_t u)
     paint_chrome();
 }
 
+void panel_ui_set_voice_state(panel_state_t vs)
+{
+    s_voice_state = vs;
+}
+
 static uint32_t chain_colour(chain_t c)
 {
     switch (c) {
@@ -2805,6 +2843,18 @@ static void set_face(panel_state_t st, panel_offline_mode_t mode,
         lv_label_set_text(s_face_since, panel_state_since(st, mode));
 
         paint_chain(&s_face_chain, st, mode);
+
+        /* HOLD TO TALK is shown exactly when the hold it labels can fire
+         * (panel_face.h rule 6: awake and idle, nothing already in flight),
+         * which is exactly `st == PANEL_ST_IDLE` -- LISTEN/THINKING/MISHEARD/
+         * ANSWERING all mean something is already in flight, and every other
+         * state is not awake-and-at-rest. D-017: hold-to-arm only while it is
+         * labelled, so the fill must never be reachable without this showing
+         * first. */
+        const bool talk_available = (st == PANEL_ST_IDLE);
+        if (talk_available) lv_obj_remove_flag(s_talk_label, LV_OBJ_FLAG_HIDDEN);
+        else                lv_obj_add_flag(s_talk_label, LV_OBJ_FLAG_HIDDEN);
+        if (!talk_available) lv_obj_add_flag(s_talk_fill, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* ---- R2 PWR ------------------------------------------------------- */
@@ -2942,15 +2992,18 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
      * evidence available to it short of an operator unplugging the droid. The
      * decision moved to where a test can reach it and this stayed a renderer.
      *
-     * Only three of the twelve states are reachable from this board -- it has
-     * one sensor, the BLE link. The other nine are defined and rendered by a
-     * table nothing selects yet, and that is stated rather than discovered
-     * later: four PRs of the LED stack once merged completely inert because
-     * each was built above the last without one path reaching the hardware. */
+     * Seven of the twelve states are reachable from this board now: the link
+     * (E2E v0 slice 1/2) and, since slice 3.2, the TALK hold and the exchange
+     * it drives (panel_ui_set_voice_state, fed from panel_exchange every
+     * tick). WAITING still has no caller, and that is stated rather than
+     * discovered later: four PRs of the LED stack once merged completely
+     * inert because each was built above the last without one path reaching
+     * the hardware. */
     panel_state_t st;
     panel_offline_mode_t mode;
     const uint32_t away = r2_telemetry_unreachable_ms(t, now_ms);
-    panel_state_from_power(t->released, t->link == R2_TM_UP, away, &st, &mode);
+    panel_state_from_power(t->released, t->link == R2_TM_UP, away,
+                           s_voice_state, &st, &mode);
     set_face(st, mode, t, now_ms);
     s_shown_state = (int)st;
 
@@ -3262,4 +3315,35 @@ bool panel_ui_take_power_request(void)
     s_power_request = false;
     portEXIT_CRITICAL(&s_probe_mux);
     return want;
+}
+
+/* ---- TALK: hold to speak (E2E v0 slice 3.2) ----------------------------- */
+
+bool panel_ui_talk_hold(bool down, int x, int y, bool voided, int32_t max_dev,
+                        uint32_t now_ms)
+{
+    (void)x;
+    if (s_talk_fill == NULL) return false;
+
+    /* Same face-and-frame guard as the WORD hold, plus: only while the label
+     * is actually showing. Filling a control the gesture table would refuse
+     * anyway (mid-exchange, or not awake) is the confident lie this file
+     * elsewhere goes out of its way to avoid -- the dome hub stays cyan only
+     * when a heading exists, for exactly this reason. */
+    const bool on_face = (s_page_at == PAGE_STATUS) && !panel_ui_wake_showing();
+    const bool available = on_face && (s_state_now == PANEL_ST_IDLE);
+    const bool in_target = available && panel_face_zone(y) == PANEL_ZONE_LOWER;
+    bool fire = false;
+    const unsigned pm = panel_hold_step(&s_talk_hold, down && available,
+                                        in_target, voided, max_dev, now_ms,
+                                        &fire);
+
+    if (pm == 0 || pm >= 1000u) {
+        lv_obj_add_flag(s_talk_fill, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_width(s_talk_fill, (PANEL_W - 2 * V5_PAD) * (int)pm / 1000);
+        lv_obj_clear_flag(s_talk_fill, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    return fire;
 }

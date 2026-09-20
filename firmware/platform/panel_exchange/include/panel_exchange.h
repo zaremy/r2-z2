@@ -19,8 +19,13 @@
  * The zero value is the safe value: a zeroed struct has no live exchange, and
  * every check refuses. Pure logic, no ESP dependency, host-tested.
  *
- * Nothing calls this yet. The hold (3.2), STT (3.3) and LLM (3.4) paths are
- * its callers, and D-032's reply path is the one that asks may_act.
+ * The hold (3.2) is its first caller: begin() on TALK, hold_released() on
+ * lift. STT (3.3) and LLM (3.4) are not wired to real hardware yet, so 3.2
+ * reports its own transcript(id, 0) right after hold_released() -- there is
+ * no STT to produce a real one, and an empty transcript is the honest
+ * description of that, not an invented MISHEARD. THINKING is on screen for
+ * one tick before it retires; nothing is left waiting forever. D-032's reply
+ * path is the one that asks may_act, still unreached.
  */
 #ifndef PANEL_EXCHANGE_H
 #define PANEL_EXCHANGE_H
@@ -42,6 +47,7 @@ typedef enum {
     PX_RETIRE_R2_RELEASED, /* R2 let go -- NOT the hold being released */
     PX_RETIRE_LINK_LOST,
     PX_RETIRE_NEW_HOLD,
+    PX_RETIRE_HOLD_TOO_LONG, /* the plan's 12 s capture cap: discard, no THINKING */
     PX_RETIRE_MISHEARD,  /* the transcript came back empty */
     PX_RETIRE_TIMEOUT,   /* STT or LLM did not answer in time */
     PX_RETIRE_DONE,      /* the reply finished, or the exchange ended normally */

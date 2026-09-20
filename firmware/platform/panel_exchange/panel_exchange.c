@@ -90,6 +90,7 @@ const char *panel_exchange_retire_name(px_retire_t r)
     case PX_RETIRE_R2_RELEASED: return "r2_released";
     case PX_RETIRE_LINK_LOST: return "link_lost";
     case PX_RETIRE_NEW_HOLD:  return "new_hold";
+    case PX_RETIRE_HOLD_TOO_LONG: return "hold_too_long";
     case PX_RETIRE_MISHEARD:  return "misheard";
     case PX_RETIRE_TIMEOUT:   return "timeout";
     case PX_RETIRE_DONE:      return "done";
