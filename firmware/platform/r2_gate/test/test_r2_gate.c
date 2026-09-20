@@ -465,6 +465,162 @@ static void test_granted_light_goes_out_and_revoke_stops_it(void)
     r2_gate_grant_status(false);
 }
 
+/* ---- THE REPLY PATH (D-032, 3.5a's audio half) --------------------------- */
+
+/* A committed id, for tests that need one that is NOT the illegal case under
+ * test. Must appear in r2_gate.c's REPLY_CHIRP_IDS -- 1966 is R2_CHATTY_11. */
+#define CHIRP_ID_OK 1966u
+/* A plausible-looking id that is NOT in the committed table. Sphero sound ids
+ * run into the thousands, so a small number reads as "obviously synthetic"
+ * without needing to invent a fake DID/CID pair. */
+#define CHIRP_ID_UNKNOWN 1u
+
+/* Ever-increasing, matching panel_exchange's own invariant (ids never repeat)
+ * -- so each test can assume a fresh id has never spent its chirp, with no
+ * reset function needed. */
+static uint32_t next_test_exchange_id(void)
+{
+    static uint32_t id = 1000;
+    return ++id;
+}
+
+static void test_reply_chirp_needs_the_wake_grant(void)
+{
+    printf("     a reply chirp is refused with no WAKE grant, whatever may_act says\n");
+    r2_gate_grant_status(false);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    /* may_act TRUE on purpose: the grant must be checked independently of
+     * what the caller claims about the exchange, the same way send_status's
+     * op check does not care whether the grant is held. */
+    const int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted reply chirp went out (got %d, tx %d)", n, tx_calls);
+}
+
+static void test_reply_chirp_needs_may_act(void)
+{
+    printf("     a reply chirp is refused when the caller says may_act is false\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    const int n = r2_gate_send_reply_audio(false, id, CHIRP_ID_OK, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_NOT_LIVE && tx_calls == 0,
+          "a reply chirp with may_act=false went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_needs_a_committed_id(void)
+{
+    printf("     a reply chirp with an id outside the committed table is refused\n");
+    r2_gate_grant_status(true);
+    const uint32_t id1 = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_audio(true, id1, CHIRP_ID_UNKNOWN, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ID && tx_calls == 0,
+          "an uncommitted sound id went out (got %d, tx %d)", n, tx_calls);
+    /* id 0 (VOICE_MOOD_NONE's sentinel, r2_ops.c) must refuse the same way. */
+    const uint32_t id2 = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_audio(true, id2, 0, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ID && tx_calls == 0,
+          "sound id 0 went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_is_at_most_one_per_exchange(void)
+{
+    printf("     a second chirp for the same exchange is refused, a first for a new one is not\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "the first chirp for a fresh exchange was refused (%d)", n);
+
+    tx_reset();
+    n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_USED && tx_calls == 0,
+          "a second chirp for the SAME exchange went out (got %d, tx %d)", n, tx_calls);
+
+    /* A different (later) id is a different exchange and gets its own chirp. */
+    const uint32_t id2 = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_audio(true, id2, CHIRP_ID_OK, 3, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "a fresh exchange inherited the prior one's used-up budget (%d)", n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_a_refused_call_never_spends_the_budget(void)
+{
+    /* A NO_TX call must not burn the exchange's one chirp -- otherwise a
+     * caller that discovers it has no transport (or retries after a
+     * transient refusal) permanently loses the reply for that exchange. */
+    printf("     a call that never reaches the transport does not spend the exchange's chirp\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 1, NULL, NULL);
+    CHECK(n == R2_GATE_NO_TX, "a no-tx reply chirp returned %d, not NO_TX", n);
+
+    n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 2, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the same exchange's chirp was refused after an earlier NO_TX call (%d)", n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_bytes_and_op(void)
+{
+    printf("     an admitted reply chirp is play_audio, with the id big-endian and PLAY_IMMEDIATELY\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    const int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 9, fake_tx, NULL);
+    CHECK(n > 0, "the chirp was refused (%d)", n);
+    const uint8_t payload[3] = { 0x07, 0xAE, 0x00 };  /* 1966 = 0x07AE, mode 0 */
+    uint8_t want[R2_ENCODED_MAX(8)];
+    const int wn = r2_packet_encode(0x1A, 0x07, 9, payload, sizeof payload, want, sizeof want);
+    CHECK(wn > 0 && tx_len == (size_t)wn && memcmp(tx_buf, want, (size_t)wn) == 0,
+          "reply chirp bytes differ from the hand-computed play_audio frame");
+    r2_gate_grant_status(false);
+}
+
+/* THE FULL COMMITTED SET, written out longhand -- the same shape as
+ * test_the_halt_list_widens_nothing_else's MAY_ALLOW baseline. A test that
+ * only ever tries CHIRP_ID_OK cannot tell "the table is right" from "the
+ * table admits at least one id"; an off-by-one that drops the LAST entry
+ * (HEY_1) survived exactly that gap until this test existed. */
+static void test_every_committed_chirp_id_is_admitted(void)
+{
+    printf("     every id in the 3.4a-committed table is admitted, not just one\n");
+    static const uint16_t committed[] = {
+        1966, 2007, 3302, 1910, 3101, 3484, 3703, 1737, 2813,
+    };
+    r2_gate_grant_status(true);
+    for (size_t i = 0; i < sizeof committed / sizeof committed[0]; i++) {
+        const uint32_t id = next_test_exchange_id();
+        tx_reset();
+        const int n = r2_gate_send_reply_audio(true, id, committed[i], 1, fake_tx, NULL);
+        CHECK(n > 0 && tx_calls == 1,
+              "committed id %u was refused (got %d)", committed[i], n);
+    }
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_does_not_widen_the_main_gate(void)
+{
+    printf("     the reply path opens no door on r2_gate_check/r2_gate_send\n");
+    r2_gate_grant_status(true);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
+    CHECK(r2_gate_check(0x1A, 0x07, NULL, 0) == R2_GATE_ABOVE_CEILING,
+          "granting the reply path opened play_audio on the ceiling-governed path");
+    tx_reset();
+    CHECK(r2_gate_send(0x1A, 0x07, 1, NULL, 0, fake_tx, NULL) == R2_GATE_ABOVE_CEILING
+              && tx_calls == 0,
+          "play_audio left through r2_gate_send while only the reply grant was held");
+    r2_gate_grant_status(false);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
+}
+
 int main(void)
 {
     printf("r2_gate host tests\n==================\n");
@@ -490,6 +646,15 @@ int main(void)
     test_status_path_admits_only_the_full_frame();
     test_the_grant_widens_nothing_on_the_main_path();
     test_granted_light_goes_out_and_revoke_stops_it();
+
+    test_reply_chirp_needs_the_wake_grant();
+    test_reply_chirp_needs_may_act();
+    test_reply_chirp_needs_a_committed_id();
+    test_reply_chirp_is_at_most_one_per_exchange();
+    test_reply_chirp_a_refused_call_never_spends_the_budget();
+    test_every_committed_chirp_id_is_admitted();
+    test_reply_chirp_bytes_and_op();
+    test_reply_chirp_does_not_widen_the_main_gate();
     printf("==================\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

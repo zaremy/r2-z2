@@ -54,8 +54,13 @@ typedef enum {
     R2_GATE_FORBIDDEN       = -3,  /* never permitted at any ceiling */
     R2_GATE_NO_TX           = -4,  /* no transmit function supplied */
     R2_GATE_ENCODE_FAILED   = -5,
-    R2_GATE_NOT_GRANTED     = -6,  /* status path: nobody has woken him */
+    /* nobody has woken him -- the one grant, shared by the status path (D-030)
+     * and the reply path (D-032): "no new gesture" means no second bool. */
+    R2_GATE_NOT_GRANTED     = -6,
     R2_GATE_NOT_STATUS      = -7,  /* status path: that op is not a light */
+    R2_GATE_REPLY_NOT_LIVE  = -8,  /* reply path: caller says this exchange may not act */
+    R2_GATE_REPLY_BAD_ID    = -9,  /* reply path: sound id is not in the committed table */
+    R2_GATE_REPLY_USED      = -10, /* reply path: this exchange already spent its one chirp */
 } r2_gate_verdict_t;
 
 /* Transmit hook. Returns >=0 on success. Kept as a callback so the gate has no
@@ -105,6 +110,31 @@ bool r2_gate_status_granted(void);
 int  r2_gate_send_status(uint8_t did, uint8_t cid, uint8_t seq,
                          const uint8_t *data, size_t data_len,
                          r2_tx_fn tx, void *ctx);
+
+/* THE REPLY PATH (D-032, E2E v0 slice 3.4c/3.5a's audio half).
+ *
+ * A THIRD exit, separate from the ceiling and from r2_gate_send_status. It
+ * admits exactly one op shape -- `play_audio` with an id from the 3.4a-
+ * committed chirp table -- and at most once per exchange.
+ *
+ * `may_act` is NOT computed here. It must be the caller's own
+ * panel_exchange_may_act(px, exchange_id) -- this file has no dependency on
+ * panel_exchange, the same layering panel_exchange.h itself names ("D-032's
+ * reply path is the one that asks may_act"). Passing `true` on a stale or
+ * foreign exchange is the caller's bug to avoid, not this door's to detect;
+ * what this door DOES enforce, regardless of what the caller claims, is the
+ * WAKE grant, the id against its own pinned table, and one chirp per
+ * exchange id -- the same "checked here, not trusted from above" the status
+ * path already holds for its own shape.
+ *
+ * `exchange_id` is also the one-chirp bookkeeping key: a second call with the
+ * same id is refused as R2_GATE_REPLY_USED, whatever `may_act` says. Exchange
+ * ids are strictly increasing and never reused (panel_exchange.h), so no
+ * reset is needed between exchanges.
+ *
+ * Returns the encoded length on success, or a negative r2_gate_verdict_t. */
+int r2_gate_send_reply_audio(bool may_act, uint32_t exchange_id, uint16_t sound_id,
+                             uint8_t seq, r2_tx_fn tx, void *ctx);
 
 /* Human-readable, for logs and refusal messages. */
 const char *r2_gate_tier_name(r2_tier_t t);
