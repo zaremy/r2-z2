@@ -568,6 +568,41 @@ static void test_reply_chirp_a_refused_call_never_spends_the_budget(void)
     r2_gate_grant_status(false);
 }
 
+/* A transport that reports FAILURE after being called -- found by adversarial
+ * review. transmit()'s own rule elsewhere in this file is "assume an
+ * unconfirmed command took effect": a tx() returning < 0 may still have put
+ * bytes on the air. The FIRST version of this door only spent the exchange's
+ * budget on a clean success, so a caller retrying after this exact ambiguous
+ * failure could land a REAL second chirp. */
+static int failing_tx(const uint8_t *f, size_t n, void *ctx)
+{
+    (void)f; (void)ctx;
+    tx_calls++;
+    tx_len = n;
+    return -1;
+}
+
+static void test_reply_chirp_a_failed_transmit_still_spends_the_budget(void)
+{
+    printf("     a chirp whose transport reports failure still spends the exchange's budget\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 1, failing_tx, NULL);
+    CHECK(n < 0 && tx_calls == 1,
+          "the failing transmit was not even attempted (n=%d, tx_calls=%d)", n, tx_calls);
+
+    /* The retry a caller would naturally make after seeing a failure. It must
+     * be refused as USED, not allowed to try again -- a real chirp may
+     * already be on the air from the call above. */
+    tx_reset();
+    n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_USED && tx_calls == 0,
+          "a retry after an ambiguous tx failure sent a SECOND real chirp (got %d, tx %d)",
+          n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
 static void test_reply_chirp_bytes_and_op(void)
 {
     printf("     an admitted reply chirp is play_audio, with the id big-endian and PLAY_IMMEDIATELY\n");
@@ -652,6 +687,7 @@ int main(void)
     test_reply_chirp_needs_a_committed_id();
     test_reply_chirp_is_at_most_one_per_exchange();
     test_reply_chirp_a_refused_call_never_spends_the_budget();
+    test_reply_chirp_a_failed_transmit_still_spends_the_budget();
     test_every_committed_chirp_id_is_admitted();
     test_reply_chirp_bytes_and_op();
     test_reply_chirp_does_not_widen_the_main_gate();

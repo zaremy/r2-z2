@@ -287,22 +287,31 @@ int r2_gate_send_reply_audio(bool may_act, uint32_t exchange_id, uint16_t sound_
     if (!is_reply_chirp_id(sound_id))              { s_refused++; return R2_GATE_REPLY_BAD_ID; }
     if (exchange_id == s_chirp_used_for_exchange)  { s_refused++; return R2_GATE_REPLY_USED; }
 
+    if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
+
     const uint8_t payload[3] = {
         (uint8_t)(sound_id >> 8), (uint8_t)(sound_id & 0xFFu),
         (uint8_t)AUDIO_PLAY_IMMEDIATELY,
     };
-    const int n = transmit(DID_IO, 0x07 /* play_audio */, seq,
-                           payload, sizeof payload, tx, ctx);
-    /* Spend the budget only on a definite success. A NO_TX or an encode
-     * failure never put bytes on the air, so the exchange's one chirp is
-     * still owed -- unlike the admitted/refused counters above, which count a
-     * transmit() attempt before the transport even runs (see transmit()'s own
-     * comment, "assume an unconfirmed command took effect"). Those two
-     * philosophies differ on purpose: the counter is allowed to over-count
-     * what MIGHT have gone out, but a real second chirp reaching the radio is
-     * the failure this door exists to prevent, so the budget only moves on
-     * n > 0. */
-    if (n > 0) s_chirp_used_for_exchange = exchange_id;
+    uint8_t frame[R2_ENCODED_MAX(8)];
+    const int n = r2_packet_encode(DID_IO, 0x07 /* play_audio */, seq,
+                                   payload, sizeof payload, frame, sizeof frame);
+    if (n <= 0) { s_refused++; return R2_GATE_ENCODE_FAILED; }
+
+    /* Spend the budget HERE -- encoded, about to be handed to the transport --
+     * not after tx() returns. Found by adversarial review: the first version
+     * spent it only on tx() >= 0, so a tx() that reported failure after
+     * putting bytes on the air (transmit()'s own "assume an unconfirmed
+     * command took effect") left the exchange's chirp un-spent, and a
+     * caller's retry after that ambiguous failure could send a REAL second
+     * chirp. Spending it any earlier (before tx != NULL or before a
+     * successful encode) would instead strand an exchange's one chirp on a
+     * pure config error where nothing was ever attempted -- so the line is
+     * drawn at exactly the point transmit() itself counts a send as
+     * admitted. */
+    s_chirp_used_for_exchange = exchange_id;
+    s_admitted++;
+    if (tx(frame, (size_t)n, ctx) < 0) return R2_GATE_ENCODE_FAILED;
     return n;
 }
 
