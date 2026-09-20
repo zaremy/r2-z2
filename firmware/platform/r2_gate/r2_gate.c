@@ -235,6 +235,86 @@ int r2_gate_send_status(uint8_t did, uint8_t cid, uint8_t seq,
     return transmit(did, cid, seq, data, data_len, tx, ctx);
 }
 
+/* ---- THE REPLY PATH (D-032, E2E v0 slice 3.4c/3.5a's audio half) ---------
+ *
+ * THE COMMITTED TABLE. Ids from mac-prototype/r2_assets.py, kept by the 3.4a
+ * chirp survey (docs/research/r2-capabilities.md, "3.4a chirp survey"; raw
+ * ratings in mac-prototype/results/chirp_survey_3.4a.jsonl). Not mood-keyed
+ * here -- that mapping is r2_ops_chirp_id_for_mood()'s job (r2_ops.c); this
+ * table only says which ids are safe to say at all, the same separation the
+ * LEDs keep between "what channel" (r2_ops) and "is the write well-formed"
+ * (here). Kept flat rather than five one-entry tables so a future revision
+ * that widens a mood to its second surviving candidate needs no gate change. */
+static const uint16_t REPLY_CHIRP_IDS[] = {
+    1966, /* R2_CHATTY_11  curious */
+    2007, /* R2_CHATTY_15  curious */
+    3302, /* R2_POSITIVE_1 happy   */
+    1910, /* R2_ANNOYED    annoyed */
+    3101, /* R2_NEGATIVE_1 annoyed */
+    3484, /* R2_SAD_1      sad     */
+    3703, /* R2_SAD_5      sad     */
+    1737, /* R2_ALARM_1    alert   */
+    2813, /* R2_HEY_1      alert   */
+};
+#define REPLY_CHIRP_IDS_N (sizeof REPLY_CHIRP_IDS / sizeof REPLY_CHIRP_IDS[0])
+
+static bool is_reply_chirp_id(uint16_t id)
+{
+    for (size_t i = 0; i < REPLY_CHIRP_IDS_N; i++)
+        if (REPLY_CHIRP_IDS[i] == id) return true;
+    return false;
+}
+
+/* PLAY_IMMEDIATELY (spherov2 commands/io.py AudioPlaybackModes.0): a reply
+ * chirp never needs to queue, since this door admits at most one per
+ * exchange. */
+#define AUDIO_PLAY_IMMEDIATELY 0x00u
+
+/* The id that has already spent its one chirp. 0 is safe as "none yet": it is
+ * panel_exchange's own "no live exchange" sentinel (panel_exchange.h), so a
+ * real exchange id can never legitimately collide with the initialiser. */
+static uint32_t s_chirp_used_for_exchange = 0;
+
+int r2_gate_send_reply_audio(bool may_act, uint32_t exchange_id, uint16_t sound_id,
+                             uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    /* ILLEGAL CASES FIRST (CLAUDE.md, "mutate the guard, not the table").
+     * The grant first: it is the one D-032 says is shared with D-030, so a
+     * reader checking "is he even awake" finds the same answer either door
+     * gives. */
+    if (!s_status_granted)                        { s_refused++; return R2_GATE_NOT_GRANTED; }
+    if (!may_act)                                  { s_refused++; return R2_GATE_REPLY_NOT_LIVE; }
+    if (!is_reply_chirp_id(sound_id))              { s_refused++; return R2_GATE_REPLY_BAD_ID; }
+    if (exchange_id == s_chirp_used_for_exchange)  { s_refused++; return R2_GATE_REPLY_USED; }
+
+    if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
+
+    const uint8_t payload[3] = {
+        (uint8_t)(sound_id >> 8), (uint8_t)(sound_id & 0xFFu),
+        (uint8_t)AUDIO_PLAY_IMMEDIATELY,
+    };
+    uint8_t frame[R2_ENCODED_MAX(8)];
+    const int n = r2_packet_encode(DID_IO, 0x07 /* play_audio */, seq,
+                                   payload, sizeof payload, frame, sizeof frame);
+    if (n <= 0) { s_refused++; return R2_GATE_ENCODE_FAILED; }
+
+    /* Spend the budget HERE -- encoded, about to be handed to the transport --
+     * not after tx() returns. Found by adversarial review: the first version
+     * spent it only on tx() >= 0, so a tx() that reported failure after
+     * putting bytes on the air (transmit()'s own "assume an unconfirmed
+     * command took effect") left the exchange's chirp un-spent, and a
+     * caller's retry after that ambiguous failure could send a REAL second
+     * chirp. Spending it any earlier (before tx != NULL or before a
+     * successful encode) would instead strand an exchange's one chirp on a
+     * pure config error where nothing was ever attempted -- so the line is
+     * drawn at exactly the point transmit() itself counts a send as
+     * admitted. */
+    s_chirp_used_for_exchange = exchange_id;
+    s_admitted++;
+    if (tx(frame, (size_t)n, ctx) < 0) return R2_GATE_ENCODE_FAILED;
+    return n;
+}
+
 const char *r2_gate_tier_name(r2_tier_t t)
 {
     switch (t) {
@@ -256,8 +336,11 @@ const char *r2_gate_verdict_name(r2_gate_verdict_t v)
     case R2_GATE_FORBIDDEN:       return "refused: forbidden at every ceiling";
     case R2_GATE_NO_TX:           return "refused: no transmit function";
     case R2_GATE_ENCODE_FAILED:   return "refused: encode or transmit failed";
-    case R2_GATE_NOT_GRANTED:     return "refused: status lights not granted";
+    case R2_GATE_NOT_GRANTED:     return "refused: the WAKE grant is not held";
     case R2_GATE_NOT_STATUS:      return "refused: not a status-light op";
+    case R2_GATE_REPLY_NOT_LIVE:  return "refused: this exchange may not act";
+    case R2_GATE_REPLY_BAD_ID:    return "refused: not a committed chirp id";
+    case R2_GATE_REPLY_USED:      return "refused: this exchange already chirped";
     default:                      return "?";
     }
 }

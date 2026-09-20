@@ -179,6 +179,35 @@ r2_ops_err_t r2_ops_parse_version(const r2_response_t *r, r2_version_t *out)
     return R2_OPS_OK;
 }
 
+/* ---- Reply chirp (D-032, step 3.5a) -------------------------------------- */
+
+static uint16_t chirp_id_for_mood(voice_mood_t mood)
+{
+    /* Numeric ids from mac-prototype/r2_assets.py, cross-checked against
+     * r2_gate.c's REPLY_CHIRP_IDS -- that table is the one the gate actually
+     * enforces; this one only decides which of ITS members a given mood
+     * picks. */
+    switch (mood) {
+    case VOICE_MOOD_CURIOUS: return 1966;  /* R2_CHATTY_11 */
+    case VOICE_MOOD_HAPPY:   return 3302;  /* R2_POSITIVE_1 */
+    case VOICE_MOOD_ANNOYED: return 1910;  /* R2_ANNOYED */
+    case VOICE_MOOD_SAD:     return 3484;  /* R2_SAD_1 */
+    case VOICE_MOOD_ALERT:   return 1737;  /* R2_ALARM_1 */
+    case VOICE_MOOD_NONE:
+    case VOICE_MOOD_N:
+    default:                 return 0;     /* not a real sound id: refused downstream */
+    }
+}
+
+uint16_t r2_ops_chirp_id_for_mood(voice_mood_t mood) { return chirp_id_for_mood(mood); }
+
+int r2_ops_reply_chirp(voice_mood_t mood, bool may_act, uint32_t exchange_id,
+                       uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    return r2_gate_send_reply_audio(may_act, exchange_id,
+                                    chirp_id_for_mood(mood), seq, tx, ctx);
+}
+
 const char *r2_ops_err_name(r2_ops_err_t e)
 {
     switch (e) {

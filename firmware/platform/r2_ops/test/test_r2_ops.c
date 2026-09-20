@@ -514,6 +514,116 @@ static void test_leds_once_the_operator_raises_the_ceiling(void)
     r2_gate_set_ceiling(R2_TIER_READ);
 }
 
+/* ---- Reply chirp (D-032, step 3.5a) -------------------------------------- */
+
+static uint32_t next_test_exchange_id(void)
+{
+    /* Ever-increasing, matching panel_exchange's own invariant -- so each
+     * test gets a fresh id with no chirp spent on it yet, no reset needed. */
+    static uint32_t id = 5000;
+    return ++id;
+}
+
+/* THE ILLEGAL CASE this table exists for: a mood the model was never allowed
+ * to send must not silently pick a sound. */
+static void test_reply_chirp_refuses_no_mood(void)
+{
+    printf("  reply chirp\n");
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_NONE) == 0,
+          "VOICE_MOOD_NONE has a chirp id");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_calls = 0;
+    const int n = r2_ops_reply_chirp(VOICE_MOOD_NONE, true, id, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ID && tx_calls == 0,
+          "a NONE-mood reply chirp went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+/* PIN THE EXACT id per mood, not just "some id the gate admits". A mood
+ * mapped to a DIFFERENT mood's (still gate-admitted) id passed the "does the
+ * gate accept it" test below and reads as a working reply while playing the
+ * wrong chirp for what he heard -- a CX bug no refusal-shaped test can catch. */
+static void test_each_mood_picks_its_own_committed_id(void)
+{
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_CURIOUS) == 1966, "curious != R2_CHATTY_11");
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_HAPPY)   == 3302, "happy != R2_POSITIVE_1");
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_ANNOYED) == 1910, "annoyed != R2_ANNOYED");
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_SAD)     == 3484, "sad != R2_SAD_1");
+    CHECK(r2_ops_chirp_id_for_mood(VOICE_MOOD_ALERT)   == 1737, "alert != R2_ALARM_1");
+}
+
+/* Every mood in the table must pick an id the GATE actually admits -- the two
+ * tables are maintained separately (r2_ops.c's mood table, r2_gate.c's
+ * REPLY_CHIRP_IDS), so this is the test that would catch them drifting apart.
+ * A mood whose id r2_ops picks but r2_gate refuses is a reply that silently
+ * never chirps. */
+static void test_every_mood_picks_an_id_the_gate_admits(void)
+{
+    static const voice_mood_t moods[] = {
+        VOICE_MOOD_CURIOUS, VOICE_MOOD_HAPPY, VOICE_MOOD_ANNOYED,
+        VOICE_MOOD_SAD, VOICE_MOOD_ALERT,
+    };
+    r2_gate_grant_status(true);
+    for (size_t i = 0; i < sizeof moods / sizeof moods[0]; i++) {
+        const uint16_t id = r2_ops_chirp_id_for_mood(moods[i]);
+        CHECK(id != 0, "mood %s has no chirp id", voice_mood_name(moods[i]));
+
+        const uint32_t exch = next_test_exchange_id();
+        tx_calls = 0;
+        const int n = r2_ops_reply_chirp(moods[i], true, exch, 1, fake_tx, NULL);
+        CHECK(n > 0 && tx_calls == 1,
+              "mood %s's chirp id %u was refused by the gate (%d)",
+              voice_mood_name(moods[i]), id, n);
+    }
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_chirp_needs_may_act_and_the_grant(void)
+{
+    printf("  reply chirp refuses without may_act or the grant\n");
+    const uint32_t id1 = next_test_exchange_id();
+    r2_gate_grant_status(false);
+    tx_calls = 0;
+    int n = r2_ops_reply_chirp(VOICE_MOOD_HAPPY, true, id1, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted happy chirp went out (got %d, tx %d)", n, tx_calls);
+
+    const uint32_t id2 = next_test_exchange_id();
+    r2_gate_grant_status(true);
+    tx_calls = 0;
+    n = r2_ops_reply_chirp(VOICE_MOOD_HAPPY, false, id2, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_NOT_LIVE && tx_calls == 0,
+          "a happy chirp with may_act=false went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+/* THE HARD PROOF, the same shape as test_every_frame_was_admitted_by_the_gate
+ * above: r2_ops_reply_chirp must be routing through the gate's real reply
+ * door, not reimplementing its verdicts, so the gate's own admitted counter
+ * and the one-per-exchange rule must both be provably live from here. */
+static void test_reply_chirp_routes_through_the_gate_and_its_budget(void)
+{
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    uint32_t a0, r0, a1, r1;
+    r2_gate_stats(&a0, &r0);
+    tx_calls = 0;
+    CHECK(r2_ops_reply_chirp(VOICE_MOOD_SAD, true, id, 1, fake_tx, NULL) > 0,
+          "sad chirp refused");
+    r2_gate_stats(&a1, &r1);
+    CHECK(a1 == a0 + 1 && tx_calls == 1,
+          "the reply chirp did not move the gate's admitted counter by one");
+
+    /* Same exchange, second mood: still refused, because the BUDGET is keyed
+     * on the exchange id, not on which mood asked. */
+    tx_calls = 0;
+    const int n = r2_ops_reply_chirp(VOICE_MOOD_ALERT, true, id, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_USED && tx_calls == 0,
+          "a second mood for the same exchange still got a chirp (%d)", n);
+    r2_gate_grant_status(false);
+}
+
 /* ---- #168 part 3: the stop --------------------------------------------- */
 
 static uint8_t stop_seqs[8];
@@ -691,6 +801,12 @@ int main(void)
     test_head_float_and_endianness();
     test_version_fields_are_distinct();
     test_battery_range();
+
+    test_reply_chirp_refuses_no_mood();
+    test_each_mood_picks_its_own_committed_id();
+    test_every_mood_picks_an_id_the_gate_admits();
+    test_reply_chirp_needs_may_act_and_the_grant();
+    test_reply_chirp_routes_through_the_gate_and_its_budget();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

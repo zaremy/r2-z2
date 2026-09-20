@@ -38,6 +38,7 @@
 
 #include "r2_gate.h"
 #include "r2_packet.h"
+#include "voice_react.h"   /* voice_mood_t, for the reply chirp table below */
 
 #ifdef __cplusplus
 extern "C" {
@@ -183,6 +184,28 @@ r2_stop_report_t r2_ops_stop_all(r2_seq_fn next_seq, r2_tx_fn tx, void *ctx);
 /* True only when all three got out. Reading `sent == 3` at every call site is
  * the kind of thing that gets written `>= 2` by someone in a hurry. */
 bool r2_stop_is_complete(r2_stop_report_t r);
+
+/* ---- Reply chirp (D-032, step 3.5a) --------------------------------------
+ *
+ * The committed mood -> chirp id table, one id per mood, from the survivors
+ * of step 3.4a's chirp survey (docs/research/r2-capabilities.md, "3.4a chirp
+ * survey"). Four moods kept two candidates; this table picks one -- curious,
+ * annoyed, sad and alert their first-listed survivor, happy its only one.
+ * Trying the second candidate per mood is future work the survey's own vault
+ * note flags, not a gap here. Returns 0 (not a real sound id) for
+ * VOICE_MOOD_NONE and any value outside voice_mood_t. */
+uint16_t r2_ops_chirp_id_for_mood(voice_mood_t mood);
+
+/* Sends the one chirp a reply exchange may have, through D-032's reply door
+ * (r2_gate_send_reply_audio). `may_act` must be the caller's own
+ * panel_exchange_may_act(px, exchange_id) -- r2_ops has no exchange-lifecycle
+ * state of its own, the same separation r2_gate itself keeps from
+ * panel_exchange. Refuses (and sends nothing) for VOICE_MOOD_NONE, and for
+ * every reason r2_gate_send_reply_audio refuses: no WAKE grant, `may_act`
+ * false, an id outside the committed table, or a second chirp for the same
+ * exchange id. Returns the encoded length, or a negative r2_gate_verdict_t. */
+int r2_ops_reply_chirp(voice_mood_t mood, bool may_act, uint32_t exchange_id,
+                       uint8_t seq, r2_tx_fn tx, void *ctx);
 
 const char *r2_ops_err_name(r2_ops_err_t e);
 /* R2's own error codes, r2_probe.py Response.ERRORS. */
