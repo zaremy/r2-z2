@@ -92,6 +92,26 @@ typedef struct {
     uint8_t     touch_id;
 } panel_svc_facts_t;
 
+/* THE BOARD'S OWN UPLINK, as the top chrome shows it -- panel_net's state,
+ * named here so this file (which has host tests) owns what each step may
+ * claim and panel_net owns only the mechanism. Zero is NONE: a chrome nobody
+ * has told anything shows no claim, never a green one. */
+typedef enum {
+    PANEL_UPLINK_NONE = 0,     /* nothing provisioned, or no source at all */
+    PANEL_UPLINK_JOINING,      /* trying: still not a claim */
+    PANEL_UPLINK_WIFI,         /* associated, with an address */
+    PANEL_UPLINK_CLOUD_OK,     /* the provider answered 2xx */
+    PANEL_UPLINK_CLOUD_FAIL,   /* associated, provider unreachable */
+} panel_uplink_t;
+
+/* The tone of the Wi-Fi glyph and of the LLM word. Wi-Fi is GOOD from the
+ * moment the board is associated -- that is a fact it holds -- and the LLM
+ * word stays a no-claim grey until a request has actually come back 2xx:
+ * being on a network is not evidence the provider is reachable. Anything out
+ * of range is NONE, so a corrupt value cannot light either one. */
+panel_tone_t panel_service_wifi_tone(panel_uplink_t u);
+panel_tone_t panel_service_llm_tone(panel_uplink_t u);
+
 const char       *panel_service_title(panel_svc_t s);   /* "" out of range */
 panel_svc_kind_t  panel_service_kind(panel_svc_t s);
 

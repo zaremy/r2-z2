@@ -174,7 +174,14 @@ static bool         s_power_request;      /* toggle; link_task resolves it */
  * above the rule. Its bounds live in panel_face.h (PANEL_ZONE_WORD), with the
  * rest of the face's zones, so the hold and the gesture table cannot disagree
  * about where the word is. */
-static lv_obj_t *s_chrome_wifi, *s_chrome_llm, *s_chrome_batt;
+/* One per page that carries the chrome: the face and SERVICE. Both are
+ * repainted together, because the bar describes the BOARD and must not say
+ * two different things one swipe apart. */
+enum { CHROME_FACE = 0, CHROME_SERVICE, CHROME_COUNT };
+static lv_obj_t *s_chrome_wifi[CHROME_COUNT];
+static lv_obj_t *s_chrome_llm[CHROME_COUNT];
+static lv_obj_t *s_chrome_batt[CHROME_COUNT];
+static panel_uplink_t s_uplink = PANEL_UPLINK_NONE;
 /* EVERY NUMBER BELOW WAS MEASURED off panel-v5-interactive.html, by reading
  * getBoundingClientRect on each element and scaling to the panel's 368 px
  * width -- not estimated from a screenshot and not read off the CSS, which
@@ -659,15 +666,24 @@ static lv_obj_t *text_r(lv_obj_t *parent, const lv_font_t *font, int ls,
  * because it describes the board, not the page. The same three placeholders
  * and the same reason they are grey: this build has no Wi-Fi, no LLM client
  * and no battery ADC to put in them. */
-static void make_chrome(lv_obj_t *pg)
+static void paint_chrome(void);
+
+static void make_chrome_into(lv_obj_t *pg, int which)
 {
-    lv_obj_t *w = lv_label_create(pg);
-    lv_label_set_text(w, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(w, lv_color_hex(V5_SURFACE), 0);
-    lv_obj_set_pos(w, 120, 16);
-    text(pg, &michroma_12, 1, V5_SURFACE, 160, 18, "LLM");
-    text(pg, &michroma_12, 1, V5_SURFACE, 217, 18, "PWR");
+    s_chrome_wifi[which] = lv_label_create(pg);
+    lv_label_set_text(s_chrome_wifi[which], LV_SYMBOL_WIFI);
+    lv_obj_set_pos(s_chrome_wifi[which], 120, 16);
+
+    s_chrome_llm[which] = text(pg, &michroma_12, 1, V5_SURFACE, 160, 18, "LLM");
+    /* PWR HAS NO SOURCE AND KEEPS THE NO-CLAIM GREY: there is no battery ADC
+     * on this board, so the word stays a placeholder that says so. It is
+     * stored anyway, so whoever wires a gauge finds the slot already here. */
+    s_chrome_batt[which] = text(pg, &michroma_12, 1, V5_SURFACE, 217, 18, "PWR");
+
+    paint_chrome();
 }
+
+static void make_chrome(lv_obj_t *pg) { make_chrome_into(pg, CHROME_SERVICE); }
 
 static void build_interior(lv_obj_t *pg);
 
@@ -2176,41 +2192,18 @@ static void build_status_face(lv_obj_t *pg)
      * Always present, and v5 is explicit about why: "the system is still
      * running, so the status chrome stays true". It describes the BOARD --
      * its network, its reasoning service, its own power -- not R2, which is
-     * what the face below is about. Missing it entirely was the most visible
-     * gap between this panel and the spec.
+     * what the face below is about.
      *
-     * BUT: this build has NO Wi-Fi stack, NO LLM client and NO battery ADC.
-     * The first version of this bar drew LV_SYMBOL_WIFI and
-     * LV_SYMBOL_BATTERY_2 -- a half-full battery glyph is a QUANTITATIVE
-     * claim -- in normal text colour, one tap away from a NETWORK interior
-     * that says NOT IN BUILD in so many words. The panel would have
-     * contradicted itself inside one build, in exactly the way the dome
-     * needle below refuses to.
+     * WIRED, since slice 3.1 gave the board a network: the glyph and the LLM
+     * word take their tone from panel_service, fed panel_net's state by
+     * main's tick. What each step may claim is argued there and tested on the
+     * host -- associated is a fact we hold, a 2xx is the only thing that
+     * lights LLM, and anything unknown stays the no-claim grey.
      *
-     * So the three slots exist and are drawn at V5_SURFACE, which is the
-     * colour chain_colour() already uses for CH_UNK: unknown is ABSENCE, not
-     * a claim. And the battery slot carries the word PWR rather than a level
-     * glyph, because there is no level to render. When a real source appears,
-     * these get a driver and a colour -- until then they are placeholders
-     * that say so. */
-    s_chrome_wifi = lv_label_create(pg);
-    lv_label_set_text(s_chrome_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(s_chrome_wifi, lv_color_hex(V5_SURFACE), 0);
-    lv_obj_set_pos(s_chrome_wifi, 120, 16);
-
-    s_chrome_llm = lv_label_create(pg);
-    lv_label_set_text(s_chrome_llm, "LLM");
-    lv_obj_set_style_text_font(s_chrome_llm, &michroma_12, 0);
-    lv_obj_set_style_text_letter_space(s_chrome_llm, 1, 0);
-    lv_obj_set_style_text_color(s_chrome_llm, lv_color_hex(V5_SURFACE), 0);
-    lv_obj_set_pos(s_chrome_llm, 160, 18);
-
-    s_chrome_batt = lv_label_create(pg);
-    lv_label_set_text(s_chrome_batt, "PWR");
-    lv_obj_set_style_text_font(s_chrome_batt, &michroma_12, 0);
-    lv_obj_set_style_text_letter_space(s_chrome_batt, 1, 0);
-    lv_obj_set_style_text_color(s_chrome_batt, lv_color_hex(V5_SURFACE), 0);
-    lv_obj_set_pos(s_chrome_batt, 217, 18);
+     * The battery slot is still a placeholder: no ADC, so PWR keeps the grey
+     * and carries the word rather than a level glyph, which would be a
+     * quantitative claim about a reading nobody takes. */
+    make_chrome_into(pg, CHROME_FACE);
 
     /* ---- SWATCH + WORD + SINCE ---------------------------------------- */
     /* STEADY, on this face and on the wake frame, and deliberately so. The
@@ -2689,6 +2682,27 @@ void panel_ui_create(void)
  * So: a SEVERITY change is something worth looking at and resets the timer. A
  * value's last digit wobbling is not, and merely repaints. */
 static bool s_changed;      /* worth looking at: severity moved */
+
+/* Repaint both copies from the one uplink. Called on every create and on
+ * every change, so a page built after the state arrived is not left grey. */
+static void paint_chrome(void)
+{
+    const uint32_t wifi = tone_colour(panel_service_wifi_tone(s_uplink));
+    const uint32_t llm  = tone_colour(panel_service_llm_tone(s_uplink));
+    for (int i = 0; i < CHROME_COUNT; i++) {
+        if (s_chrome_wifi[i])
+            lv_obj_set_style_text_color(s_chrome_wifi[i], lv_color_hex(wifi), 0);
+        if (s_chrome_llm[i])
+            lv_obj_set_style_text_color(s_chrome_llm[i], lv_color_hex(llm), 0);
+    }
+}
+
+void panel_ui_set_uplink(panel_uplink_t u)
+{
+    if (u == s_uplink) return;
+    s_uplink = u;
+    paint_chrome();
+}
 
 static uint32_t chain_colour(chain_t c)
 {
