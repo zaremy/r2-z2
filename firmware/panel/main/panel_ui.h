@@ -72,6 +72,10 @@ bool panel_ui_is_dimmed(void);
 
 /* The lateral pages: STATUS, SERVICE. NETWORK is a SERVICE row, not a page
  * (operator ruling 2026-09-19). */
+/* The board's own uplink, for the top chrome. Fed from main's tick; the UI
+ * reads no network state of its own. */
+void        panel_ui_set_uplink(panel_uplink_t u);
+
 void        panel_ui_show_page(int page);
 int         panel_ui_page(void);
 

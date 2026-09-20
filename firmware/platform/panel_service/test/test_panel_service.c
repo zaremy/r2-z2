@@ -323,6 +323,44 @@ static void test_bundling_and_actuator_are_one_fact(void)
 
 /* ---- the menu ------------------------------------------------------------- */
 
+/* ---- the top chrome ------------------------------------------------------- */
+
+static void test_the_chrome_claims_only_what_it_holds(void)
+{
+    /* ILLEGAL FIRST: a value nobody set, and a corrupt one, light nothing. */
+    CHECK(PANEL_UPLINK_NONE == 0, "the zero uplink is not NONE");
+    const int bad[] = { -1, 5, 99, -2147483647 - 1 };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        CHECK(panel_service_wifi_tone((panel_uplink_t)bad[i]) == PANEL_TONE_NONE,
+              "uplink %d lit the wifi glyph", bad[i]);
+        CHECK(panel_service_llm_tone((panel_uplink_t)bad[i]) == PANEL_TONE_NONE,
+              "uplink %d lit the LLM word", bad[i]);
+    }
+    /* TRYING IS NOT ARRIVING. */
+    CHECK(panel_service_wifi_tone(PANEL_UPLINK_JOINING) == PANEL_TONE_NONE,
+          "joining claimed a network");
+    CHECK(panel_service_wifi_tone(PANEL_UPLINK_NONE) == PANEL_TONE_NONE,
+          "unprovisioned claimed a network");
+    /* ASSOCIATED IS A FACT WE HOLD, and it survives the cloud going. */
+    CHECK(panel_service_wifi_tone(PANEL_UPLINK_WIFI) == PANEL_TONE_GOOD, "wifi up is grey");
+    CHECK(panel_service_wifi_tone(PANEL_UPLINK_CLOUD_FAIL) == PANEL_TONE_GOOD,
+          "a dead provider unlit a live network");
+    /* THE PROVIDER IS ONLY EVER CLAIMED BY A REPLY. */
+    CHECK(panel_service_llm_tone(PANEL_UPLINK_WIFI) == PANEL_TONE_NONE,
+          "being on a network claimed the provider");
+    CHECK(panel_service_llm_tone(PANEL_UPLINK_JOINING) == PANEL_TONE_NONE,
+          "joining claimed the provider");
+    CHECK(panel_service_llm_tone(PANEL_UPLINK_CLOUD_OK) == PANEL_TONE_GOOD,
+          "a 2xx did not light the LLM word");
+    CHECK(panel_service_llm_tone(PANEL_UPLINK_CLOUD_FAIL) == PANEL_TONE_WARN,
+          "an unreachable provider is not flagged");
+    /* NEITHER SLOT MAY EVER GO RED: nothing up here is a danger (D-012). */
+    for (int u = -1; u <= 5; u++) {
+        CHECK(panel_service_wifi_tone((panel_uplink_t)u) != PANEL_TONE_PLAIN,
+              "wifi %d claimed a plain fact", u);
+    }
+}
+
 static void test_every_row_has_a_title_and_the_right_kind(void)
 {
     static const struct { panel_svc_t s; const char *t; panel_svc_kind_t k; } want[] = {
@@ -1161,6 +1199,7 @@ int main(void)
     test_read_may_bundle_because_it_moves_nothing();
     test_an_unknown_tier_is_assumed_to_move_him();
     test_bundling_and_actuator_are_one_fact();
+    test_the_chrome_claims_only_what_it_holds();
     test_every_row_has_a_title_and_the_right_kind();
     test_network_is_an_interior_that_claims_nothing();
     test_a_zero_kind_asks_for_no_rows();

@@ -40,6 +40,29 @@ panel_svc_kind_t panel_service_kind(panel_svc_t s)
     return in_range(s) ? k_svc[s].kind : PANEL_SVC_NOTE;
 }
 
+panel_tone_t panel_service_wifi_tone(panel_uplink_t u)
+{
+    switch (u) {
+    case PANEL_UPLINK_WIFI:
+    case PANEL_UPLINK_CLOUD_OK:
+    case PANEL_UPLINK_CLOUD_FAIL: return PANEL_TONE_GOOD;
+    case PANEL_UPLINK_JOINING:
+    case PANEL_UPLINK_NONE:
+    default:                      return PANEL_TONE_NONE;
+    }
+}
+
+panel_tone_t panel_service_llm_tone(panel_uplink_t u)
+{
+    switch (u) {
+    case PANEL_UPLINK_CLOUD_OK:   return PANEL_TONE_GOOD;
+    /* It answered before and does not now -- worth monitoring, not a fault:
+     * D-015 degrades him to MUTE when the cloud goes, never to broken. */
+    case PANEL_UPLINK_CLOUD_FAIL: return PANEL_TONE_WARN;
+    default:                      return PANEL_TONE_NONE;
+    }
+}
+
 /* ---- rows ----------------------------------------------------------------- */
 
 static void put(panel_kv_t *out, int *n, int max, const char *key,

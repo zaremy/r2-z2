@@ -654,6 +654,21 @@ static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent
  * that arrives before any landing has been seen does nothing. */
 static panel_face_press_t s_face_press = { .spent = true };
 
+/* panel_net's state, as the chrome's vocabulary. The two enums are kept
+ * apart on purpose: panel_net owns the mechanism, panel_service owns what may
+ * be claimed, and this is the one line that joins them. */
+static panel_uplink_t uplink_now(void)
+{
+    switch (panel_net_state()) {
+    case PANEL_NET_JOINING:    return PANEL_UPLINK_JOINING;
+    case PANEL_NET_UP:         return PANEL_UPLINK_WIFI;
+    case PANEL_NET_CLOUD_OK:   return PANEL_UPLINK_CLOUD_OK;
+    case PANEL_NET_CLOUD_FAIL: return PANEL_UPLINK_CLOUD_FAIL;
+    case PANEL_NET_UNPROVISIONED:
+    default:                   return PANEL_UPLINK_NONE;
+    }
+}
+
 static void ui_task(void *arg)
 {
     (void)arg;
@@ -750,6 +765,10 @@ static void ui_task(void *arg)
              * timer keys only on the DATA changing, so someone who picks up
              * the droid and taps is reading a 40% screen because the battery
              * happened to report the same voltage as a minute ago. */
+            /* The board's own uplink, every tick: the chrome describes the
+              * board, and this is the only place that reads panel_net. */
+            panel_ui_set_uplink(uplink_now());
+
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(),
                              changed || touched || pressed || swiped != PANEL_SWIPE_NONE,
