@@ -528,6 +528,30 @@ static void test_reply_chirp_needs_a_committed_id(void)
     r2_gate_grant_status(false);
 }
 
+/* THE SENTINEL'S OWN SAFETY CLAIM, checked rather than trusted (CLAUDE.md, "a
+ * claim in a comment is load-bearing, and it is likelier wrong than the
+ * code"). r2_gate.c's s_chirp_used_for_exchange comment says exchange id 0
+ * "can never legitimately collide with the initialiser" -- true because
+ * panel_exchange_may_act(px, 0) is documented to always be false, so a
+ * correct caller never reaches here with id 0 and may_act true. But nothing
+ * upstream of THIS function enforces that; a caller bug that passed id 0
+ * anyway must still fail closed, not open. */
+static void test_reply_chirp_with_exchange_id_zero_is_refused_not_admitted(void)
+{
+    printf("     exchange id 0 (the sentinel) never gets a chirp, even with may_act=true\n");
+    r2_gate_grant_status(true);
+    tx_reset();
+    const int n = r2_gate_send_reply_audio(true, 0, CHIRP_ID_OK, 1, fake_tx, NULL);
+    CHECK(n < 0 && tx_calls == 0,
+          "exchange id 0 got a chirp out (got %d, tx %d)", n, tx_calls);
+    /* The exact refusal reason is secondary to the fail-closed property above,
+     * but pin it anyway so a change in behaviour here is a deliberate edit,
+     * not a silent drift: today it reads as REPLY_USED, because id 0 starts
+     * out equal to the "nothing spent yet" initialiser. */
+    CHECK(n == R2_GATE_REPLY_USED, "exchange id 0's refusal reason changed (got %d)", n);
+    r2_gate_grant_status(false);
+}
+
 static void test_reply_chirp_is_at_most_one_per_exchange(void)
 {
     printf("     a second chirp for the same exchange is refused, a first for a new one is not\n");
@@ -685,6 +709,7 @@ int main(void)
     test_reply_chirp_needs_the_wake_grant();
     test_reply_chirp_needs_may_act();
     test_reply_chirp_needs_a_committed_id();
+    test_reply_chirp_with_exchange_id_zero_is_refused_not_admitted();
     test_reply_chirp_is_at_most_one_per_exchange();
     test_reply_chirp_a_refused_call_never_spends_the_budget();
     test_reply_chirp_a_failed_transmit_still_spends_the_budget();
