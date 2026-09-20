@@ -626,12 +626,50 @@ Gaps 35 and 36 gave different perceived lengths, so **it is not a linear
 duration**. Usable to bucket short/medium/long and to flag outliers; not usable
 to time choreography. S1d still needs measured or event-backed durations.
 
-**NOT SAMPLED — six families have no reading at all:** `NEGATIVE`, `POSITIVE`,
-`SAD`, `SCREAM`, `SHORT_OUT`, `STEP`. Their labels are concrete, and every
-concrete label held; the two that failed (`CHATTY` "neutral talking",
-`EXCITED`) were the two vaguest. Reasonable to trust them and revisit if a
-behaviour built on one feels wrong — but they are **UNVERIFIED**, and #9's
-acceptance criterion of ≥3 rated ids per family is **not met**.
+**PARTIALLY RESOLVED 2026-09-20 (3.4a below):** `NEGATIVE`, `POSITIVE` and
+`SAD` are each now sampled by two members, cited by ear to a mood rather than
+to S1b's generic labels. `SCREAM`, `SHORT_OUT` and `STEP` remain **NOT
+SAMPLED** — three families have no reading at all. Their labels are concrete,
+and every concrete label in S1b held; the two that failed (`CHATTY` "neutral
+talking", `EXCITED`) were the two vaguest. Reasonable to trust the unsampled
+three and revisit if a behaviour built on one feels wrong — but they are
+**UNVERIFIED**, and #9's original acceptance criterion of ≥3 rated ids per
+family is still not met for any of the nine families S1b and 3.4a leave
+untouched.
+
+### 3.4a chirp survey — OBSERVED 2026-09-20 on `D2-6F6B`, E2E v0 slice 3
+
+**The committed mood → chirp table**, per D-032's reply door and the plan's
+3.4a gate (every mood keeps ≥1 id rated `y`, a mood with none is dropped).
+Two candidates per mood, volume 200, rated live by the operator against
+"reads as `<mood>`" / "doesn't" / "missed" — raw ratings and sends in
+`mac-prototype/results/chirp_survey_3.4a.jsonl`, driver in
+`mac-prototype/tools/chirp_survey.py` (`verdict` re-derives this table from
+that file; `selftest` proves the keep/drop logic on synthetic data with no
+robot).
+
+| Mood | id (name) | Verdict | Note |
+|---|---|---|---|
+| curious | `R2_CHATTY_11` | ✅ kept | S1b's own reading ("inquisitive") — the known-positive control, confirmed live |
+| curious | `R2_CHATTY_15` | ✅ kept | S1b: '"huh?"' |
+| happy | `R2_POSITIVE_1` | ✅ kept | |
+| happy | `R2_POSITIVE_5` | ❌ dropped | operator: too short, reads as a quip, not happy |
+| annoyed | `R2_ANNOYED` | ✅ kept | |
+| annoyed | `R2_NEGATIVE_1` | ✅ kept | |
+| sad | `R2_SAD_1` | ✅ kept | |
+| sad | `R2_SAD_5` | ✅ kept | S1b measured this one as "medium" length only, no mood reading until now |
+| alert | `R2_ALARM_1` | ✅ kept | |
+| alert | `R2_HEY_1` | ✅ kept | |
+
+**All five moods clear the gate.** `curious`, `annoyed`, `sad` and `alert`
+each keep both candidates; `happy` keeps one (`R2_POSITIVE_1`) after
+`R2_POSITIVE_5` was rejected by ear. 10/10 sends confirmed OK; item 1 (the
+control) rated `y`, so the volume and link are not in question for the `n`.
+
+**Scope: this is not a survey of the `NEGATIVE`, `POSITIVE` or `SAD`
+families.** One id from each was rated `n` or untested; the families are 28,
+23 and 25 members respectively, and this samples two per mood, chosen for the
+purpose (a reply chirp), not for family coverage.
 
 **Use only the `R2_*` family for the character.** BB-8/BB-9E sounds are a
 different droid's voice and will break the illusion; the test tones are
