@@ -540,6 +540,25 @@ static void test_reply_chirp_refuses_no_mood(void)
     r2_gate_grant_status(false);
 }
 
+/* An enum value outside voice_mood_t entirely -- not just NONE, a value the
+ * type was never supposed to hold. chirp_id_for_mood()'s switch has a
+ * `default: return 0` for exactly this, but nothing exercised that arm until
+ * now; a refactor that turned the switch exhaustive-without-default (and so
+ * silently returned garbage for an out-of-range value under -Wswitch) would
+ * have shipped with every other test here still green. */
+static void test_reply_chirp_refuses_an_out_of_range_mood(void)
+{
+    const voice_mood_t bogus = (voice_mood_t)99;
+    CHECK(r2_ops_chirp_id_for_mood(bogus) == 0, "an out-of-range mood has a chirp id");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_calls = 0;
+    const int n = r2_ops_reply_chirp(bogus, true, id, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ID && tx_calls == 0,
+          "an out-of-range mood reply chirp went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
 /* PIN THE EXACT id per mood, not just "some id the gate admits". A mood
  * mapped to a DIFFERENT mood's (still gate-admitted) id passed the "does the
  * gate accept it" test below and reads as a working reply while playing the
@@ -803,6 +822,7 @@ int main(void)
     test_battery_range();
 
     test_reply_chirp_refuses_no_mood();
+    test_reply_chirp_refuses_an_out_of_range_mood();
     test_each_mood_picks_its_own_committed_id();
     test_every_mood_picks_an_id_the_gate_admits();
     test_reply_chirp_needs_may_act_and_the_grant();
