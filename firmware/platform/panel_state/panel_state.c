@@ -170,6 +170,7 @@ panel_state_t panel_state_resolve(uint32_t active)
 }
 
 uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
+                               panel_state_t voice_state,
                                panel_state_t *out_state,
                                panel_offline_mode_t *out_mode)
 {
@@ -177,10 +178,13 @@ uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
     panel_offline_mode_t mode = PANEL_OFF_COUNT;
 
     if (link_up) {
-        /* `idle`, never `listen` / `thinking` / `waiting`. Those need a
-         * reasoning layer that does not run on this board, and claiming one
-         * would be the panel inventing an interaction that never happened. */
+        /* `idle` by default. `listen` / `thinking` / `misheard` / `answering`
+         * are real now (E2E v0 slice 3.2): `voice_state` is what the hold and
+         * the exchange say is happening, and PANEL_ST_COUNT is their honest
+         * "nothing" -- a caller with no exchange passes that, not a guess.
+         * `waiting` still has no caller; nothing sets it. */
         active |= 1u << PANEL_ST_IDLE;
+        if (voice_state < PANEL_ST_RANKED_COUNT) active |= 1u << voice_state;
     } else if (unreachable_ms > PANEL_WAKING_BOUND_MS) {
         active |= 1u << PANEL_ST_OFFLINE;
         /* PANEL_OFF_R2 and not NET or LLM: the BLE link is the only one this
@@ -202,11 +206,17 @@ uint32_t panel_state_from_link(bool link_up, uint32_t unreachable_ms,
 
 uint32_t panel_state_from_power(bool released, bool link_up,
                                 uint32_t unreachable_ms,
+                                panel_state_t voice_state,
                                 panel_state_t *out_state,
                                 panel_offline_mode_t *out_mode)
 {
     if (!released)
-        return panel_state_from_link(link_up, unreachable_ms, out_state, out_mode);
+        return panel_state_from_link(link_up, unreachable_ms, voice_state,
+                                     out_state, out_mode);
+    /* Released wins over voice too: an exchange caught mid-GOODNIGHT is the
+     * caller's to retire (panel_exchange_retire, PX_RETIRE_GOODNIGHT /
+     * PX_RETIRE_R2_RELEASED) before this is ever asked again, not this
+     * function's to notice. */
     if (out_state) *out_state = PANEL_ST_RELEASED;
     if (out_mode)  *out_mode  = PANEL_OFF_COUNT;
     return 0;

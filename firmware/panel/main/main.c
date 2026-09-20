@@ -34,6 +34,8 @@
 #include "nimble/nimble_port_freertos.h"
 #include "nvs_flash.h"
 
+#include "panel_exchange.h"
+#include "panel_mic.h"
 #include "panel_probe.h"
 #include "panel_service.h"
 #include "panel_shot.h"
@@ -654,6 +656,46 @@ static void set_brightness_pct(int percent) { bsp_display_brightness_set(percent
  * that arrives before any landing has been seen does nothing. */
 static panel_face_press_t s_face_press = { .spent = true };
 
+/* TALK's exchange (E2E v0 slice 3.2). Zero-valued: no live exchange, exactly
+ * panel_exchange's own documented safe value. ui_task is its only writer. */
+static panel_exchange_t s_exchange;
+
+/* What the exchange says is on the glass right now, or PANEL_ST_COUNT for
+ * "nothing live" -- panel_state's own value for that, so this needs no
+ * translation at the call site. */
+static panel_state_t voice_state_now(void)
+{
+    switch (s_exchange.phase) {
+    case PX_LISTENING: return PANEL_ST_LISTEN;
+    case PX_THINKING:  return PANEL_ST_THINKING;
+    case PX_ANSWERING: return PANEL_ST_ANSWERING;
+    case PX_NONE:
+    default:           return PANEL_ST_COUNT;
+    }
+}
+
+/* STT (3.3) is not wired to real hardware yet -- there is nothing to produce
+ * a transcript. Reporting an empty one is the honest description of that: it
+ * retires the exchange as MISHEARD (panel_exchange_transcript's own rule),
+ * which is a real, terminal, truthful state rather than THINKING left with
+ * no caller that could ever resolve it. */
+static void report_no_stt_yet(uint32_t id)
+{
+    (void)panel_exchange_transcript(&s_exchange, id, 0);
+}
+
+/* Ends whatever capture is running and retires the exchange for a reason
+ * that is not the finger lifting -- GOODNIGHT, R2 released, or the link
+ * going down mid-hold. The plan's failure matrix: all three discard rather
+ * than hand anything to STT. */
+static void talk_abort(px_retire_t why)
+{
+    if (s_exchange.live == 0) return;
+    ESP_LOGI(TAG, "TALK aborted: %s", panel_exchange_retire_name(why));
+    panel_mic_stop();
+    panel_exchange_retire(&s_exchange, why);
+}
+
 /* panel_net's state, as the chrome's vocabulary. The two enums are kept
  * apart on purpose: panel_net owns the mechanism, panel_service owns what may
  * be claimed, and this is the one line that joins them. */
@@ -724,8 +766,10 @@ static void ui_task(void *arg)
                 .blanked = panel_ui_blank_showing(),
                 .wake_frame = panel_ui_wake_showing(),
                 .awake = r2_link_wanted(),
-                /* No exchange exists yet (slice 3.2+): nothing listens,
-                 * thinks or answers, so no TALK or face STOP can resolve. */
+                .listening = s_exchange.phase == PX_LISTENING,
+                .exchange  = s_exchange.phase == PX_THINKING ||
+                            s_exchange.phase == PX_ANSWERING,
+                .answering = s_exchange.phase == PX_ANSWERING,
             };
             if (pressed) {
                 /* Where it LANDED fixes the zone. A press so short it is
@@ -751,15 +795,80 @@ static void ui_task(void *arg)
                 panel_face_step(&s_face_press, &fc, PANEL_IN_TAP) == PANEL_ACT_ROW)
                 panel_ui_tap(tap_x, tap_y);
 
-            /* The press IN PROGRESS, for WAKE / GOODNIGHT's hold. The hold
-             * draws its fill and reports completion; the table decides whether
-             * that completion is a request. A voided press (the dismissal
-             * above) is spent in the hold too, so it never completes. */
-            if (panel_ui_hold(down, hx, hy, hvoid, hdev, now_ms())) {
-                if (panel_face_step(&s_face_press, &fc, PANEL_IN_HOLD) == PANEL_ACT_POWER)
+            /* The press IN PROGRESS, for WAKE / GOODNIGHT's hold and TALK's
+             * (E2E v0 slice 3.2) -- two independent trackers, each drawing
+             * its own fill, because a press is fixed to one zone at
+             * panel_face_begin() and only that zone's tracker will ever see
+             * `in_target` true for it. Both must run every tick regardless
+             * of which fires, or the one that does not complete this press
+             * never animates. The table decides whether a completion is a
+             * request; a voided press (the dismissal above) is spent in
+             * both, so neither ever completes from it. */
+            const bool power_fired = panel_ui_hold(down, hx, hy, hvoid, hdev, now_ms());
+            const bool talk_fired  = panel_ui_talk_hold(down, hx, hy, hvoid, hdev, now_ms());
+            if (power_fired || talk_fired) {
+                switch (panel_face_step(&s_face_press, &fc, PANEL_IN_HOLD)) {
+                case PANEL_ACT_POWER:
+                    /* GOODNIGHT wins over an exchange in progress (panel_face.h
+                     * precedence #4) -- a live exchange plus a resolved POWER
+                     * hold can only be that, since TALK itself requires awake. */
+                    talk_abort(PX_RETIRE_GOODNIGHT);
                     panel_ui_request_power();
+                    break;
+                case PANEL_ACT_TALK:
+                    ESP_LOGI(TAG, "TALK: hold %u begins",
+                             (unsigned)panel_exchange_begin(&s_exchange));
+                    if (!panel_mic_start())
+                        ESP_LOGW(TAG, "TALK: capture did not start");
+                    break;
+                default:
+                    break;
+                }
                 panel_touch_void_gesture();
             }
+
+            /* The finger lifting ends the capture -- LISTENING -> THINKING,
+             * and immediately MISHEARD (report_no_stt_yet): there is no STT
+             * to hand a real transcript to yet, and an empty one is what
+             * that honestly is, not an invented state left stuck forever. A
+             * capture that hit the 12 s cap on its own retires as
+             * HOLD_TOO_LONG instead and is discarded, never reaching
+             * THINKING at all (the plan's failure matrix: "auto-cancel to
+             * idle, audio discarded"). */
+            if (s_exchange.phase == PX_LISTENING && !down) {
+                /* Stop FIRST, then read: the task only writes its result the
+                 * moment it finishes (panel_mic.c), and panel_mic_stop()
+                 * blocks until it has. Reading before stopping returned
+                 * whatever the PREVIOUS capture left behind -- 0 B on the
+                 * very first hold of a boot, harmlessly, but a stale
+                 * `capped` from an earlier capture on any later one, which
+                 * would misfile that capture's own outcome. MEASURED on
+                 * hardware: the log read "TALK: released, 0 B captured" for
+                 * a capture that had genuinely written 161920 B, one line
+                 * before the dump printed the true number. */
+                panel_mic_stop();
+                uint32_t bytes; bool capped;
+                (void)panel_mic_last_capture(&bytes, &capped);
+                const uint32_t id = s_exchange.live;
+                if (capped) {
+                    panel_exchange_retire(&s_exchange, PX_RETIRE_HOLD_TOO_LONG);
+                    ESP_LOGI(TAG, "TALK: capped at the 12 s cap, discarded");
+                } else {
+                    panel_exchange_hold_released(&s_exchange, id);
+                    ESP_LOGI(TAG, "TALK: released, %u B captured", (unsigned)bytes);
+#ifdef PANEL_MIC_DUMP
+                    panel_mic_dump_to_flash();
+#endif
+                    report_no_stt_yet(id);
+                }
+            }
+
+            /* R2 released or the link lost mid-exchange (the plan's failure
+             * matrix): abandoned, nothing sent, same as GOODNIGHT above. Read
+             * every tick rather than only on a transition, because retire()
+             * is a no-op with nothing live -- there is nothing to debounce. */
+            if (s_tm.released) talk_abort(PX_RETIRE_R2_RELEASED);
+            if (s_tm.link != R2_TM_UP) talk_abort(PX_RETIRE_LINK_LOST);
 
             /* A HUMAN TOUCHING IT COUNTS AS ACTIVITY. Without this the dim
              * timer keys only on the DATA changing, so someone who picks up
@@ -768,6 +877,10 @@ static void ui_task(void *arg)
             /* The board's own uplink, every tick: the chrome describes the
               * board, and this is the only place that reads panel_net. */
             panel_ui_set_uplink(uplink_now());
+            /* What TALK's exchange says is happening, every tick -- the face
+             * and the LEDs are driven from the same panel_ui_update this
+             * feeds (E2E v0 slice 3.2). */
+            panel_ui_set_voice_state(voice_state_now());
 
             const bool changed = panel_ui_update(&s_tm, now_ms());
             panel_ui_burn_in(now_ms(),
@@ -1615,6 +1728,13 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "STATUS frame drawn; ceiling is '%s'",
              r2_gate_tier_name(r2_gate_get_ceiling()));
+
+    /* TALK's mic (E2E v0 slice 3.2). Independent of the BLE link and Wi-Fi,
+     * so it goes up here rather than waiting on either -- and a failure here
+     * degrades to no TALK, not a boot that never reaches the glass (D-015's
+     * shape, applied to the microphone rather than the cloud). */
+    if (!panel_mic_init())
+        ESP_LOGW(TAG, "no microphone: TALK will hold but never capture");
 
     r2_telemetry_reset(&s_tm);
     r2_lights_player_init(&s_lights);

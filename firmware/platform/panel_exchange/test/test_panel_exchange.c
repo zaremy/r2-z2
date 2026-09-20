@@ -33,6 +33,7 @@ static const px_retire_t RETIRING[] = {
     PX_RETIRE_GOODNIGHT, PX_RETIRE_STOP, PX_RETIRE_R2_RELEASED,
     PX_RETIRE_LINK_LOST, PX_RETIRE_NEW_HOLD,
     PX_RETIRE_TIMEOUT,  /* not one of the plan's five, and just as late */
+    PX_RETIRE_HOLD_TOO_LONG, /* the 12 s capture cap, added in 3.2 */
 };
 #define N_RETIRING (sizeof RETIRING / sizeof RETIRING[0])
 

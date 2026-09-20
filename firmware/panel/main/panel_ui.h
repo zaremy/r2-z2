@@ -134,6 +134,21 @@ bool        panel_ui_take_power_request(void);
  * resolves a completed hold to PANEL_ACT_POWER; panel_ui_hold only draws the
  * fill and reports completion. */
 void        panel_ui_request_power(void);
+
+/* TALK (E2E v0 slice 3.2, D-017's label rule): the lower face, held, while
+ * awake and idle -- the mic's switch. Same shape as panel_ui_hold, a second,
+ * independent tracker over PANEL_ZONE_LOWER instead of PANEL_ZONE_WORD, so a
+ * press already committed to one zone cannot also progress the other. Draws
+ * the "HOLD TO TALK" label and its own fill; returns true on the look that
+ * completes the hold. */
+bool        panel_ui_talk_hold(bool down, int x, int y, bool voided,
+                               int32_t max_dev, uint32_t now_ms);
+
+/* What the hold and the exchange say is happening, fed in every tick before
+ * panel_ui_update -- same shape as panel_ui_set_uplink. PANEL_ST_COUNT means
+ * no live exchange. panel_ui_update passes this straight to
+ * panel_state_from_power as its voice_state. */
+void        panel_ui_set_voice_state(panel_state_t vs);
 /* The state the face is SHOWING, as of the last panel_ui_update -- the one
  * value his lights are driven from too (E2E v0 slice 2), so the glass and the
  * LEDs cannot disagree about what state he is in. PANEL_ST_COUNT until the
