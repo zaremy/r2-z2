@@ -3061,9 +3061,11 @@ operator meant a gesture, this is the line to revisit.**
 
 ### Consequences
 
-- **Nothing implements this yet.** Step 3.5a builds the chirp entry, 3.5b the
-  dome entry, and 3.5c composes them. `play_audio` is in the gate's AUDIO
-  table but not in `r2_ops`.
+- **3.5a landed 2026-09-20** (#203, `r2_gate_send_reply_audio()` +
+  `r2_ops_reply_chirp()`): the chirp entry only, as a third `r2_gate` door
+  gated on the WAKE grant and a caller-supplied `may_act`/exchange id, one
+  chirp per exchange, checked against the 3.4a-committed id table. 3.5b (the
+  dome entry) and 3.5c (composing the two) remain unbuilt.
 - **Gates, illegal cases first** (`CLAUDE.md`, *mutate the guard*): host tests
   that each op is refused in each of these cases:
   - with no WAKE grant;
@@ -3072,6 +3074,13 @@ operator meant a gesture, this is the line to revisit.**
   - as a second chirp or second dome move in one exchange;
   - with an id outside the chirp table;
   - with travel under 12° or over 45°.
+
+  3.5a splits this list across two components, per the layering rule 5
+  itself gives ("no new r2_gate dependency on panel_exchange"): "retired
+  exchange id" and "outside ANSWERING" are `panel_exchange_may_act()`'s own
+  illegal cases, already gated in #197's tests; `r2_gate`'s reply-door tests
+  cover the rest directly, plus a `may_act=false` case standing in for both
+  at the door itself.
 
   Each refusal is asserted by its reason, not only by the raise. Then one
   test proves the reply code routes through this path and not
