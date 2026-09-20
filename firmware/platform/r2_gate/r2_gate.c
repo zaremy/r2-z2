@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -315,6 +316,71 @@ int r2_gate_send_reply_audio(bool may_act, uint32_t exchange_id, uint16_t sound_
     return n;
 }
 
+/* ---- THE REPLY PATH'S DOME HALF (D-032, E2E v0 slice 3.5b) ---------------
+ *
+ * D-013's measured floor and D-032's own ceiling: below 12 degrees of travel
+ * the hardware silently no-ops and still reports success (D-013 -- 4/6/8/10
+ * degrees all moved ≤0.11°); above 45 the model was never offered anything
+ * larger (D-032, mirroring mac-prototype/r2_behavior.py's MAX_DOME_DEG).
+ * Refused outside the band, never clamped into it -- same philosophy
+ * REPLY_CHIRP_IDS already holds for sound ids. */
+#define MIN_DOME_TRAVEL_DEG 12.0f
+#define MAX_DOME_TRAVEL_DEG 45.0f
+
+/* Independent of s_chirp_used_for_exchange -- D-032 rule 5, "each is
+ * admitted on its own". 0 is safe as "none yet" for the same reason
+ * s_chirp_used_for_exchange's initialiser is: panel_exchange's own "no live
+ * exchange" sentinel, so a real exchange id can never legitimately collide
+ * with it. */
+static uint32_t s_dome_used_for_exchange = 0;
+
+int r2_gate_send_reply_dome(bool may_act, uint32_t exchange_id,
+                            float current_deg, float delta_deg,
+                            uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    /* ILLEGAL CASES FIRST. Same grant, same may_act, checked before either
+     * number is even inspected -- an ungranted or non-live call is refused
+     * the same way whatever garbage it carries. */
+    if (!s_status_granted) { s_refused++; return R2_GATE_NOT_GRANTED; }
+    if (!may_act)          { s_refused++; return R2_GATE_REPLY_NOT_LIVE; }
+    /* NaN escapes the travel band check below: fabsf(NaN) makes both
+     * `< MIN` and `> MAX` false, so a NaN delta would read as legal travel.
+     * Checked explicitly, before travel is computed from either number. */
+    if (!isfinite(current_deg) || !isfinite(delta_deg)) {
+        s_refused++; return R2_GATE_REPLY_BAD_ANGLE;
+    }
+    const float travel = fabsf(delta_deg);
+    if (travel < MIN_DOME_TRAVEL_DEG || travel > MAX_DOME_TRAVEL_DEG) {
+        s_refused++; return R2_GATE_REPLY_TRAVEL;
+    }
+    if (exchange_id == s_dome_used_for_exchange) { s_refused++; return R2_GATE_REPLY_DOME_USED; }
+
+    if (tx == NULL) { s_refused++; return R2_GATE_NO_TX; }
+
+    /* Big-endian IEEE-754 float32, the mirror of r2_ops_parse_head's decode
+     * (r2_ops.c) -- memcpy rather than a pointer cast, which is a
+     * strict-aliasing violation compilers do act on at -O2. */
+    const float target = current_deg + delta_deg;
+    uint32_t bits;
+    memcpy(&bits, &target, sizeof bits);
+    const uint8_t payload[4] = {
+        (uint8_t)(bits >> 24), (uint8_t)(bits >> 16),
+        (uint8_t)(bits >> 8),  (uint8_t)(bits & 0xFFu),
+    };
+    uint8_t frame[R2_ENCODED_MAX(8)];
+    const int n = r2_packet_encode(DID_ANIMATRONIC, 0x0F /* set_head_position */, seq,
+                                   payload, sizeof payload, frame, sizeof frame);
+    if (n <= 0) { s_refused++; return R2_GATE_ENCODE_FAILED; }
+
+    /* Spend the budget at exactly the point the chirp door does -- see its
+     * own comment above for why: encoded, about to be handed to the
+     * transport, not after tx() returns. */
+    s_dome_used_for_exchange = exchange_id;
+    s_admitted++;
+    if (tx(frame, (size_t)n, ctx) < 0) return R2_GATE_ENCODE_FAILED;
+    return n;
+}
+
 const char *r2_gate_tier_name(r2_tier_t t)
 {
     switch (t) {
@@ -341,6 +407,9 @@ const char *r2_gate_verdict_name(r2_gate_verdict_t v)
     case R2_GATE_REPLY_NOT_LIVE:  return "refused: this exchange may not act";
     case R2_GATE_REPLY_BAD_ID:    return "refused: not a committed chirp id";
     case R2_GATE_REPLY_USED:      return "refused: this exchange already chirped";
+    case R2_GATE_REPLY_BAD_ANGLE: return "refused: dome angle is not a finite number";
+    case R2_GATE_REPLY_TRAVEL:    return "refused: dome travel is outside 12-45 degrees";
+    case R2_GATE_REPLY_DOME_USED: return "refused: this exchange already moved his dome";
     default:                      return "?";
     }
 }

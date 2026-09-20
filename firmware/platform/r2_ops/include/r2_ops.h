@@ -207,6 +207,23 @@ uint16_t r2_ops_chirp_id_for_mood(voice_mood_t mood);
 int r2_ops_reply_chirp(voice_mood_t mood, bool may_act, uint32_t exchange_id,
                        uint8_t seq, r2_tx_fn tx, void *ctx);
 
+/* ---- Reply dome (D-032, step 3.5b) ---------------------------------------
+ *
+ * Sends the one dome move a reply exchange may have, through D-032's reply
+ * door (r2_gate_send_reply_dome). A thin pass-through, unlike the chirp:
+ * there is no mood-to-angle table here, because the model's own delta IS the
+ * semantic content ("the model picks... an angle, and both are refused,
+ * never clamped, outside their sets" -- D-032). `current_deg` must be a head
+ * position read in the SAME exchange; r2_ops keeps no memory of its own and
+ * trusts the caller for freshness, the same way it trusts `may_act`.
+ * Refuses (and sends nothing) for every reason r2_gate_send_reply_dome
+ * refuses: no WAKE grant, `may_act` false, a non-finite angle, travel
+ * outside 12-45 degrees, or a second dome move for the same exchange id --
+ * independently of whatever that exchange's chirp budget has done. Returns
+ * the encoded length, or a negative r2_gate_verdict_t. */
+int r2_ops_reply_dome(float current_deg, float delta_deg, bool may_act,
+                      uint32_t exchange_id, uint8_t seq, r2_tx_fn tx, void *ctx);
+
 const char *r2_ops_err_name(r2_ops_err_t e);
 /* R2's own error codes, r2_probe.py Response.ERRORS. */
 const char *r2_ops_device_error_name(uint8_t err);

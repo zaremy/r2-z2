@@ -7,6 +7,7 @@
  * used a legal colour" (CLAUDE.md). So every test below that matters is a
  * REFUSAL.
  */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -680,6 +681,255 @@ static void test_reply_chirp_does_not_widen_the_main_gate(void)
     s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
 }
 
+/* ---- THE REPLY PATH'S DOME HALF (D-032, 3.5b) ----------------------------- */
+
+/* A plausible fresh read -- not 0, since the dome has no resting position
+ * (CLAUDE.md) and a test that only ever moves from 0 could not tell "adds
+ * current" from "ignores it". */
+#define DOME_CURRENT_OK 10.0f
+#define DOME_TRAVEL_OK  20.0f   /* inside 12-45, unambiguously */
+#define DOME_TRAVEL_TOO_SMALL 5.0f
+#define DOME_TRAVEL_TOO_BIG   60.0f
+
+static void test_reply_dome_needs_the_wake_grant(void)
+{
+    printf("     a reply dome move is refused with no WAKE grant, whatever may_act says\n");
+    r2_gate_grant_status(false);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    const int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK,
+                                          1, fake_tx, NULL);
+    CHECK(n == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted dome move went out (got %d, tx %d)", n, tx_calls);
+}
+
+static void test_reply_dome_needs_may_act(void)
+{
+    printf("     a reply dome move is refused when the caller says may_act is false\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    const int n = r2_gate_send_reply_dome(false, id, DOME_CURRENT_OK, DOME_TRAVEL_OK,
+                                          1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_NOT_LIVE && tx_calls == 0,
+          "a dome move with may_act=false went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_needs_a_finite_angle(void)
+{
+    printf("     a NaN current or delta is refused, not read as legal travel\n");
+    r2_gate_grant_status(true);
+
+    uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_dome(true, id, NAN, DOME_TRAVEL_OK, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "a NaN current position went out (got %d, tx %d)", n, tx_calls);
+
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, NAN, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "a NaN delta went out (got %d, tx %d) -- fabsf(NaN) satisfies neither travel bound",
+          n, tx_calls);
+
+    r2_gate_grant_status(false);
+}
+
+/* Same fail-closed accident as the chirp door's own version of this test
+ * (CLAUDE.md, "a claim in a comment is load-bearing"): id 0 collides with
+ * s_dome_used_for_exchange's own "none yet" initialiser ONLY while nothing
+ * has genuinely used the budget yet. Placed here, BEFORE needs_travel_in_band's
+ * own admitted boundary cases, on purpose: this test originally sat after
+ * them and failed with a real dome move going out (got 11, tx 1), because by
+ * then a real exchange had already spent the budget and
+ * `0 == s_dome_used_for_exchange` no longer held. That is a narrow,
+ * pre-existing property of the sentinel-collision trick (the chirp door
+ * shares it) -- true only until the first real success, not a guarantee this
+ * test can manufacture. Keep this test ahead of any test that admits a
+ * dome move, or it stops proving what its name says. */
+static void test_reply_dome_with_exchange_id_zero_is_refused_not_admitted(void)
+{
+    printf("     exchange id 0 (the sentinel) never gets a dome move, even with may_act=true\n");
+    r2_gate_grant_status(true);
+    tx_reset();
+    const int n = r2_gate_send_reply_dome(true, 0, DOME_CURRENT_OK, DOME_TRAVEL_OK,
+                                          1, fake_tx, NULL);
+    CHECK(n < 0 && tx_calls == 0, "exchange id 0 got a dome move out (got %d, tx %d)", n, tx_calls);
+    CHECK(n == R2_GATE_REPLY_DOME_USED, "exchange id 0's refusal reason changed (got %d)", n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_needs_travel_in_band(void)
+{
+    printf("     dome travel under 12 or over 45 degrees is refused, never clamped\n");
+    r2_gate_grant_status(true);
+
+    uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_TOO_SMALL,
+                                    1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_TRAVEL && tx_calls == 0,
+          "a %.0f-degree move went out under the 12-degree floor (got %d, tx %d)",
+          DOME_TRAVEL_TOO_SMALL, n, tx_calls);
+
+    /* Negative: the same floor applies turning the other way. */
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, -DOME_TRAVEL_TOO_SMALL,
+                                1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_TRAVEL && tx_calls == 0,
+          "a small move left-ward went out under the floor (got %d, tx %d)", n, tx_calls);
+
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_TOO_BIG,
+                                1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_TRAVEL && tx_calls == 0,
+          "a %.0f-degree move went out over the 45-degree ceiling (got %d, tx %d)",
+          DOME_TRAVEL_TOO_BIG, n, tx_calls);
+
+    /* The boundary values themselves are LEGAL -- "12-45 degrees, inclusive"
+     * (D-032). A strict `<`/`>` that should have been `<=`/`>=` would only be
+     * caught by testing the edge, not just outside it. */
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, 12.0f, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "exactly 12 degrees of travel was refused (%d)", n);
+
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, -45.0f, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "exactly -45 degrees of travel was refused (%d)", n);
+
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_is_at_most_one_per_exchange(void)
+{
+    printf("     a second dome move for the same exchange is refused, a first for a new one is not\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "the first dome move for a fresh exchange was refused (%d)", n);
+
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_DOME_USED && tx_calls == 0,
+          "a second dome move for the SAME exchange went out (got %d, tx %d)", n, tx_calls);
+
+    const uint32_t id2 = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id2, DOME_CURRENT_OK, DOME_TRAVEL_OK, 3, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "a fresh exchange inherited the prior one's used-up dome budget (%d)", n);
+    r2_gate_grant_status(false);
+}
+
+/* D-032 rule 5, proven rather than just declared: THE SAME exchange gets one
+ * chirp AND one dome move, and spending one must not touch the other's
+ * budget in either direction. */
+static void test_reply_dome_and_chirp_budgets_are_independent(void)
+{
+    printf("     one exchange's chirp and dome budgets are spent independently\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+
+    tx_reset();
+    int n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "the exchange's chirp was refused (%d)", n);
+
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 2, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the SAME exchange's dome move was refused after its chirp spent (%d)", n);
+
+    /* And now both are genuinely used: a second of either is refused. */
+    tx_reset();
+    n = r2_gate_send_reply_audio(true, id, CHIRP_ID_OK, 3, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_USED && tx_calls == 0,
+          "a second chirp for the exchange went out after both budgets were spent (%d)", n);
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 4, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_DOME_USED && tx_calls == 0,
+          "a second dome move for the exchange went out after both budgets were spent (%d)", n);
+
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_a_refused_call_never_spends_the_budget(void)
+{
+    printf("     a call that never reaches the transport does not spend the exchange's dome move\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 1, NULL, NULL);
+    CHECK(n == R2_GATE_NO_TX, "a no-tx dome move returned %d, not NO_TX", n);
+
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 2, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the same exchange's dome move was refused after an earlier NO_TX call (%d)", n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_a_failed_transmit_still_spends_the_budget(void)
+{
+    printf("     a dome move whose transport reports failure still spends the exchange's budget\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 1, failing_tx, NULL);
+    CHECK(n < 0 && tx_calls == 1,
+          "the failing transmit was not even attempted (n=%d, tx_calls=%d)", n, tx_calls);
+
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_DOME_USED && tx_calls == 0,
+          "a retry after an ambiguous tx failure sent a SECOND real dome move (got %d, tx %d)",
+          n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_bytes_and_op(void)
+{
+    printf("     an admitted dome move is set_head_position, current+delta as big-endian float32\n");
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    tx_reset();
+    const int n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, DOME_TRAVEL_OK,
+                                          9, fake_tx, NULL);
+    CHECK(n > 0, "the dome move was refused (%d)", n);
+
+    const float target = DOME_CURRENT_OK + DOME_TRAVEL_OK;
+    uint32_t bits;
+    memcpy(&bits, &target, sizeof bits);
+    const uint8_t payload[4] = {
+        (uint8_t)(bits >> 24), (uint8_t)(bits >> 16), (uint8_t)(bits >> 8), (uint8_t)(bits & 0xFFu),
+    };
+    uint8_t want[R2_ENCODED_MAX(8)];
+    const int wn = r2_packet_encode(0x17, 0x0F, 9, payload, sizeof payload, want, sizeof want);
+    CHECK(wn > 0 && tx_len == (size_t)wn && memcmp(tx_buf, want, (size_t)wn) == 0,
+          "dome move bytes differ from the hand-computed set_head_position frame");
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_dome_does_not_widen_the_main_gate(void)
+{
+    printf("     the reply path's dome half opens no door on r2_gate_check/r2_gate_send\n");
+    r2_gate_grant_status(true);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
+    CHECK(r2_gate_check(0x17, 0x0F, NULL, 0) == R2_GATE_ABOVE_CEILING,
+          "granting the reply path opened set_head_position on the ceiling-governed path");
+    tx_reset();
+    CHECK(r2_gate_send(0x17, 0x0F, 1, NULL, 0, fake_tx, NULL) == R2_GATE_ABOVE_CEILING
+              && tx_calls == 0,
+          "set_head_position left through r2_gate_send while only the reply grant was held");
+    r2_gate_grant_status(false);
+    s_ceiling_touched = 1; r2_gate_set_ceiling(R2_TIER_READ);
+}
+
 int main(void)
 {
     printf("r2_gate host tests\n==================\n");
@@ -716,6 +966,18 @@ int main(void)
     test_every_committed_chirp_id_is_admitted();
     test_reply_chirp_bytes_and_op();
     test_reply_chirp_does_not_widen_the_main_gate();
+
+    test_reply_dome_needs_the_wake_grant();
+    test_reply_dome_needs_may_act();
+    test_reply_dome_needs_a_finite_angle();
+    test_reply_dome_with_exchange_id_zero_is_refused_not_admitted();  /* BEFORE any admit */
+    test_reply_dome_needs_travel_in_band();
+    test_reply_dome_is_at_most_one_per_exchange();
+    test_reply_dome_and_chirp_budgets_are_independent();
+    test_reply_dome_a_refused_call_never_spends_the_budget();
+    test_reply_dome_a_failed_transmit_still_spends_the_budget();
+    test_reply_dome_bytes_and_op();
+    test_reply_dome_does_not_widen_the_main_gate();
     printf("==================\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

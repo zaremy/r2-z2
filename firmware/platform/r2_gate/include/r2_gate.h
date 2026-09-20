@@ -61,6 +61,9 @@ typedef enum {
     R2_GATE_REPLY_NOT_LIVE  = -8,  /* reply path: caller says this exchange may not act */
     R2_GATE_REPLY_BAD_ID    = -9,  /* reply path: sound id is not in the committed table */
     R2_GATE_REPLY_USED      = -10, /* reply path: this exchange already spent its one chirp */
+    R2_GATE_REPLY_BAD_ANGLE = -11, /* reply path: current/delta degrees is not finite */
+    R2_GATE_REPLY_TRAVEL    = -12, /* reply path: dome travel is outside 12-45 degrees */
+    R2_GATE_REPLY_DOME_USED = -13, /* reply path: this exchange already spent its one dome move */
 } r2_gate_verdict_t;
 
 /* Transmit hook. Returns >=0 on success. Kept as a callback so the gate has no
@@ -135,6 +138,40 @@ int  r2_gate_send_status(uint8_t did, uint8_t cid, uint8_t seq,
  * Returns the encoded length on success, or a negative r2_gate_verdict_t. */
 int r2_gate_send_reply_audio(bool may_act, uint32_t exchange_id, uint16_t sound_id,
                              uint8_t seq, r2_tx_fn tx, void *ctx);
+
+/* THE REPLY PATH'S DOME HALF (D-032, E2E v0 slice 3.5b).
+ *
+ * The door's second and last op shape: `set_head_position`, admitted at most
+ * once per exchange, on its OWN budget -- independent of the chirp's
+ * (D-032 rule 5, "each is admitted on its own": a chirp already spent this
+ * exchange does not block its dome move, or the reverse).
+ *
+ * Bounds the MOVE, never the destination. `current_deg` must be a dome
+ * position read in the SAME exchange (CLAUDE.md: "bound moves by travel from
+ * a freshly read position -- never by destination, never from a remembered
+ * angle"); `delta_deg` is the requested turn, positive or negative. What is
+ * checked is `travel = |delta_deg|` against D-013's measured floor and
+ * D-032's own ceiling -- 12 to 45 degrees, inclusive -- refused outside that
+ * band, never clamped into it, the same philosophy the chirp id table
+ * already holds. A non-finite `current_deg` or `delta_deg` is refused as
+ * R2_GATE_REPLY_BAD_ANGLE before travel is even computed: fabsf(NaN)
+ * satisfies neither `< 12` nor `> 45`, so the band check alone would let a
+ * NaN delta through as if it were legal travel.
+ *
+ * Does NOT re-check the resulting absolute target against the hardware's own
+ * declared/observed range (r2-capabilities.md S1c) -- D-032 specifies the
+ * travel bound only, and a target outside it is a silent, harmless no-op on
+ * real hardware (measured: the firmware discards it rather than stalling a
+ * motor). Out of scope for this door.
+ *
+ * `may_act`, the WAKE grant, and every other caller obligation follow
+ * `r2_gate_send_reply_audio`'s contract exactly -- see its own doc comment
+ * above.
+ *
+ * Returns the encoded length on success, or a negative r2_gate_verdict_t. */
+int r2_gate_send_reply_dome(bool may_act, uint32_t exchange_id,
+                            float current_deg, float delta_deg,
+                            uint8_t seq, r2_tx_fn tx, void *ctx);
 
 /* Human-readable, for logs and refusal messages. */
 const char *r2_gate_tier_name(r2_tier_t t);

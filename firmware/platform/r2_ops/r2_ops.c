@@ -208,6 +208,15 @@ int r2_ops_reply_chirp(voice_mood_t mood, bool may_act, uint32_t exchange_id,
                                     chirp_id_for_mood(mood), seq, tx, ctx);
 }
 
+/* ---- Reply dome (D-032, step 3.5b) --------------------------------------- */
+
+int r2_ops_reply_dome(float current_deg, float delta_deg, bool may_act,
+                      uint32_t exchange_id, uint8_t seq, r2_tx_fn tx, void *ctx)
+{
+    return r2_gate_send_reply_dome(may_act, exchange_id, current_deg, delta_deg,
+                                   seq, tx, ctx);
+}
+
 const char *r2_ops_err_name(r2_ops_err_t e)
 {
     switch (e) {
