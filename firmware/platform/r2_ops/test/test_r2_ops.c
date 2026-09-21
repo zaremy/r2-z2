@@ -705,6 +705,25 @@ static void test_reply_dome_routes_through_the_gate_and_its_budget(void)
     r2_gate_grant_status(false);
 }
 
+/* Codex round 1: the test above only proves dome-then-chirp independence.
+ * r2_gate's own suite proves both orderings, but this wrapper suite should
+ * not overclaim "independent" while only having driven one direction. */
+static void test_reply_chirp_then_dome_budgets_are_independent_through_ops(void)
+{
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+
+    tx_calls = 0;
+    int n = r2_ops_reply_chirp(VOICE_MOOD_CURIOUS, true, id, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "the exchange's chirp was refused (%d)", n);
+
+    tx_calls = 0;
+    n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id, 2, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the SAME exchange's dome move was refused after only its chirp had been spent (%d)", n);
+    r2_gate_grant_status(false);
+}
+
 /* ---- #168 part 3: the stop --------------------------------------------- */
 
 static uint8_t stop_seqs[8];
@@ -892,6 +911,7 @@ int main(void)
 
     test_reply_dome_needs_may_act_and_the_grant();
     test_reply_dome_routes_through_the_gate_and_its_budget();
+    test_reply_chirp_then_dome_budgets_are_independent_through_ops();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

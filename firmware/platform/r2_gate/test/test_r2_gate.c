@@ -716,9 +716,19 @@ static void test_reply_dome_needs_may_act(void)
     r2_gate_grant_status(false);
 }
 
+/* Codex round 1: this test originally covered only NAN, and its name claimed
+ * "a finite angle" more broadly than that proved. +/-INFINITY takes a
+ * DIFFERENT path than NaN through the travel band -- fabsf(INFINITY) is
+ * INFINITY, which correctly fails `> MAX_DOME_TRAVEL_DEG` on its own, so an
+ * infinite delta was already caught before this test existed. What was NOT
+ * proven is that isfinite() catches it FIRST, as BAD_ANGLE -- and a future
+ * reordering that moved the travel check ahead of the finite check would
+ * still refuse an infinite delta (by luck, via the band), while silently
+ * admitting an infinite CURRENT position (current+delta encodes as garbage,
+ * and no travel check ever looks at current_deg at all). */
 static void test_reply_dome_needs_a_finite_angle(void)
 {
-    printf("     a NaN current or delta is refused, not read as legal travel\n");
+    printf("     a non-finite current or delta is refused, not read as legal travel\n");
     r2_gate_grant_status(true);
 
     uint32_t id = next_test_exchange_id();
@@ -733,6 +743,29 @@ static void test_reply_dome_needs_a_finite_angle(void)
     CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
           "a NaN delta went out (got %d, tx %d) -- fabsf(NaN) satisfies neither travel bound",
           n, tx_calls);
+
+    /* +INFINITY as CURRENT: fabsf(delta) alone would never catch this, since
+     * the travel check never inspects current_deg. Only BAD_ANGLE can. */
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, INFINITY, DOME_TRAVEL_OK, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "an infinite current position went out (got %d, tx %d)", n, tx_calls);
+
+    /* +INFINITY as DELTA: fabsf(INFINITY) > MAX_DOME_TRAVEL_DEG would ALSO
+     * refuse this, as R2_GATE_REPLY_TRAVEL -- pinning BAD_ANGLE proves the
+     * finite check runs first, not merely that this case is refused somehow. */
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, INFINITY, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "an infinite delta went out (got %d, tx %d)", n, tx_calls);
+
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, DOME_CURRENT_OK, -INFINITY, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "a negative-infinite delta went out (got %d, tx %d)", n, tx_calls);
 
     r2_gate_grant_status(false);
 }
@@ -902,12 +935,13 @@ static void test_reply_dome_bytes_and_op(void)
                                           9, fake_tx, NULL);
     CHECK(n > 0, "the dome move was refused (%d)", n);
 
-    const float target = DOME_CURRENT_OK + DOME_TRAVEL_OK;
-    uint32_t bits;
-    memcpy(&bits, &target, sizeof bits);
-    const uint8_t payload[4] = {
-        (uint8_t)(bits >> 24), (uint8_t)(bits >> 16), (uint8_t)(bits >> 8), (uint8_t)(bits & 0xFFu),
-    };
+    /* Codex round 1: the original version of this test built its expected
+     * bytes with the SAME memcpy-a-float32 logic the production code uses --
+     * so a shared bug in that logic could not have been caught here. 30.0f
+     * (10 + 20, DOME_CURRENT_OK + DOME_TRAVEL_OK) is IEEE-754 binary32
+     * 0x41F00000, written out by hand as a literal, independent of how the
+     * code arrives at it. */
+    const uint8_t payload[4] = { 0x41, 0xF0, 0x00, 0x00 };  /* 30.0f, big-endian */
     uint8_t want[R2_ENCODED_MAX(8)];
     const int wn = r2_packet_encode(0x17, 0x0F, 9, payload, sizeof payload, want, sizeof want);
     CHECK(wn > 0 && tx_len == (size_t)wn && memcmp(tx_buf, want, (size_t)wn) == 0,
