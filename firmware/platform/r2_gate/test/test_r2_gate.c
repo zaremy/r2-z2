@@ -744,13 +744,21 @@ static void test_reply_dome_needs_a_finite_angle(void)
           "a NaN delta went out (got %d, tx %d) -- fabsf(NaN) satisfies neither travel bound",
           n, tx_calls);
 
-    /* +INFINITY as CURRENT: fabsf(delta) alone would never catch this, since
-     * the travel check never inspects current_deg. Only BAD_ANGLE can. */
+    /* +/-INFINITY as CURRENT: fabsf(delta) alone would never catch either
+     * sign, since the travel check never inspects current_deg at all. Only
+     * BAD_ANGLE can -- codex round 2 caught that the first pass here tested
+     * +INFINITY only, despite the comment above claiming "+/-" coverage. */
     id = next_test_exchange_id();
     tx_reset();
     n = r2_gate_send_reply_dome(true, id, INFINITY, DOME_TRAVEL_OK, 1, fake_tx, NULL);
     CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
           "an infinite current position went out (got %d, tx %d)", n, tx_calls);
+
+    id = next_test_exchange_id();
+    tx_reset();
+    n = r2_gate_send_reply_dome(true, id, -INFINITY, DOME_TRAVEL_OK, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_BAD_ANGLE && tx_calls == 0,
+          "a negative-infinite current position went out (got %d, tx %d)", n, tx_calls);
 
     /* +INFINITY as DELTA: fabsf(INFINITY) > MAX_DOME_TRAVEL_DEG would ALSO
      * refuse this, as R2_GATE_REPLY_TRAVEL -- pinning BAD_ANGLE proves the
