@@ -643,6 +643,87 @@ static void test_reply_chirp_routes_through_the_gate_and_its_budget(void)
     r2_gate_grant_status(false);
 }
 
+/* ---- Reply dome (D-032, step 3.5b) ---------------------------------------
+ *
+ * Lighter than the chirp's own coverage above on purpose: there is no
+ * mood-to-angle table here for a mutation to drift, so the travel-band edge
+ * cases already belong to r2_gate's own suite (test_r2_gate.c). What this
+ * layer must prove is narrower and just as real -- that r2_ops_reply_dome
+ * is a real pass-through to the gate's reply door, not a reimplementation of
+ * its verdicts. */
+#define DOME_CURRENT_OK 10.0f
+#define DOME_TRAVEL_OK  20.0f
+
+static void test_reply_dome_needs_may_act_and_the_grant(void)
+{
+    printf("  reply dome move refuses without may_act or the grant\n");
+    const uint32_t id1 = next_test_exchange_id();
+    r2_gate_grant_status(false);
+    tx_calls = 0;
+    int n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id1, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted dome move went out (got %d, tx %d)", n, tx_calls);
+
+    const uint32_t id2 = next_test_exchange_id();
+    r2_gate_grant_status(true);
+    tx_calls = 0;
+    n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, false, id2, 1, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_NOT_LIVE && tx_calls == 0,
+          "a dome move with may_act=false went out (got %d, tx %d)", n, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+/* THE HARD PROOF, the same shape as test_reply_chirp_routes_through_the_gate_
+ * and_its_budget above -- and proof that the two budgets are independent
+ * even reached through r2_ops, not just through r2_gate directly. */
+static void test_reply_dome_routes_through_the_gate_and_its_budget(void)
+{
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+    uint32_t a0, r0, a1, r1;
+    r2_gate_stats(&a0, &r0);
+    tx_calls = 0;
+    CHECK(r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id, 1, fake_tx, NULL) > 0,
+          "dome move refused");
+    r2_gate_stats(&a1, &r1);
+    CHECK(a1 == a0 + 1 && tx_calls == 1,
+          "the reply dome move did not move the gate's admitted counter by one");
+
+    /* Same exchange: a second dome move is refused... */
+    tx_calls = 0;
+    int n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id, 2, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_DOME_USED && tx_calls == 0,
+          "a second dome move for the same exchange still went out (%d)", n);
+
+    /* ...but that same exchange's CHIRP budget is untouched -- the two are
+     * spent independently (D-032 rule 5), proven through r2_ops as well as
+     * through r2_gate directly. */
+    tx_calls = 0;
+    n = r2_ops_reply_chirp(VOICE_MOOD_HAPPY, true, id, 3, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the exchange's chirp was refused after only its dome move had been spent (%d)", n);
+    r2_gate_grant_status(false);
+}
+
+/* Codex round 1: the test above only proves dome-then-chirp independence.
+ * r2_gate's own suite proves both orderings, but this wrapper suite should
+ * not overclaim "independent" while only having driven one direction. */
+static void test_reply_chirp_then_dome_budgets_are_independent_through_ops(void)
+{
+    r2_gate_grant_status(true);
+    const uint32_t id = next_test_exchange_id();
+
+    tx_calls = 0;
+    int n = r2_ops_reply_chirp(VOICE_MOOD_CURIOUS, true, id, 1, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1, "the exchange's chirp was refused (%d)", n);
+
+    tx_calls = 0;
+    n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id, 2, fake_tx, NULL);
+    CHECK(n > 0 && tx_calls == 1,
+          "the SAME exchange's dome move was refused after only its chirp had been spent (%d)", n);
+    r2_gate_grant_status(false);
+}
+
 /* ---- #168 part 3: the stop --------------------------------------------- */
 
 static uint8_t stop_seqs[8];
@@ -827,6 +908,10 @@ int main(void)
     test_every_mood_picks_an_id_the_gate_admits();
     test_reply_chirp_needs_may_act_and_the_grant();
     test_reply_chirp_routes_through_the_gate_and_its_budget();
+
+    test_reply_dome_needs_may_act_and_the_grant();
+    test_reply_dome_routes_through_the_gate_and_its_budget();
+    test_reply_chirp_then_dome_budgets_are_independent_through_ops();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
