@@ -3128,13 +3128,16 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
  * not worth making the panel unreadable for. */
 #define BURN_DIM_PERCENT   65
 #define BURN_FULL_PERCENT  90
+#define BURN_FADE_STEP_MS  40u   /* ms per 1% step; a 90->35 fade takes ~2.2s */
 
 static uint32_t s_last_change_ms;
 static int      s_drift_step = -1;
-static int      s_bright_pct = -1;   /* -1 forces the first real write */
+static int      s_bright_pct    = -1;   /* last WRITTEN value; -1 = never written */
+static int      s_fade_target   = -1;   /* current fade destination, for the once-per-target log */
+static uint32_t s_fade_last_step_ms;
 
 /* DEEP-DIM WHILE RELEASED -- corrected 2026-09-21 (was "BLANK", operator
- * ruling 2026-09-18).
+ * ruling 2026-09-18), percent corrected again 2026-09-22.
  *
  * Released is where this face spends hours: the board boots into it and
  * nothing changes until someone wakes him. The original version of this drew
@@ -3142,13 +3145,24 @@ static int      s_bright_pct = -1;   /* -1 forces the first real write */
  * covered the wifi/LLM chrome as completely as the face -- the operator's
  * correction: chrome was always meant to stay dimmed and readable, never
  * disappear. So this no longer covers anything. It drops the panel's actual
- * brightness register a second, much deeper notch (BURN_BLANK_PERCENT, a 90%
- * cut from full) so the whole screen -- chrome included -- reads as "pretty
- * much black" while every pixel is still technically being driven. The
- * pulsing state tile is drawn ON TOP at full opacity regardless of the
- * register, so it stays the one clearly-alive thing on an otherwise near-dark
- * screen. (A black AMOLED on a healthy board has already cost this project
- * two debugging sessions; the tile is the affordance that prevents a third.)
+ * brightness register a second, deeper notch (BURN_BLANK_PERCENT) so the
+ * whole screen -- chrome included -- reads as resting while every pixel is
+ * still technically being driven, rather than hidden behind a cover.
+ *
+ * 35, not 10. A captured framebuffer at 10% showed the swatch/tile rendered
+ * correctly -- non-black, present -- while the operator, looking at the same
+ * moment on the real glass, saw pure black. The content was there; the
+ * physical panel could not show it that dim. This UI's own BURN_DIM_PERCENT
+ * comment already established the floor: 40% reads as "powered off" on this
+ * near-black design, so 10% (2.5x darker) is well below what's visible at
+ * all. 35 is chosen to sit clearly below BURN_DIM_PERCENT (65, the first
+ * tier) while staying above that established invisible floor.
+ *
+ * The pulsing state tile is drawn ON TOP, at 10-90% of ITS OWN opacity
+ * (operator ruling 2026-09-22), so it stays the one clearly-alive thing on an
+ * otherwise dim screen. (A black AMOLED on a healthy board has already cost
+ * this project multiple debugging sessions; the tile is the affordance that
+ * prevents another.)
  *
  * The first touch only lights the face; it is voided, so it cannot also start
  * a WAKE hold -- D-017's rule that a glance arms nothing.
@@ -3156,9 +3170,9 @@ static int      s_bright_pct = -1;   /* -1 forces the first real write */
  * Only while RELEASED. Any other state is one someone may need to read at a
  * glance, and driving it this dark would hide exactly that. */
 #define BURN_BLANK_AFTER_MS 300000u
-#define BURN_BLANK_PERCENT       10   /* a 90% drop from BURN_FULL_PERCENT */
-#define BURN_PULSE_MS         2000u  /* each way */
-#define BURN_PULSE_REST_MS    4000u  /* held dark between breaths: operator, 2026-09-18 */
+#define BURN_BLANK_PERCENT       35   /* was 10 -- invisible on real glass, see above */
+#define BURN_PULSE_MS          800u  /* each way; was 2000 -- operator, 2026-09-22: too slow */
+#define BURN_PULSE_REST_MS     800u  /* held dark between breaths; was 4000 -- same correction */
 static lv_obj_t *s_blank_tile;
 static bool      s_blanked;
 
@@ -3198,7 +3212,11 @@ static void blank_show(bool on)
         lv_anim_init(&a);
         lv_anim_set_var(&a, s_blank_tile);
         lv_anim_set_exec_cb(&a, blank_tile_opa);
-        lv_anim_set_values(&a, LV_OPA_10, LV_OPA_60);
+        /* 10-100%, not 10-90 -- operator, 2026-09-22: the peak still read too
+         * dim once BURN_BLANK_PERCENT was corrected from 10 to 35. Full
+         * opacity at the top of the pulse is what makes it the single
+         * brightest point on screen at that backlight level. */
+        lv_anim_set_values(&a, LV_OPA_10, LV_OPA_COVER);
         lv_anim_set_duration(&a, BURN_PULSE_MS);
         lv_anim_set_reverse_duration(&a, BURN_PULSE_MS);
         lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
@@ -3238,25 +3256,42 @@ void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
     const bool released = (s_last_tm != NULL) && s_last_tm->released;
     blank_show(released && (now_ms - s_last_change_ms) > BURN_BLANK_AFTER_MS);
 
-    /* Brightness at rest, in two tiers, guarded on the transition so the
-     * register is not written every tick: brightness is an I2C register on
-     * this panel, not a variable. BLANK is checked first -- it implies DIM's
-     * elapsed condition is also true, since BURN_BLANK_AFTER_MS > BURN_DIM_-
-     * AFTER_MS -- so the deeper tier always wins once both are past. */
+    /* Brightness at rest, in two tiers, faded rather than snapped -- operator,
+     * 2026-09-22: a hard register jump reads as a flicker/glitch next to the
+     * tile's own smooth opacity animation, and the fade is the same visual
+     * language the pulse already speaks. BLANK is checked first -- it implies
+     * DIM's elapsed condition is also true, since BURN_BLANK_AFTER_MS >
+     * BURN_DIM_AFTER_MS -- so the deeper tier always wins once both are past.
+     *
+     * The register is still written at most once per BURN_FADE_STEP_MS (not
+     * every tick): brightness is an I2C register on this panel, not a
+     * variable, and stepping it 1% at a time on every UI tick would hammer
+     * the bus for no visible gain. */
     if (set_brightness == NULL) return;
     const bool want_dim  = (now_ms - s_last_change_ms) > BURN_DIM_AFTER_MS;
     const int target = s_blanked ? BURN_BLANK_PERCENT
                      : want_dim  ? BURN_DIM_PERCENT
                                  : BURN_FULL_PERCENT;
-    if (target != s_bright_pct) {
-        s_bright_pct = target;
-        set_brightness(target);
-        /* Logged, because "the screen is off" and "the screen is dim" are the
-         * same observation from arm's length and the log is the only place
-         * they differ. */
-        ESP_LOGI("panel", "brightness -> %d%% (%s)", target,
+    if (target != s_fade_target) {
+        s_fade_target = target;
+        /* Logged once per NEW target, not per step: the destination is the
+         * useful fact, and a line every 40 ms for a 55-point fade would be
+         * noise. "The screen is off" and "the screen is dim" are the same
+         * observation from arm's length and the log is the only place they
+         * differ. */
+        ESP_LOGI("panel", "brightness fading to %d%% (%s)", target,
                  target == BURN_FULL_PERCENT ? "active" :
                  target == BURN_DIM_PERCENT  ? "resting" : "deep-resting");
+    }
+    if (s_bright_pct < 0) {
+        /* First write ever (boot): snap, don't fade from nothing. */
+        s_bright_pct = target;
+        set_brightness(target);
+    } else if (s_bright_pct != target &&
+               now_ms - s_fade_last_step_ms >= BURN_FADE_STEP_MS) {
+        s_fade_last_step_ms = now_ms;
+        s_bright_pct += (target > s_bright_pct) ? 1 : -1;
+        set_brightness(s_bright_pct);
     }
 }
 
