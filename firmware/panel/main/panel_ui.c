@@ -3128,31 +3128,52 @@ bool panel_ui_update(const r2_telemetry_t *t, uint32_t now_ms)
  * not worth making the panel unreadable for. */
 #define BURN_DIM_PERCENT   65
 #define BURN_FULL_PERCENT  90
+#define BURN_FADE_STEP_MS  40u   /* ms per 1% step; a 90->35 fade takes ~2.2s */
 
 static uint32_t s_last_change_ms;
 static int      s_drift_step = -1;
-static bool     s_dimmed;
+static int      s_bright_pct    = -1;   /* last WRITTEN value; -1 = never written */
+static int      s_fade_target   = -1;   /* current fade destination, for the once-per-target log */
+static uint32_t s_fade_last_step_ms;
 
-/* BLANK WHILE RELEASED -- operator ruling 2026-09-18.
+/* DEEP-DIM WHILE RELEASED -- corrected 2026-09-21 (was "BLANK", operator
+ * ruling 2026-09-18), percent corrected again 2026-09-22.
  *
  * Released is where this face spends hours: the board boots into it and
- * nothing changes until someone wakes him. Dimming the word and swatch cut
- * their light, but every label, rule and ring on the face is just as static.
- * So after BURN_BLANK_AFTER_MS with nothing happening, the whole face goes
- * black -- EXCEPT the state tile, which stays where it always is and pulses
- * slowly, so the panel reads as ON AND RESTING rather than dead. (A black
- * AMOLED on a healthy board has already cost this project two debugging
- * sessions; the tile is the affordance that prevents a third.)
+ * nothing changes until someone wakes him. The original version of this drew
+ * an opaque rectangle over the whole screen after BURN_BLANK_AFTER_MS, which
+ * covered the wifi/LLM chrome as completely as the face -- the operator's
+ * correction: chrome was always meant to stay dimmed and readable, never
+ * disappear. So this no longer covers anything. It drops the panel's actual
+ * brightness register a second, deeper notch (BURN_BLANK_PERCENT) so the
+ * whole screen -- chrome included -- reads as resting while every pixel is
+ * still technically being driven, rather than hidden behind a cover.
+ *
+ * 35, not 10. A captured framebuffer at 10% showed the swatch/tile rendered
+ * correctly -- non-black, present -- while the operator, looking at the same
+ * moment on the real glass, saw pure black. The content was there; the
+ * physical panel could not show it that dim. This UI's own BURN_DIM_PERCENT
+ * comment already established the floor: 40% reads as "powered off" on this
+ * near-black design, so 10% (2.5x darker) is well below what's visible at
+ * all. 35 is chosen to sit clearly below BURN_DIM_PERCENT (65, the first
+ * tier) while staying above that established invisible floor.
+ *
+ * The pulsing state tile is drawn ON TOP, at 10-90% of ITS OWN opacity
+ * (operator ruling 2026-09-22), so it stays the one clearly-alive thing on an
+ * otherwise dim screen. (A black AMOLED on a healthy board has already cost
+ * this project multiple debugging sessions; the tile is the affordance that
+ * prevents another.)
  *
  * The first touch only lights the face; it is voided, so it cannot also start
  * a WAKE hold -- D-017's rule that a glance arms nothing.
  *
  * Only while RELEASED. Any other state is one someone may need to read at a
- * glance, and blanking it would hide exactly that. */
+ * glance, and driving it this dark would hide exactly that. */
 #define BURN_BLANK_AFTER_MS 300000u
-#define BURN_PULSE_MS         2000u  /* each way */
-#define BURN_PULSE_REST_MS    4000u  /* held dark between breaths: operator, 2026-09-18 */
-static lv_obj_t *s_blank, *s_blank_tile;
+#define BURN_BLANK_PERCENT       35   /* was 10 -- invisible on real glass, see above */
+#define BURN_PULSE_MS          800u  /* each way; was 2000 -- operator, 2026-09-22: too slow */
+#define BURN_PULSE_REST_MS     800u  /* held dark between breaths; was 4000 -- same correction */
+static lv_obj_t *s_blank_tile;
 static bool      s_blanked;
 
 static void blank_tile_opa(void *o, int32_t v)
@@ -3160,20 +3181,16 @@ static void blank_tile_opa(void *o, int32_t v)
     lv_obj_set_style_bg_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
 }
 
+/* The tile lives directly on the top layer now, not inside a covering
+ * rectangle -- there is nothing left to cover. */
 static void blank_build(void)
 {
-    s_blank = lv_obj_create(lv_layer_top());
-    lv_obj_remove_style_all(s_blank);
-    lv_obj_set_size(s_blank, PANEL_W, PANEL_H);
-    lv_obj_set_style_bg_color(s_blank, lv_color_hex(V5_GROUND), 0);
-    lv_obj_set_style_bg_opa(s_blank, LV_OPA_COVER, 0);
-    lv_obj_add_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
-
-    s_blank_tile = lv_obj_create(s_blank);
+    s_blank_tile = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_blank_tile);
     lv_obj_set_size(s_blank_tile, 18, 18);          /* the face's swatch */
     lv_obj_set_style_radius(s_blank_tile, 2, 0);
     lv_obj_set_style_bg_color(s_blank_tile, lv_color_hex(PANEL_C_MAGENTA), 0);
+    lv_obj_add_flag(s_blank_tile, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* Over the face's own swatch, wherever the drift has put it. */
@@ -3186,16 +3203,20 @@ static void blank_place_tile(void)
 
 static void blank_show(bool on)
 {
-    if (on == s_blanked || s_blank == NULL) return;
+    if (on == s_blanked || s_blank_tile == NULL) return;
     s_blanked = on;
     if (on) {
         blank_place_tile();
-        lv_obj_remove_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s_blank_tile, LV_OBJ_FLAG_HIDDEN);
         lv_anim_t a;
         lv_anim_init(&a);
         lv_anim_set_var(&a, s_blank_tile);
         lv_anim_set_exec_cb(&a, blank_tile_opa);
-        lv_anim_set_values(&a, LV_OPA_10, LV_OPA_60);
+        /* 10-100%, not 10-90 -- operator, 2026-09-22: the peak still read too
+         * dim once BURN_BLANK_PERCENT was corrected from 10 to 35. Full
+         * opacity at the top of the pulse is what makes it the single
+         * brightest point on screen at that backlight level. */
+        lv_anim_set_values(&a, LV_OPA_10, LV_OPA_COVER);
         lv_anim_set_duration(&a, BURN_PULSE_MS);
         lv_anim_set_reverse_duration(&a, BURN_PULSE_MS);
         lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
@@ -3204,9 +3225,9 @@ static void blank_show(bool on)
         lv_anim_start(&a);
     } else {
         lv_anim_delete(s_blank_tile, NULL);
-        lv_obj_add_flag(s_blank, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_blank_tile, LV_OBJ_FLAG_HIDDEN);
     }
-    ESP_LOGI("panel", "face %s", on ? "blanked (released, idle)" : "lit");
+    ESP_LOGI("panel", "face %s", on ? "deep-dimmed (released, idle)" : "lit");
 }
 
 bool panel_ui_blank_showing(void) { return s_blanked; }
@@ -3231,23 +3252,46 @@ void panel_ui_burn_in(uint32_t now_ms, bool state_changed,
         }
     }
 
-    if (s_blank == NULL && s_face_swatch != NULL) blank_build();
+    if (s_blank_tile == NULL && s_face_swatch != NULL) blank_build();
     const bool released = (s_last_tm != NULL) && s_last_tm->released;
     blank_show(released && (now_ms - s_last_change_ms) > BURN_BLANK_AFTER_MS);
 
-    /* Dim at rest. Guarded on the transition so it is not written every tick:
-     * brightness is an I2C register on this panel, not a variable. */
+    /* Brightness at rest, in two tiers, faded rather than snapped -- operator,
+     * 2026-09-22: a hard register jump reads as a flicker/glitch next to the
+     * tile's own smooth opacity animation, and the fade is the same visual
+     * language the pulse already speaks. BLANK is checked first -- it implies
+     * DIM's elapsed condition is also true, since BURN_BLANK_AFTER_MS >
+     * BURN_DIM_AFTER_MS -- so the deeper tier always wins once both are past.
+     *
+     * The register is still written at most once per BURN_FADE_STEP_MS (not
+     * every tick): brightness is an I2C register on this panel, not a
+     * variable, and stepping it 1% at a time on every UI tick would hammer
+     * the bus for no visible gain. */
     if (set_brightness == NULL) return;
-    const bool want_dim = (now_ms - s_last_change_ms) > BURN_DIM_AFTER_MS;
-    if (want_dim != s_dimmed) {
-        s_dimmed = want_dim;
-        set_brightness(want_dim ? BURN_DIM_PERCENT : BURN_FULL_PERCENT);
-        /* Logged, because "the screen is off" and "the screen is dim" are the
-         * same observation from arm's length and the log is the only place
-         * they differ. */
-        ESP_LOGI("panel", "brightness -> %d%% (%s)",
-                 want_dim ? BURN_DIM_PERCENT : BURN_FULL_PERCENT,
-                 want_dim ? "resting" : "active");
+    const bool want_dim  = (now_ms - s_last_change_ms) > BURN_DIM_AFTER_MS;
+    const int target = s_blanked ? BURN_BLANK_PERCENT
+                     : want_dim  ? BURN_DIM_PERCENT
+                                 : BURN_FULL_PERCENT;
+    if (target != s_fade_target) {
+        s_fade_target = target;
+        /* Logged once per NEW target, not per step: the destination is the
+         * useful fact, and a line every 40 ms for a 55-point fade would be
+         * noise. "The screen is off" and "the screen is dim" are the same
+         * observation from arm's length and the log is the only place they
+         * differ. */
+        ESP_LOGI("panel", "brightness fading to %d%% (%s)", target,
+                 target == BURN_FULL_PERCENT ? "active" :
+                 target == BURN_DIM_PERCENT  ? "resting" : "deep-resting");
+    }
+    if (s_bright_pct < 0) {
+        /* First write ever (boot): snap, don't fade from nothing. */
+        s_bright_pct = target;
+        set_brightness(target);
+    } else if (s_bright_pct != target &&
+               now_ms - s_fade_last_step_ms >= BURN_FADE_STEP_MS) {
+        s_fade_last_step_ms = now_ms;
+        s_bright_pct += (target > s_bright_pct) ? 1 : -1;
+        set_brightness(s_bright_pct);
     }
 }
 
@@ -3257,7 +3301,7 @@ int panel_ui_drift_step(void) { return s_drift_step; }
  * main.c used to hardcode 80 while this file's active level was 90 -- two
  * numbers for one concept, and the kind that drift apart silently. */
 int panel_ui_full_brightness(void) { return BURN_FULL_PERCENT; }
-bool panel_ui_is_dimmed(void) { return s_dimmed; }
+bool panel_ui_is_dimmed(void) { return s_bright_pct != BURN_FULL_PERCENT; }
 
 /* ---- WAKE / GOODNIGHT: hold to unlock (E2E v0 slice 1) ------------------ */
 
