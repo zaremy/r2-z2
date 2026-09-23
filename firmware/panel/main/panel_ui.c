@@ -3176,9 +3176,20 @@ static uint32_t s_fade_last_step_ms;
 static lv_obj_t *s_blank_tile;
 static bool      s_blanked;
 
+/* Named _opa still, though it now also nudges the color: opacity alone was
+ * already at LVGL's own ceiling (LV_OPA_COVER) and still read too dim at
+ * BURN_BLANK_PERCENT's backlight, and a fully white peak (tried, reverted)
+ * abandoned the state color entirely. Operator, 2026-09-23: blend a little
+ * white in as the pulse brightens, so PANEL_C_MAGENTA stays the base color at
+ * the dim end and only lightens toward it at the peak -- still recognizably
+ * magenta, not a color swap. */
 static void blank_tile_opa(void *o, int32_t v)
 {
-    lv_obj_set_style_bg_opa((lv_obj_t *)o, (lv_opa_t)v, 0);
+    lv_obj_t *tile = (lv_obj_t *)o;
+    lv_obj_set_style_bg_opa(tile, (lv_opa_t)v, 0);
+    const uint8_t white_amt = (uint8_t)(((v - LV_OPA_10) * 110) / (LV_OPA_COVER - LV_OPA_10));
+    lv_obj_set_style_bg_color(tile,
+        lv_color_mix(lv_color_white(), lv_color_hex(PANEL_C_MAGENTA), white_amt), 0);
 }
 
 /* The tile lives directly on the top layer now, not inside a covering
