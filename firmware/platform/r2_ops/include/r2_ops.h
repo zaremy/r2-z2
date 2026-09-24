@@ -256,7 +256,7 @@ int r2_ops_reply_dome(float current_deg, float delta_deg, bool may_act,
  * r2_gate_verdict_t from that door, exactly as `r2_ops_reply_chirp` /
  * `r2_ops_reply_dome` themselves return. */
 typedef struct {
-    int chirp;   /* r2_ops_reply_chirp's return, or 0 if mood was NONE */
+    int chirp;   /* r2_ops_reply_chirp's return, or 0 if the mood had no real chirp id */
     int dome;    /* r2_ops_reply_dome's return, or 0 if not attempted */
 } r2_ops_reply_report_t;
 
