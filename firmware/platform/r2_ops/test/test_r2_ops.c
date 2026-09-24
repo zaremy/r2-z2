@@ -724,6 +724,196 @@ static void test_reply_chirp_then_dome_budgets_are_independent_through_ops(void)
     r2_gate_grant_status(false);
 }
 
+/* ---- Reply composition (D-032, step 3.5c) --------------------------------
+ *
+ * Illegal cases first (CLAUDE.md, "mutate the guard, not the table"): the one
+ * NEW rule this function adds beyond 3.5a/3.5b is D-032's rule 5 -- the dome
+ * degrades to the chirp, never the other way round -- so that is the case
+ * with the most tests. */
+
+static uint8_t reply_seqs[4];
+static unsigned reply_seq_n;
+static uint8_t reply_seq_next(void)
+{
+    const uint8_t v = (uint8_t)(200u + reply_seq_n);
+    if (reply_seq_n < sizeof reply_seqs / sizeof reply_seqs[0])
+        reply_seqs[reply_seq_n] = v;
+    reply_seq_n++;
+    return v;
+}
+static void reply_seq_reset(void) { reply_seq_n = 0; }
+
+static void test_reply_with_no_seq_fn_sends_nothing(void)
+{
+    printf("  reply composition\n");
+    r2_gate_grant_status(true);
+    const voice_react_t reply = { VOICE_MOOD_HAPPY, DOME_TRAVEL_OK };
+    tx_calls = 0;
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, NULL, fake_tx, NULL);
+    CHECK(r.chirp == 0 && r.dome == 0 && tx_calls == 0,
+          "a NULL next_seq still sent something (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+/* THE rule this function exists to enforce. mood=NONE with a real, in-band
+ * dome_deg is exactly the shape that "degrades the wrong way" would admit:
+ * neither door alone refuses it for THIS reason (r2_gate_send_reply_dome
+ * does not know or care what mood produced its delta), so if this composition
+ * did not gate on the mood, a mood-less reply would still turn his head. */
+static void test_reply_with_no_mood_moves_nothing(void)
+{
+    printf("    a mood-less reply gets no chirp AND no dome move, though the delta is legal\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_NONE, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp == 0 && r.dome == 0 && tx_calls == 0,
+          "a mood-less reply moved his dome or chirped (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+    CHECK(reply_seq_n == 0, "next_seq was called for a reply with nothing to send (%u)", reply_seq_n);
+    r2_gate_grant_status(false);
+}
+
+/* Codex round 1 BLOCKER: the original gate here was `mood != VOICE_MOOD_NONE`
+ * -- weaker than "has a real chirp". VOICE_MOOD_N (the enum's own count
+ * sentinel) and any out-of-range value are ALSO != NONE, so they refuse the
+ * chirp as BAD_ID but would have passed the old dome gate and moved his
+ * head anyway on a reply with no real mood at all -- the exact "degrades the
+ * wrong way" shape D-032 rule 5 forbids. Mirrors 3.5a's own
+ * test_reply_chirp_refuses_an_out_of_range_mood, one layer up. */
+static void test_reply_with_out_of_range_mood_moves_nothing(void)
+{
+    printf("    an out-of-range mood (not just NONE) also gets no chirp AND no dome move\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { (voice_mood_t)99, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp == 0 && r.dome == 0 && tx_calls == 0,
+          "an out-of-range mood moved his dome or chirped (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+    CHECK(reply_seq_n == 0, "next_seq was called for a reply with nothing real to send (%u)",
+          reply_seq_n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_with_dome_deg_zero_skips_the_dome(void)
+{
+    printf("    dome_deg == 0 (\"no move\") sends the chirp and skips the dome\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_CURIOUS, 0.0f };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp > 0 && r.dome == 0 && tx_calls == 1,
+          "dome_deg==0 still moved the dome (chirp %d, dome %d, tx %d)", r.chirp, r.dome, tx_calls);
+    CHECK(reply_seq_n == 1, "next_seq was called %u times for a chirp-only reply", reply_seq_n);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_sends_both_with_two_fresh_seqs(void)
+{
+    printf("    a full reply (mood + a legal delta) sends the chirp AND the dome move\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_HAPPY, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp > 0 && r.dome > 0 && tx_calls == 2,
+          "a full reply did not send both (chirp %d, dome %d, tx %d)", r.chirp, r.dome, tx_calls);
+    CHECK(reply_seq_n == 2 && reply_seqs[0] != reply_seqs[1],
+          "the chirp and the dome move shared a seq, or next_seq ran the wrong number of times "
+          "(n=%u, seqs %u/%u)", reply_seq_n, reply_seqs[0], reply_seqs[1]);
+    r2_gate_grant_status(false);
+}
+
+static void test_reply_without_the_grant_refuses_both_but_still_attempts_both(void)
+{
+    printf("    with no WAKE grant, both halves are attempted and both are refused\n");
+    r2_gate_grant_status(false);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_SAD, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp == R2_GATE_NOT_GRANTED && r.dome == R2_GATE_NOT_GRANTED && tx_calls == 0,
+          "an ungranted reply was not refused on both halves (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+}
+
+static void test_reply_without_may_act_refuses_both(void)
+{
+    printf("    with may_act=false, both halves are attempted and both are refused\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_ANNOYED, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, false, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp == R2_GATE_REPLY_NOT_LIVE && r.dome == R2_GATE_REPLY_NOT_LIVE && tx_calls == 0,
+          "may_act=false was not refused on both halves (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+    r2_gate_grant_status(false);
+}
+
+/* THE HARD PROOF, same shape as the other reply tests above: routes through
+ * the real gate, not a reimplementation, so its own admitted counter must
+ * move by exactly two for a full reply. */
+static void test_reply_routes_through_the_gate_twice(void)
+{
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    uint32_t a0, r0, a1, r1;
+    r2_gate_stats(&a0, &r0);
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_ALERT, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp > 0 && r.dome > 0, "a full reply was refused (chirp %d, dome %d)", r.chirp, r.dome);
+    r2_gate_stats(&a1, &r1);
+    CHECK(a1 == a0 + 2, "a full reply did not move the gate's admitted counter by two (%u -> %u)",
+          a0, a1);
+    r2_gate_grant_status(false);
+}
+
+/* Neither test above asserted WHICH exchange id the dome move actually used
+ * -- a composition that silently sent the dome under a DIFFERENT id than the
+ * chirp would still pass both (mutation battery found this: swapping in
+ * `exchange_id + 1` for the dome call survived every other test here). Prove
+ * it the same way the chirp door's own budget tests do: spend the exchange's
+ * budget through r2_ops_reply, then try each half again DIRECTLY with the
+ * id the caller actually passed in, and confirm both read as already used. */
+static void test_reply_spends_both_budgets_under_the_same_exchange_id(void)
+{
+    printf("    the chirp and the dome move both spend the SAME exchange id's budget\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    const uint32_t id = next_test_exchange_id();
+    tx_calls = 0;
+    const voice_react_t reply = { VOICE_MOOD_CURIOUS, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, id, DOME_CURRENT_OK,
+                                                 reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp > 0 && r.dome > 0, "a full reply was refused (chirp %d, dome %d)", r.chirp, r.dome);
+
+    tx_calls = 0;
+    int n = r2_ops_reply_chirp(reply.mood, true, id, 99, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_USED && tx_calls == 0,
+          "a second chirp under the SAME id the composition used was not refused as used (%d)", n);
+
+    tx_calls = 0;
+    n = r2_ops_reply_dome(DOME_CURRENT_OK, DOME_TRAVEL_OK, true, id, 99, fake_tx, NULL);
+    CHECK(n == R2_GATE_REPLY_DOME_USED && tx_calls == 0,
+          "a second dome move under the SAME id the composition used was not refused as used (%d)", n);
+    r2_gate_grant_status(false);
+}
+
 /* ---- #168 part 3: the stop --------------------------------------------- */
 
 static uint8_t stop_seqs[8];
@@ -912,6 +1102,16 @@ int main(void)
     test_reply_dome_needs_may_act_and_the_grant();
     test_reply_dome_routes_through_the_gate_and_its_budget();
     test_reply_chirp_then_dome_budgets_are_independent_through_ops();
+
+    test_reply_with_no_seq_fn_sends_nothing();
+    test_reply_with_no_mood_moves_nothing();
+    test_reply_with_out_of_range_mood_moves_nothing();
+    test_reply_with_dome_deg_zero_skips_the_dome();
+    test_reply_sends_both_with_two_fresh_seqs();
+    test_reply_without_the_grant_refuses_both_but_still_attempts_both();
+    test_reply_without_may_act_refuses_both();
+    test_reply_routes_through_the_gate_twice();
+    test_reply_spends_both_budgets_under_the_same_exchange_id();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
