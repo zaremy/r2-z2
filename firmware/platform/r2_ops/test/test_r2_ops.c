@@ -778,6 +778,30 @@ static void test_reply_with_no_mood_moves_nothing(void)
     r2_gate_grant_status(false);
 }
 
+/* Codex round 1 BLOCKER: the original gate here was `mood != VOICE_MOOD_NONE`
+ * -- weaker than "has a real chirp". VOICE_MOOD_N (the enum's own count
+ * sentinel) and any out-of-range value are ALSO != NONE, so they refuse the
+ * chirp as BAD_ID but would have passed the old dome gate and moved his
+ * head anyway on a reply with no real mood at all -- the exact "degrades the
+ * wrong way" shape D-032 rule 5 forbids. Mirrors 3.5a's own
+ * test_reply_chirp_refuses_an_out_of_range_mood, one layer up. */
+static void test_reply_with_out_of_range_mood_moves_nothing(void)
+{
+    printf("    an out-of-range mood (not just NONE) also gets no chirp AND no dome move\n");
+    r2_gate_grant_status(true);
+    reply_seq_reset();
+    tx_calls = 0;
+    const voice_react_t reply = { (voice_mood_t)99, DOME_TRAVEL_OK };
+    const r2_ops_reply_report_t r = r2_ops_reply(reply, true, next_test_exchange_id(),
+                                                 DOME_CURRENT_OK, reply_seq_next, fake_tx, NULL);
+    CHECK(r.chirp == 0 && r.dome == 0 && tx_calls == 0,
+          "an out-of-range mood moved his dome or chirped (chirp %d, dome %d, tx %d)",
+          r.chirp, r.dome, tx_calls);
+    CHECK(reply_seq_n == 0, "next_seq was called for a reply with nothing real to send (%u)",
+          reply_seq_n);
+    r2_gate_grant_status(false);
+}
+
 static void test_reply_with_dome_deg_zero_skips_the_dome(void)
 {
     printf("    dome_deg == 0 (\"no move\") sends the chirp and skips the dome\n");
@@ -1081,6 +1105,7 @@ int main(void)
 
     test_reply_with_no_seq_fn_sends_nothing();
     test_reply_with_no_mood_moves_nothing();
+    test_reply_with_out_of_range_mood_moves_nothing();
     test_reply_with_dome_deg_zero_skips_the_dome();
     test_reply_sends_both_with_two_fresh_seqs();
     test_reply_without_the_grant_refuses_both_but_still_attempts_both();

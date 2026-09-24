@@ -226,16 +226,28 @@ r2_ops_reply_report_t r2_ops_reply(voice_react_t reply, bool may_act, uint32_t e
     r2_ops_reply_report_t r = { 0, 0 };
     if (next_seq == NULL) return r;   /* nothing was sent */
 
+    /* Codex round 1: `mood != VOICE_MOOD_NONE` is a WEAKER test than "has a
+     * real chirp" -- VOICE_MOOD_N (the enum's own count sentinel) or any
+     * out-of-range value is also != NONE, refuses the chirp as BAD_ID, but
+     * would have passed this gate and let the dome move fire anyway: the
+     * exact "degrades the wrong way" shape D-032 rule 5 forbids. Reuse the
+     * SAME check chirp_id_for_mood()'s callers already rely on for "is this
+     * mood real" (0 means no committed id -- NONE, N, and anything else all
+     * land there, chirp_id_for_mood.c's own switch/default), rather than
+     * re-deriving an equivalent range check that could drift out of sync
+     * with voice_mood_t. */
+    const bool has_real_mood = chirp_id_for_mood(reply.mood) != 0;
+
     /* Chirp first, always -- it is the baseline the dome may only add to,
      * never replace. */
-    if (reply.mood != VOICE_MOOD_NONE) {
+    if (has_real_mood) {
         r.chirp = r2_ops_reply_chirp(reply.mood, may_act, exchange_id, next_seq(), tx, ctx);
     }
 
     /* D-032 rule 5: never the other way round. Gated on the MOOD (a real
      * reply to chirp for), not on whether that chirp send actually
      * succeeded -- see this function's own doc comment in r2_ops.h for why. */
-    if (reply.mood != VOICE_MOOD_NONE && reply.dome_deg != 0.0f) {
+    if (has_real_mood && reply.dome_deg != 0.0f) {
         r.dome = r2_ops_reply_dome(current_dome_deg, reply.dome_deg, may_act,
                                    exchange_id, next_seq(), tx, ctx);
     }

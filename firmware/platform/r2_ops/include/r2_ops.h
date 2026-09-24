@@ -232,8 +232,10 @@ int r2_ops_reply_dome(float current_deg, float delta_deg, bool may_act,
  * separate entries... when the dome entry is absent, the reply degrades to
  * the chirp. It never degrades the other way round."
  *
- * The dome move is attempted only when `reply.mood != VOICE_MOOD_NONE` (a
- * real mood to chirp for) AND `reply.dome_deg != 0` ("0 = no move",
+ * The dome move is attempted only when `reply.mood` has a real committed
+ * chirp id (per `r2_ops_chirp_id_for_mood` -- NOT simply `!= VOICE_MOOD_NONE`,
+ * which `VOICE_MOOD_N` or any out-of-range value would also satisfy while
+ * still having no real chirp) AND `reply.dome_deg != 0` ("0 = no move",
  * voice_react.h). Gated on the MOOD, not on whether the chirp send itself
  * SUCCEEDED: both doors already enforce their own WAKE grant, `may_act`, and
  * one-per-exchange budget independently, so a chirp refused for an
