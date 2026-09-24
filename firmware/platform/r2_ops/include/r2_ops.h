@@ -224,6 +224,44 @@ int r2_ops_reply_chirp(voice_mood_t mood, bool may_act, uint32_t exchange_id,
 int r2_ops_reply_dome(float current_deg, float delta_deg, bool may_act,
                       uint32_t exchange_id, uint8_t seq, r2_tx_fn tx, void *ctx);
 
+/* ---- Reply composition (D-032, step 3.5c) --------------------------------
+ *
+ * Fires a validated reply's chirp and dome move together, through their two
+ * independent doors, applying the one rule that only a caller who can see
+ * BOTH doors can enforce: D-032 rule 5 -- "the chirp and the dome are
+ * separate entries... when the dome entry is absent, the reply degrades to
+ * the chirp. It never degrades the other way round."
+ *
+ * The dome move is attempted only when `reply.mood != VOICE_MOOD_NONE` (a
+ * real mood to chirp for) AND `reply.dome_deg != 0` ("0 = no move",
+ * voice_react.h). Gated on the MOOD, not on whether the chirp send itself
+ * SUCCEEDED: both doors already enforce their own WAKE grant, `may_act`, and
+ * one-per-exchange budget independently, so a chirp refused for an
+ * infrastructure reason (no grant held) already refuses the dome move on the
+ * identical grounds through its own gate check. What only this function can
+ * prevent is a dome move riding on a reply that never had a real mood at all
+ * -- exactly the "degrades the other way round" case neither door alone can
+ * see.
+ *
+ * `current_dome_deg` must be a head position read in the SAME exchange, the
+ * same freshness contract `r2_ops_reply_dome` itself carries. `next_seq` is
+ * called at most once per attempted send -- never share one seq between the
+ * chirp and the dome move, the same rule `r2_ops_stop_all` holds for its own
+ * three sends, or a single reply resolves both.
+ *
+ * A field of 0 in the returned report means "not attempted" (there was no
+ * reason to try); any other value is the encoded length or a negative
+ * r2_gate_verdict_t from that door, exactly as `r2_ops_reply_chirp` /
+ * `r2_ops_reply_dome` themselves return. */
+typedef struct {
+    int chirp;   /* r2_ops_reply_chirp's return, or 0 if mood was NONE */
+    int dome;    /* r2_ops_reply_dome's return, or 0 if not attempted */
+} r2_ops_reply_report_t;
+
+r2_ops_reply_report_t r2_ops_reply(voice_react_t reply, bool may_act, uint32_t exchange_id,
+                                   float current_dome_deg, r2_seq_fn next_seq,
+                                   r2_tx_fn tx, void *ctx);
+
 const char *r2_ops_err_name(r2_ops_err_t e);
 /* R2's own error codes, r2_probe.py Response.ERRORS. */
 const char *r2_ops_device_error_name(uint8_t err);
